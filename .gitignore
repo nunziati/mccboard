@@ -1,0 +1,17 @@
+# Rust
+target/
+
+# Node / frontend
+node_modules/
+dist/
+
+# Tauri
+src-tauri/gen/schemas/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Mai committare credenziali o dati locali
+.credentials.json
+*.local.json
