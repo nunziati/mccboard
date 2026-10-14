@@ -1,46 +1,45 @@
 # mccboard
 
-**Multi Claude Code dashBoard**: un centro di controllo per più istanze e account di Claude Code. Comprende:
-- widget agganciato alla barra delle applicazioni e icona nella tray;
-- dashboard;
-- avvio di profili affiancati dell'app desktop;
-- setup guidato delle macchine remote via SSH.
+**Multi Claude Code dashBoard**: a control center for several Claude Code instances and accounts. It includes:
+- a widget docked in the OS taskbar, plus a tray icon;
+- a dashboard;
+- side-by-side Claude desktop app profiles, one per account;
+- guided setup of remote machines over SSH.
 
-Progetto personale di Giacomo. La gestione (contesto, decisioni, roadmap, ricerche) sta nella repo privata `nunziati/claude-account-switcher-project`:
-- `CONTEXT.md`: decisioni D001…, in particolare D005–D012;
-- `docs/2026-10-14-centro-di-controllo.md`: architettura e fasi;
-- `research/`: widget esistenti, claude-swap, multi-claude, funzionamento di Claude Code.
+Personal project of Giacomo.
 
-Prima di cambiare direzione su qualcosa di architetturale, controlla lì.
+**Before any architectural change, or when a decision's "why" is unclear**, read the management repo `nunziati/claude-account-switcher-project` (written in Italian):
+- `CONTEXT.md`: decisions D005 onward;
+- `docs/2026-10-14-centro-di-controllo.md`: architecture and phases;
+- `research/`: existing usage widgets, claude-swap, multi-claude, Claude Code internals.
 
-## Architettura in breve
-- **Un'app sola**, sulla macchina principale (oggi Windows). Niente server e niente agenti installati altrove.
-- **Macchine remote opzionali**, raggiunte con l'`ssh` di sistema eseguendo piccoli script portati dall'app. Sul remoto non gira nessun servizio.
-- **Multi-account opzionale.** Modello:
-  - *account*: i consumi sono per account;
-  - *istanza*: account + cartella di configurazione + macchina;
-  - *profilo desktop*: istanza dell'app Claude desktop con `--user-data-dir` proprio.
-- **Consumi**: prima i dati delle sessioni (statusline catturata per istanza), altrimenti `GET https://api.anthropic.com/api/oauth/usage`, una volta per account.
+## Architecture
+- **One app, on the main machine** (today Windows). Everything mccboard runs lives in that app.
+- **Remote machines are optional.** The app reaches them through the system `ssh`, running small scripts it carries along, so a remote holds only what guided setup created.
+- **Multi-account is optional.** Domain model:
+  - *account*: usage belongs to the account, across machines;
+  - *instance*: account + config directory + machine;
+  - *desktop profile*: a Claude desktop app instance with its own `--user-data-dir`.
+- **Usage data**: session data first (statusline captured per instance), else `GET https://api.anthropic.com/api/oauth/usage`, once per account.
 
-## Regole sui token: non negoziabili
-1. L'access token OAuth si **legge soltanto**, da `<config dir>/.credentials.json`.
-2. **Mai rinnovarlo** (niente chiamate a `oauth/token`) e **mai scrivere** il file delle credenziali. Rinnovarlo cambierebbe il refresh token e Claude Code perderebbe il login. Token scaduto = stato "scaduto": lo rinnova Claude Code.
-3. **Un token non lascia la macchina** su cui sta. Per un'istanza remota la chiamata all'endpoint la esegue il remoto via SSH, e torna solo il risultato.
-4. **Endpoint dei consumi.** Ha un budget basso ed è condiviso con Claude Code:
-   - al massimo una richiesta ogni 60 s per account;
-   - dopo un 429 o un errore l'intervallo raddoppia, fino a 300 s;
-   - si mostrano gli ultimi valori noti;
-   - una finestra si azzera quando passa il suo `resets_at`.
-5. **Mai fare `/logout`**, e mai proporlo per cambiare account: revoca il token. Per un altro account si usa un'altra cartella di configurazione.
-6. **Mai stampare, loggare o salvare** token o credenziali, nemmeno nei test o negli errori.
-7. I file di mccboard stanno in `~/.mccboard/`, **mai dentro `~/.claude`**.
+## Token rules: hard guardrails
+Credentials are **read-only** to mccboard. Claude Code owns them.
+1. Read the OAuth access token from `<config dir>/.credentials.json`, and only read it. Refreshing it (any call to `oauth/token`) or writing the credentials file rotates the refresh token and logs Claude Code out. An expired token is shown as "expired" until Claude Code renews it.
+2. **A token stays on its machine.** For a remote instance, the remote performs the endpoint call over SSH and returns only the result.
+3. **The usage endpoint has a small budget shared with Claude Code**:
+   - at most one request per 60 s per account;
+   - after a 429 or an error, double the interval, up to 300 s;
+   - show the last known values;
+   - zero a window once its `resets_at` passes.
+4. **Switch accounts with another config directory.** `/logout` revokes the token, so mccboard never runs or suggests it.
+5. **Keep tokens and credentials out of output**: logs, errors, tests, files, UI.
+6. mccboard's own files live in `~/.mccboard/`. `~/.claude` belongs to Claude Code.
 
 ## Stack
-- **Tauri v2.** Core in Rust. Il codice specifico per sistema operativo (aggancio alla barra, ID nella barra di Windows, icone) sta in moduli separati per OS.
-- **Interfaccia:** Svelte con TypeScript.
+- **Tauri v2.** Core in Rust. OS-specific code (taskbar docking, Windows taskbar IDs, icons) lives in per-OS modules.
+- **UI:** Svelte + TypeScript.
 
-## Convenzioni
-- **Lingua:** codice, commenti, README e documenti in inglese. Questo file verrà tradotto quando si inizia a scrivere codice.
-- **Lingua dell'app:** configurabile (italiano e inglese). Nessun testo scritto direttamente nell'interfaccia.
-- **Impostazioni:** persistenti, salvate in `~/.mccboard/`. Non si azzerano chiudendo la dashboard o riavviando l'app.
-- **Commit:** piccoli e descrittivi.
+## Conventions
+- **Repo language:** English for code, comments, README and docs.
+- **App language:** configurable, Italian and English. Every UI string goes through i18n.
+- **Settings:** persisted in `~/.mccboard/`. They survive closing the dashboard and restarting the app.

@@ -1,12 +1,12 @@
 # mccboard
 
-**Multi Claude Code dashBoard**: centro di controllo per più istanze e account di Claude Code.
+**Multi Claude Code dashBoard**: a control center for several Claude Code instances and accounts.
 
-- **Widget** nella barra delle applicazioni e **icona nella tray**, con i consumi a 5 ore e a 7 giorni di ogni account.
-- **Dashboard**: andamento dei consumi, previsione di esaurimento, limiti per modello, sessioni attive, stato delle istanze.
-- **Profili affiancati dell'app Claude desktop**: uno per account, con colore e pulsante propri nella barra.
-- **Setup guidato** delle macchine remote via SSH: installazione, login, configurazione condivisa, verifiche.
+- **Taskbar widget** and **tray icon** showing each account's 5-hour and 7-day usage.
+- **Dashboard**: usage trends, exhaustion forecast, per-model limits, active sessions, instance health.
+- **Side-by-side Claude desktop profiles**: one per account, each with its own color and taskbar button.
+- **Guided setup** of remote machines over SSH: install, login, shared configuration, checks.
 
-Stato: in progettazione. Stack: Tauri v2 (Rust + interfaccia web).
+Status: in design. Stack: Tauri v2 (Rust + Svelte/TypeScript).
 
-Licenza: MIT.
+License: MIT.
