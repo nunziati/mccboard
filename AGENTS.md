@@ -36,8 +36,11 @@ Prima di cambiare direzione su qualcosa di architetturale, controlla lì.
 7. I file di mccboard stanno in `~/.mccboard/`, **mai dentro `~/.claude`**.
 
 ## Stack
-Tauri v2: core in Rust, interfaccia web. Il codice specifico per sistema operativo (aggancio alla barra, ID nella barra di Windows, icone) sta in moduli separati per OS.
+- **Tauri v2.** Core in Rust. Il codice specifico per sistema operativo (aggancio alla barra, ID nella barra di Windows, icone) sta in moduli separati per OS.
+- **Interfaccia:** Svelte con TypeScript.
 
 ## Convenzioni
-- La lingua dei documenti di progetto è l'italiano.
-- Commit piccoli e descrittivi.
+- **Lingua:** codice, commenti, README e documenti in inglese. Questo file verrà tradotto quando si inizia a scrivere codice.
+- **Lingua dell'app:** configurabile (italiano e inglese). Nessun testo scritto direttamente nell'interfaccia.
+- **Impostazioni:** persistenti, salvate in `~/.mccboard/`. Non si azzerano chiudendo la dashboard o riavviando l'app.
+- **Commit:** piccoli e descrittivi.
