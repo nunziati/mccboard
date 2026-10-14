@@ -43,3 +43,17 @@ Credentials are **read-only** to mccboard. Claude Code owns them.
 - **Repo language:** English for code, comments, README and docs.
 - **App language:** configurable, Italian and English. Every UI string goes through i18n.
 - **Settings:** persisted in `~/.mccboard/`. They survive closing the dashboard and restarting the app.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `nunziati/mccboard`, via `gh` or the GitHub MCP tools. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
