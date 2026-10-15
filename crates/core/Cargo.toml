@@ -1,0 +1,38 @@
+[package]
+name = "mccboard-core"
+description = "mccboard's domain, data sources, setup operations and token rules (no Tauri)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Exposes `mccboard_core::testing` (the fake environment port) to tests.
+testing = []
+
+[dependencies]
+jiff.workspace = true
+serde.workspace = true
+# `preserve_order`: aligning keys of `.claude.json` keeps every other key where it was.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+ureq.workspace = true
+# Listing Claude Code processes for the session guard (environment and working directory).
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
+[target.'cfg(windows)'.dependencies]
+# The user PATH (launchers' bin folder) lives in the registry on Windows, and so does the
+# Developer Mode check.
+winreg.workspace = true
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Directory links on Windows are junctions, which need no privilege (ADR 0006).
+junction = "2"
+
+[dev-dependencies]
+mccboard-core = { path = ".", features = ["testing"] }
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+junction = "2"
