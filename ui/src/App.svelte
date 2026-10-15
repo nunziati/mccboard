@@ -1,18 +1,23 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import AccountHeader from './lib/AccountHeader.svelte'
+  import LauncherCell from './lib/LauncherCell.svelte'
+  import Launchers from './lib/Launchers.svelte'
   import Login from './lib/Login.svelte'
   import {
     isCoreError,
+    launchers as loadLaunchers,
     onConfigChanged,
     register,
     registry as loadRegistry,
     scan,
+    syncLaunchers,
     unregister,
     type Account,
     type Candidate,
     type CoreError,
     type InstanceStatus,
+    type LauncherStatus,
     type Registry,
   } from './lib/core'
   import { errorMessage, i18n, LANGUAGE_NAMES, LANGUAGES, t, type Lang } from './lib/i18n.svelte'
@@ -27,6 +32,9 @@
 
   let registry = $state<Registry | null>(null)
   let candidates = $state<Candidate[] | null>(null)
+  let launcherStatus = $state<LauncherStatus | null>(null)
+  /** An error reading the launchers: shown in their section, the rest of the window still works. */
+  let launcherError = $state<CoreError | null>(null)
   /** An error loading the window's data: shown instead of the lists. */
   let loadError = $state<CoreError | null>(null)
   /** An error from the last action: shown above the lists until dismissed. */
@@ -77,6 +85,13 @@
     } catch (e) {
       loadError = asCoreError(e)
     }
+    try {
+      launcherStatus = await loadLaunchers()
+      launcherError = null
+    } catch (e) {
+      launcherStatus = null
+      launcherError = asCoreError(e)
+    }
   }
 
   async function act(action: () => Promise<string | null>) {
@@ -108,6 +123,31 @@
       await unregister(path)
       return t('notice.unregistered', { path })
     })
+  }
+
+  function fixLaunchers() {
+    return act(async () => {
+      const sync = await syncLaunchers()
+      const changed = sync.created.length + sync.updated.length + sync.removed.length
+      const notices = [
+        changed === 0
+          ? t('notice.launchers_up_to_date')
+          : t('notice.launchers_synced', {
+              created: sync.created.length,
+              updated: sync.updated.length,
+              removed: sync.removed.length,
+            }),
+      ]
+      const place = launcherStatus?.place.path ?? ''
+      if (sync.user_path?.status === 'added') notices.push(t('notice.path_added', { path: place }))
+      else if (sync.user_path?.status === 'not_added') notices.push(t('notice.path_not_added', { path: place }))
+      else if (changed > 0) notices.push(t('notice.new_terminal'))
+      return notices.join(' ')
+    })
+  }
+
+  function launcherOf(instance: InstanceStatus) {
+    return launcherStatus?.instances.find((l) => l.config_dir === instance.config_dir)
   }
 
   async function registerTyped(event: SubmitEvent) {
@@ -198,6 +238,7 @@
                   <th>{t('instances.column.path')}</th>
                   <th>{t('instances.column.kind')}</th>
                   <th>{t('instances.column.login')}</th>
+                  <th>{t('instances.column.launcher')}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -221,6 +262,7 @@
                         </div>
                       {/if}
                     </td>
+                    <td><LauncherCell kind={instance.kind} launcher={launcherOf(instance)} /></td>
                     <td class="row-actions">
                       {#if instance.account_status.status === 'changed'}
                         <button disabled={busy} onclick={() => registerPath(instance.config_dir)}>
@@ -246,6 +288,13 @@
           {/if}
         </div>
       {/each}
+
+      <h3>{t('launchers.title')}</h3>
+      {#if launcherError}
+        {@render failure(launcherError, null)}
+      {:else if launcherStatus}
+        <Launchers status={launcherStatus} {busy} onsync={fixLaunchers} />
+      {/if}
 
       <form class="register-path" onsubmit={registerTyped}>
         <label for="register-path">{t('register_path.label')}</label>
@@ -327,6 +376,10 @@
     margin: 1.25rem 0 0.5rem;
     font-size: 1.1rem;
   }
+  h3 {
+    margin: 0.75rem 0 0.35rem;
+    font-size: 1rem;
+  }
   p {
     margin: 0;
   }
@@ -368,6 +421,7 @@
     white-space: nowrap;
   }
   .register-path {
+    margin-top: 0.9rem;
     display: flex;
     gap: 0.5rem;
     align-items: center;
