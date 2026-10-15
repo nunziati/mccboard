@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use jiff::{SignedDuration, Timestamp};
 
-use crate::{AccessToken, ClaudeProcess, EndpointReply, Environment, OsKind};
+use crate::{
+    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment, OsKind,
+};
 
 /// A scriptable [`Environment`] for tests. Clones share state, so a test can keep a handle
 /// after giving one to [`crate::Core::new`] and keep steering it.
@@ -32,6 +34,20 @@ struct State {
     user_path_fails: bool,
     processes: Vec<ClaudeProcess>,
     developer_mode: bool,
+    claude_invocations: Vec<ClaudeInvocation>,
+    claude_handler: ClaudeHandler,
+}
+
+type HandlerFn = dyn Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Sync;
+
+/// What a fake `claude` command does; by default it succeeds and prints nothing.
+#[derive(Clone)]
+struct ClaudeHandler(Arc<HandlerFn>);
+
+impl std::fmt::Debug for ClaudeHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClaudeHandler")
+    }
 }
 
 impl FakeEnvironment {
@@ -50,6 +66,8 @@ impl FakeEnvironment {
                 user_path_fails: false,
                 processes: Vec::new(),
                 developer_mode: true,
+                claude_invocations: Vec::new(),
+                claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
             })),
         }
     }
@@ -127,6 +145,22 @@ impl FakeEnvironment {
         self.state().developer_mode = on;
     }
 
+    /// Scripts what `claude` commands do: `handler` gets each invocation and returns its
+    /// result, or an error as when `claude` can't be started. It may also write files, to
+    /// play the part of Claude Code (a plugin install, a login). Without it, every command
+    /// succeeds and prints nothing.
+    pub fn on_claude(
+        &self,
+        handler: impl Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Sync + 'static,
+    ) {
+        self.state().claude_handler = ClaudeHandler(Arc::new(handler));
+    }
+
+    /// Every `claude` command run so far, in order.
+    pub fn claude_invocations(&self) -> Vec<ClaudeInvocation> {
+        self.state().claude_invocations.clone()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
@@ -191,5 +225,15 @@ impl Environment for FakeEnvironment {
 
     fn file_links_allowed(&self) -> bool {
         self.state().developer_mode
+    }
+
+    fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
+        let handler = {
+            let mut state = self.state();
+            state.claude_invocations.push(invocation.clone());
+            state.claude_handler.clone()
+        };
+        // Not under the lock: the handler may steer the fake itself.
+        (handler.0)(invocation)
     }
 }

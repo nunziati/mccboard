@@ -163,6 +163,8 @@ fn missing_links_and_unlinked_skills_are_drift_with_a_link_to_create() {
             "link:scripts",
             "link:skills/deploy",
             "link:skills/review",
+            // b has no .claude.json yet: the primary's Global config key is to align too.
+            "config:autoConnectIde",
         ]
     );
     let settings = item(&drift, "link:settings.json");
@@ -194,7 +196,7 @@ fn missing_links_and_unlinked_skills_are_drift_with_a_link_to_create() {
         }
     );
     assert!(skill.explanation.contains("review"));
-    assert_eq!(drift.drift_count, 8);
+    assert_eq!(drift.drift_count, 9);
 }
 
 #[test]
@@ -647,7 +649,8 @@ fn the_doctor_covers_registered_instances_only() {
     let dirs: Vec<_> = doctor.instances.iter().map(|i| &i.config_dir).collect();
     assert_eq!(dirs, vec![&b]);
     assert_eq!(doctor.instances[0].kind, InstanceKind::Linked);
-    assert_eq!(doctor.drift_count, 8);
+    // Eight links, plus config:autoConnectIde (b has no .claude.json).
+    assert_eq!(doctor.drift_count, 9);
     let _ = p;
 }
 

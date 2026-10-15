@@ -32,28 +32,76 @@
         return `drift.problem.whole_folder_link.${item.item}`
       case 'stale_launcher':
         return problem.found === null ? 'drift.problem.stale_launcher' : 'drift.problem.stale_launcher_found'
+      case 'misaligned_key':
+        return problem.instance === null ? 'drift.problem.misaligned_key_unset' : 'drift.problem.misaligned_key'
       default:
         return `drift.problem.${problem.kind}`
     }
   }
 
+  /** A Global config value as Claude Code writes it in `.claude.json`. */
+  function json(value: unknown): string {
+    return JSON.stringify(value)
+  }
+
   function problemText(item: DriftItem): string {
-    const problem = item.problem as Problem & { target?: string | null; skill?: string; found?: string | null }
+    const problem = item.problem
     const vars: Record<string, string> = { item: item.item }
-    if (problem.target) vars.target = problem.target
-    if (problem.found) vars.found = problem.found
-    if (problem.skill) vars.skill = problem.skill
+    switch (problem.kind) {
+      case 'broken_link':
+      case 'whole_folder_link':
+        if (problem.target) vars.target = problem.target
+        break
+      case 'wrong_target':
+      case 'link_chain':
+        vars.target = problem.target
+        break
+      case 'stale_launcher':
+        if (problem.found) vars.found = problem.found
+        break
+      case 'unlinked_skill':
+        vars.skill = problem.skill
+        break
+      case 'misaligned_key':
+        vars.key = problem.key
+        vars.primary = json(problem.primary)
+        if (problem.instance !== null) vars.instance = json(problem.instance)
+        break
+      case 'missing_marketplace':
+        vars.marketplace = problem.marketplace
+        break
+      case 'missing_plugin':
+        vars.plugin = problem.plugin
+        break
+    }
     return translated(problemKey(item, problem), vars, item.explanation)
   }
 
   function repairText(item: DriftItem): string {
-    const repair = item.repair as Repair & { target?: string; skills?: string[] }
+    const repair: Repair = item.repair
     const vars: Record<string, string> = { item: item.item }
-    if (repair.target) vars.target = repair.target
     let key = `drift.repair.${repair.action}`
-    if (repair.skills) {
-      vars.skills = repair.skills.join(', ')
-      if (repair.skills.length === 0) key = 'drift.repair.migrate_skills_none'
+    switch (repair.action) {
+      case 'create_link':
+      case 'replace_link':
+      case 'backup_and_link':
+        vars.target = repair.target
+        break
+      case 'migrate_skills':
+        vars.skills = repair.skills.join(', ')
+        if (repair.skills.length === 0) key = 'drift.repair.migrate_skills_none'
+        break
+      case 'align_key':
+        vars.key = repair.key
+        vars.value = json(repair.value)
+        break
+      case 'add_marketplace':
+        if (repair.source === null) key = 'drift.repair.add_marketplace_by_hand'
+        else vars.source = repair.source
+        break
+      case 'install_plugin':
+        vars.plugin = repair.plugin
+        break
     }
     return translated(key, vars, item.repair_explanation)
   }

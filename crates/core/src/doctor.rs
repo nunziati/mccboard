@@ -5,8 +5,9 @@
 //! `<family>:<subject>` (`link:settings.json`, `link:skills/review`, `migrate:skills`), which
 //! stays the same whatever is wrong with the item, so a repair can target it. Its [`Problem`]
 //! says what is wrong and its [`Repair`] what a repair would do. Launchers have their own
-//! family (`launcher:claude-b`); later checks add theirs (Global config keys, plugins) with
-//! their own problem and repair kinds.
+//! family (`launcher:claude-b`), and so do aligned items: Global config keys
+//! (`config:diffTool`), marketplaces (`marketplace:tools`) and plugins (`plugin:review@tools`),
+//! see [`crate::alignment`].
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -19,7 +20,7 @@ use crate::instance::InstanceKind;
 use crate::launcher::{LauncherPlace, LauncherState, LauncherStatus};
 use crate::links::{self, Entry};
 use crate::sharing::{self, Sharing, SharingAnswer, SharingQuestion};
-use crate::{Error, paths};
+use crate::{Error, alignment, paths};
 
 /// The doctor's report on every registered instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +112,18 @@ pub enum Problem {
     /// The instance's launcher isn't what mccboard writes: it starts Claude Code in another
     /// folder (`found`, when readable), was edited by hand, or is incomplete.
     StaleLauncher { found: Option<PathBuf> },
+    /// A Global config key of `.claude.json` differs from the primary's: `primary` is the
+    /// primary's value, `instance` this instance's (`None` when it doesn't set it).
+    MisalignedKey {
+        key: String,
+        primary: serde_json::Value,
+        instance: Option<serde_json::Value>,
+    },
+    /// A plugin marketplace added in the primary instance isn't added here.
+    MissingMarketplace { marketplace: String },
+    /// A plugin installed for the user in the primary instance isn't installed here
+    /// (`name@marketplace`).
+    MissingPlugin { plugin: String },
 }
 
 /// What a repair of an item would do. Link repairs make the item a single-hop link to
@@ -133,6 +146,21 @@ pub enum Repair {
     MigratePlugins,
     /// Make the launchers match the registered linked instances ([`crate::Core::sync_launchers`]).
     SyncLaunchers,
+    /// Set the Global config key `key` to `value` in this instance's `.claude.json`, leaving
+    /// every other key as it is.
+    AlignKey {
+        key: String,
+        value: serde_json::Value,
+    },
+    /// Run `claude plugin marketplace add <source>` in this instance. `source` is `None` when
+    /// mccboard can't tell it from the primary's: the marketplace is then added by hand.
+    AddMarketplace {
+        marketplace: String,
+        source: Option<String>,
+    },
+    /// Run `claude plugin install <plugin> --scope user` in this instance, adding its
+    /// marketplace first when missing.
+    InstallPlugin { plugin: String },
     /// Nothing to repair.
     Nothing,
 }
@@ -186,6 +214,7 @@ pub(crate) fn drift(
     } else {
         let mut items = link_drift(&primary, config_dir, answers);
         items.extend(duplicate_hooks(&primary, config_dir));
+        items.extend(alignment::drift(home, &primary, config_dir));
         items
     };
     items.extend(launchers.and_then(|status| launcher_drift(status, config_dir)));
@@ -361,7 +390,13 @@ fn duplicate_hooks(primary: &Path, linked: &Path) -> Option<DriftItem> {
 }
 
 impl DriftItem {
-    fn new(id: String, item: &str, path: &Path, problem: Problem, repair: Repair) -> Self {
+    pub(crate) fn new(
+        id: String,
+        item: &str,
+        path: &Path,
+        problem: Problem,
+        repair: Repair,
+    ) -> Self {
         let informational = matches!(problem, Problem::DuplicateHooks);
         Self {
             explanation: explain(item, &problem),
@@ -441,6 +476,30 @@ fn explain(item: &str, problem: &Problem) -> String {
             "The launcher {item} isn't the one mccboard writes: it was edited by hand or is \
              incomplete."
         ),
+        Problem::MisalignedKey {
+            key,
+            primary,
+            instance: Some(instance),
+        } => format!(
+            "The Global config key {key} is {} here but {} in the primary instance.",
+            json(instance),
+            json(primary)
+        ),
+        Problem::MisalignedKey {
+            key,
+            primary,
+            instance: None,
+        } => format!(
+            "The Global config key {key} isn't set here; the primary instance has {}.",
+            json(primary)
+        ),
+        Problem::MissingMarketplace { marketplace } => format!(
+            "The plugin marketplace {marketplace} is added in the primary instance but not here."
+        ),
+        Problem::MissingPlugin { plugin } => format!(
+            "The plugin {plugin} is installed in the primary instance but not here, so this \
+             account doesn't have it."
+        ),
     }
 }
 
@@ -471,6 +530,26 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
         Repair::SyncLaunchers => {
             "Fix the launchers (mccboard launcher sync), then open a new terminal.".to_owned()
         }
+        Repair::AlignKey { key, value } => format!(
+            "Set {key} to {} in this instance's .claude.json, leaving every other key as it is.",
+            json(value)
+        ),
+        Repair::AddMarketplace {
+            source: Some(source),
+            ..
+        } => format!("Add it with `claude plugin marketplace add {source}`, run in this instance."),
+        Repair::AddMarketplace { source: None, .. } => "mccboard can't tell how to add it: add \
+             it by hand with `claude plugin marketplace add`, run in this instance."
+            .to_owned(),
+        Repair::InstallPlugin { plugin } => format!(
+            "Install it with `claude plugin install {plugin}`, run in this instance (adding its \
+             marketplace first if needed)."
+        ),
         Repair::Nothing => "Nothing to repair: this is for your information.".to_owned(),
     }
+}
+
+/// A JSON value as Claude Code writes it, on one line.
+fn json(value: &serde_json::Value) -> String {
+    value.to_string()
 }

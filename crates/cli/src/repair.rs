@@ -12,7 +12,8 @@ pub struct RepairArgs {
     /// Config directories to repair (default: every registered instance with drift).
     #[arg(value_name = "PATH")]
     paths: Vec<PathBuf>,
-    /// Repair only this drift item, by the id `mccboard doctor` shows (`link:settings.json`).
+    /// Repair only this drift item, by the id `mccboard doctor` shows (`link:settings.json`,
+    /// `config:diffTool`, `plugin:review@tools`).
     /// Needs exactly one PATH.
     #[arg(long, value_name = "ID")]
     item: Option<String>,

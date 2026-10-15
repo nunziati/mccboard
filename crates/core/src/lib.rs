@@ -9,7 +9,9 @@
 //! anything this crate returns, prints or persists.
 
 mod account;
+mod alignment;
 mod backup;
+mod claude_cli;
 mod claude_files;
 mod config;
 mod desktop_app;
@@ -39,8 +41,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
+pub use alignment::GLOBAL_CONFIG_KEYS;
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
-pub use environment::{EndpointReply, Environment, OsKind, SystemEnvironment};
+pub use environment::{
+    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, OsKind, SystemEnvironment,
+};
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use language::Language;
@@ -291,6 +296,12 @@ impl Core {
     /// replaces are moved to a backup under `~/.mccboard/state/backups/` first. Repairing
     /// again changes nothing; the primary instance is never relinked.
     ///
+    /// Aligned items are brought in line with the primary instance: a Global config key
+    /// (`config:<key>`) by writing only that key into the instance's `.claude.json`, a
+    /// marketplace or plugin (`marketplace:<name>`, `plugin:<id>`) by running Claude Code's
+    /// own `claude plugin` commands in the instance. A failed install is reported in its item
+    /// and doesn't stop the others.
+    ///
     /// A missing or stale launcher (`launcher:<name>`) is repaired with
     /// [`Core::sync_launchers`]; launchers live outside the instance's folder, so repairing
     /// only them doesn't wait for its sessions to end.
@@ -339,5 +350,22 @@ impl Core {
             tz,
             self.env.now(),
         ))
+    }
+
+    /// Aligns the linked instance in `config_dir` (absolute, or starting with `~`) with the
+    /// primary instance, registered or not: its Global config keys, then its marketplaces and
+    /// plugins, as [`Core::repair`] does for those items, and nothing else (no links, no
+    /// launcher). For the add flow, before the instance is logged in and registered. Refuses
+    /// while a Claude Code process uses the instance; a failed install is reported in its item.
+    /// Aligning the primary instance changes nothing.
+    pub fn align(&self, config_dir: &Path) -> Result<RepairReport, Error> {
+        repair::align(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            config_dir,
+            &|| self.launchers().ok(),
+            &|| self.sync_launchers(),
+        )
     }
 }
