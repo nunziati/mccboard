@@ -1,6 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod doctor;
+mod usage;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -54,6 +55,16 @@ enum Command {
         /// Config directories to forget.
         #[arg(required = true, value_name = "PATH")]
         paths: Vec<PathBuf>,
+    },
+    /// Show each account's usage windows. Refreshes from the usage endpoint first, once per
+    /// account and only as often as the rate limits allow.
+    Usage {
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Show the last known readings without calling the endpoint.
+        #[arg(long)]
+        cached: bool,
     },
     /// Manage accounts.
     Account {
@@ -164,6 +175,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("Unregistered {}; its folder is untouched.", path.display());
             }
         }
+        Command::Usage { json, cached } => usage::run(&core, json, cached)?,
         Command::Account {
             command:
                 AccountCommand::Set {

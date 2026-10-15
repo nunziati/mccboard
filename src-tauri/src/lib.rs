@@ -1,5 +1,7 @@
 //! The Tauri binding: exposes core operations as commands. No logic lives here (ADR 0004).
 
+mod usage;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +25,17 @@ struct CommandError {
     code: &'static str,
     path: Option<PathBuf>,
     detail: Option<String>,
+}
+
+impl CommandError {
+    /// A failure outside the core (a worker thread that died): the UI's generic message.
+    fn unknown() -> Self {
+        Self {
+            code: "unknown",
+            path: None,
+            detail: None,
+        }
+    }
 }
 
 impl From<mccboard_core::Error> for CommandError {
@@ -127,7 +140,9 @@ pub fn run() {
             unregister,
             update_account,
             doctor,
-            answer_sharing
+            answer_sharing,
+            usage::usage,
+            usage::refresh_usage
         ])
         .setup(move |app| {
             // Without the watcher the window still works; it just won't see outside edits
