@@ -104,7 +104,8 @@ pub enum LoginRun {
     /// It ran and ended with `exit_code` (`None` when unknown). Only the account observed
     /// afterwards says whether it worked.
     Ran { exit_code: Option<i32> },
-    /// Not opened: the instance was logged in already (an add run again).
+    /// Not opened: the instance was logged in already (an add run again), perhaps with an
+    /// expired token, which Claude Code renews the next time it runs.
     AlreadyLoggedIn,
     /// Not opened: the add was asked not to.
     NotRequested,
@@ -244,9 +245,9 @@ impl Core {
     }
 
     /// Whether an add can skip the login. The credentials decide, as they do for the app's
-    /// "Log in" ([`LoginState`]): a valid token skips it; an expired one (perhaps for good: a
-    /// dead refresh token reads as expired), none, or unreadable ones open it. `oauthAccount`
-    /// alone says nothing: it may outlive the login.
+    /// "Log in" ([`LoginState`]): a token, valid or expired, skips it, since Claude Code renews
+    /// an expired one the next time it runs; none, emptied or unreadable ones open it.
+    /// `oauthAccount` alone says nothing: it may outlive the login.
     ///
     /// One exception: on Windows Claude Code may keep the credentials in the Credential
     /// Manager instead of `.credentials.json`, and mccboard doesn't look there. With no
@@ -255,13 +256,13 @@ impl Core {
     fn logged_in_already(&self, config_dir: &Path) -> bool {
         let observation = self.observe(config_dir);
         match observation.login {
-            LoginState::LoggedIn { .. } => true,
+            LoginState::LoggedIn { .. } | LoginState::Expired { .. } => true,
             LoginState::NotLoggedIn => {
                 self.env.os() == OsKind::Windows
                     && observation.account.is_some()
                     && !claude_files::credentials_path(config_dir).exists()
             }
-            LoginState::Expired { .. } | LoginState::Unknown => false,
+            LoginState::Unknown => false,
         }
     }
 
