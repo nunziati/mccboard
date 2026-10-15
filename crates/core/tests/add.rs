@@ -164,8 +164,14 @@ fn plugin_commands(env: &FakeEnvironment, fail: bool) {
     });
 }
 
+/// An add from the CLI: the login runs in the current terminal.
 fn add(label: &str) -> AddRequest {
-    AddRequest::new(label)
+    AddRequest::new(label, LoginTerminal::CurrentTerminal)
+}
+
+/// A login from the CLI.
+fn login(f: &Fixture, dir: &Path) -> Result<mccboard_core::LoginReport, Error> {
+    f.core.login(dir, LoginTerminal::CurrentTerminal)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -199,7 +205,7 @@ fn adding_makes_the_folder_links_aligns_creates_the_launcher_logs_in_and_registe
     assert!(global.get("projects").is_none());
     // The launcher.
     assert!(f.rc_file().contains("alias claude-b="), "{}", f.rc_file());
-    // The login ran once, in this instance, in the current terminal (Linux).
+    // The login ran once, in this instance, in the terminal the front end chose.
     let logins = f.env.login_invocations();
     assert_eq!(logins.len(), 1);
     assert_eq!(logins[0].config_dir, dir);
@@ -225,16 +231,29 @@ fn adding_makes_the_folder_links_aligns_creates_the_launcher_logs_in_and_registe
 }
 
 #[test]
-fn on_windows_the_login_opens_in_a_new_terminal_window() {
+fn the_front_end_chooses_where_the_login_opens() {
+    // The app opens it in a new window on every OS; the CLI in its own terminal.
     let f = fixture();
     f.env.set_os(OsKind::Windows);
-    f.env.login_as(UUID_B, "b@example.com");
+    f.env.on_login(|_| Ok(LoginExit { exit_code: Some(1) }));
 
-    f.core.add(&add("B")).unwrap();
+    f.core
+        .add(&AddRequest::new("B", LoginTerminal::NewWindow))
+        .unwrap();
+    f.core
+        .login(&f.path(".claude-b"), LoginTerminal::CurrentTerminal)
+        .unwrap();
 
-    let logins = f.env.login_invocations();
-    assert_eq!(logins.len(), 1);
-    assert_eq!(logins[0].terminal, LoginTerminal::NewWindow);
+    let terminals: Vec<LoginTerminal> = f
+        .env
+        .login_invocations()
+        .iter()
+        .map(|l| l.terminal)
+        .collect();
+    assert_eq!(
+        terminals,
+        vec![LoginTerminal::NewWindow, LoginTerminal::CurrentTerminal]
+    );
     assert!(f.path(".mccboard/bin/claude-b.cmd").is_file());
 }
 
@@ -271,7 +290,7 @@ fn the_folder_and_label_can_be_chosen() {
     f.env.login_as(UUID_B, "b@example.com");
     let request = AddRequest {
         config_dir: Some(PathBuf::from("~/claude-work")),
-        ..AddRequest::new("Work")
+        ..add("Work")
     };
 
     let report = f.core.add(&request).unwrap();
@@ -312,7 +331,7 @@ fn a_known_account_keeps_its_label() {
     // "B" is taken by another account: the new one gets a suggested label instead.
     let request = AddRequest {
         config_dir: Some(f.path(".claude-x")),
-        ..AddRequest::new("B")
+        ..add("B")
     };
     let report = f.core.add(&request).unwrap();
 
@@ -618,7 +637,7 @@ fn adding_without_login_stops_after_the_launcher() {
     f.env.login_as(UUID_B, "b@example.com");
     let request = AddRequest {
         login: false,
-        ..AddRequest::new("B")
+        ..add("B")
     };
 
     let report = f.core.add(&request).unwrap();
@@ -645,7 +664,7 @@ fn the_label_asked_for_waits_in_the_config_for_a_later_login() {
     assert!(config.contains(r#"label = "Personal Max""#), "{config}");
 
     f.env.login_as(UUID_B, "b@example.com");
-    let report = f.core.login(&dir).unwrap();
+    let report = login(&f, &dir).unwrap();
 
     let account = report.account.unwrap();
     assert_eq!(account.uuid.as_str(), UUID_B);
@@ -664,7 +683,7 @@ fn the_label_asked_for_survives_a_login_that_couldnt_start() {
     f.core.add(&add("Work")).unwrap_err();
 
     f.env.login_as(UUID_B, "b@example.com");
-    let report = f.core.login(&f.path(".claude-work")).unwrap();
+    let report = login(&f, &f.path(".claude-work")).unwrap();
 
     assert_eq!(report.account.unwrap().label, "Work");
 }
@@ -697,7 +716,7 @@ fn the_primary_instance_and_odd_paths_are_refused() {
     let f = fixture();
     let primary = AddRequest {
         config_dir: Some(PathBuf::from("~/.claude")),
-        ..AddRequest::new("B")
+        ..add("B")
     };
     assert!(matches!(
         f.core.add(&primary).unwrap_err(),
@@ -707,7 +726,7 @@ fn the_primary_instance_and_odd_paths_are_refused() {
     write(f.path("a-file"), "x");
     let file = AddRequest {
         config_dir: Some(f.path("a-file")),
-        ..AddRequest::new("B")
+        ..add("B")
     };
     assert!(matches!(
         f.core.add(&file).unwrap_err(),
@@ -716,7 +735,7 @@ fn the_primary_instance_and_odd_paths_are_refused() {
 
     let relative = AddRequest {
         config_dir: Some(PathBuf::from("relative/dir")),
-        ..AddRequest::new("B")
+        ..add("B")
     };
     assert!(matches!(
         f.core.add(&relative).unwrap_err(),
@@ -730,7 +749,7 @@ fn the_primary_instance_and_odd_paths_are_refused() {
 
     let desktop = AddRequest {
         config_dir: Some(f.path("AppData/Roaming/Claude/code")),
-        ..AddRequest::new("B")
+        ..add("B")
     };
     assert!(matches!(
         f.core.add(&desktop).unwrap_err(),
@@ -852,6 +871,11 @@ fn a_link_to_the_primary_folder_is_the_primary_instance_and_never_relinked() {
     assert!(!is_link(&f.primary.join("settings.json")));
     assert!(!is_link(&f.primary.join("agents")));
     assert!(!f.rc_file().contains(".claude-alias"), "{}", f.rc_file());
+    // Its login is the primary's own: Claude Code's default folder.
+    login(&f, &alias).unwrap();
+    let logins = f.env.login_invocations();
+    assert_eq!(logins[0].kind, InstanceKind::Primary);
+    assert_eq!(logins[0].config_dir, f.primary);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -864,7 +888,7 @@ fn logging_in_a_registered_instance_records_its_account() {
     f.core.register(&linked.dir).unwrap();
     f.env.login_as(UUID_B, "b@example.com");
 
-    let report = f.core.login(&linked.dir).unwrap();
+    let report = login(&f, &linked.dir).unwrap();
 
     assert_eq!(report.config_dir, linked.dir);
     assert_eq!(report.run, LoginRun::Ran { exit_code: Some(0) });
@@ -896,7 +920,7 @@ fn logging_in_again_an_expired_instance_runs_the_login_even_with_an_account() {
     f.core.register(&linked.dir).unwrap();
     f.env.login_as(UUID_B, "b@example.com");
 
-    let report = f.core.login(&linked.dir).unwrap();
+    let report = login(&f, &linked.dir).unwrap();
 
     assert_eq!(f.env.login_invocations().len(), 1);
     assert!(!report.new_account);
@@ -914,7 +938,7 @@ fn logging_in_with_an_account_that_has_another_instance_warns() {
     f.core.register(&linked.dir).unwrap();
     f.env.login_as(UUID_A, "a@example.com");
 
-    let report = f.core.login(&linked.dir).unwrap();
+    let report = login(&f, &linked.dir).unwrap();
 
     assert!(matches!(
         &report.warnings[..],
@@ -927,7 +951,7 @@ fn logging_in_an_unregistered_folder_is_refused() {
     let f = fixture();
     let linked = f.home.linked(".claude-b");
 
-    let error = f.core.login(&linked.dir).unwrap_err();
+    let error = login(&f, &linked.dir).unwrap_err();
 
     assert!(matches!(error, Error::NotRegistered { .. }), "{error}");
     assert!(f.env.login_invocations().is_empty());
@@ -938,7 +962,7 @@ fn the_primary_instance_logs_in_as_itself() {
     let f = fixture();
     f.env.login_as(UUID_A, "a@example.com");
 
-    let report = f.core.login(&f.primary).unwrap();
+    let report = login(&f, &f.primary).unwrap();
 
     let logins = f.env.login_invocations();
     assert_eq!(logins[0].kind, InstanceKind::Primary);
@@ -951,6 +975,24 @@ fn the_primary_instance_logs_in_as_itself() {
 }
 
 #[test]
+fn logging_in_an_instance_whose_folder_is_gone_says_so() {
+    let f = fixture();
+    let linked = f.home.linked(".claude-b");
+    f.core.register(&linked.dir).unwrap();
+    fs::remove_dir(&linked.dir).unwrap();
+
+    let error = login(&f, &linked.dir).unwrap_err();
+
+    assert!(
+        matches!(error, Error::InstanceFolderMissing { .. }),
+        "{error}"
+    );
+    assert_eq!(error.code(), "instance_folder_missing");
+    assert_eq!(error.path(), Some(linked.dir.as_path()));
+    assert!(f.env.login_invocations().is_empty());
+}
+
+#[test]
 fn a_login_that_needs_a_terminal_says_so() {
     let f = fixture();
     let linked = f.home.linked(".claude-b");
@@ -958,7 +1000,7 @@ fn a_login_that_needs_a_terminal_says_so() {
     f.env
         .on_login(|_| Err(io::Error::new(io::ErrorKind::Unsupported, "no terminal")));
 
-    let error = f.core.login(&linked.dir).unwrap_err();
+    let error = login(&f, &linked.dir).unwrap_err();
 
     assert!(matches!(error, Error::LoginNeedsTerminal { .. }), "{error}");
     assert_eq!(error.code(), "login_needs_terminal");

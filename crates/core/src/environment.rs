@@ -58,8 +58,11 @@ pub trait Environment: Send + Sync {
     /// itself, and mccboard never sees them. For a linked instance `CLAUDE_CONFIG_DIR` is set
     /// to its folder; for the primary instance it is unset and the home is the folder's
     /// parent. The variables that would override the instance's own login are removed.
-    /// Errors when `claude` can't be started (`NotFound` when it isn't installed), and with
-    /// `Unsupported` when there is no such terminal (the current one, from an app).
+    ///
+    /// Errors, before anything starts, with `NotFound` only when `claude` itself isn't found
+    /// on the PATH; with `Unsupported` when there is no such terminal (no terminal for the
+    /// current one, no terminal emulator for a new window on Linux); with another kind when
+    /// the instance's folder is missing or the program can't be started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
 }
 
@@ -73,13 +76,17 @@ pub struct LoginInvocation {
     pub terminal: LoginTerminal,
 }
 
-/// Where the login runs.
+/// Where the login runs. The front end chooses: the app, which has no terminal, a new
+/// window; the CLI its own terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoginTerminal {
-    /// A new terminal window (Windows), which closes when the login ends.
+    /// A new terminal window, which closes when the login ends: a console of its own on
+    /// Windows; on Linux a terminal emulator (`$TERMINAL`, else `x-terminal-emulator`, else
+    /// `xterm`).
     NewWindow,
-    /// The terminal mccboard's CLI runs in (Linux).
+    /// The terminal mccboard's CLI runs in. Claude Code's output goes to mccboard's standard
+    /// error, so mccboard's standard output carries only its own report (`--json`).
     CurrentTerminal,
 }
 

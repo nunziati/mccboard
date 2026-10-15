@@ -175,7 +175,7 @@
   "action.add": "Aggiungi",
   "action.login": "Accedi",
   "action.login_hint": "Apri il login di Claude Code per questa istanza. Accedi nel browser; mccboard non vede mai le credenziali.",
-  "login.waiting": "Il login di Claude Code è aperto in una nuova finestra: accedi nel browser, poi chiudila se resta aperta. Questa finestra si aggiorna quando finisce.",
+  "login.waiting": "Il login di Claude Code è aperto in una nuova finestra: accedi nel browser. Questa finestra si aggiorna quando il login finisce.",
   "notice.added": "Aggiunta {path}.",
   "notice.logged_in": "{path} ha effettuato l'accesso con l'account “{label}”.",
   "notice.logged_in_new": "{path} ha effettuato l'accesso con un nuovo account, “{label}”: puoi cambiarne etichetta e colore.",
@@ -188,6 +188,7 @@
   "error.no_default_folder": "Da questa etichetta non si ricava un nome di cartella: scegli tu la cartella.",
   "error.folder_not_created": "mccboard non è riuscito a creare la cartella.",
   "error.claude_not_installed": "Claude Code (claude) non è installato o non è nel PATH. Installalo, poi riprova: il resto è già fatto.",
-  "error.login_needs_terminal": "Qui il login richiede un terminale. Aprine uno ed esegui “mccboard login” con questa cartella; il resto è già fatto.",
+  "error.instance_folder_missing": "La cartella di questa istanza non esiste più, quindi non c'è nulla su cui accedere. Aggiungi di nuovo l'istanza, oppure rimuovila.",
+  "error.login_needs_terminal": "Qui mccboard non è riuscito ad aprire una finestra di terminale per il login. Apri un terminale ed esegui “mccboard login” con questa cartella; il resto è già fatto.",
   "error.login_not_opened": "mccboard non è riuscito ad aprire il login di Claude Code. Il resto è già fatto: riprova con “Accedi”."
 }

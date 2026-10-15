@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use clap::Args;
 use mccboard_core::{
-    AddReport, AddRequest, Core, LoginReport, LoginRun, LoginWarning, RepairOutcome,
+    AddReport, AddRequest, Core, LoginReport, LoginRun, LoginTerminal, LoginWarning, RepairOutcome,
 };
 
 #[derive(Args)]
@@ -21,7 +21,8 @@ pub struct AddArgs {
     /// Stop once the instance is set up and registered; log in later with `mccboard login`.
     #[arg(long)]
     no_login: bool,
-    /// Print machine-readable JSON. Asks nothing.
+    /// Print machine-readable JSON on stdout, without asking about unknown items first. The
+    /// login (unless --no-login) still runs in this terminal; its output goes to stderr.
     #[arg(long)]
     json: bool,
 }
@@ -31,16 +32,18 @@ pub struct LoginArgs {
     /// The registered instance's config directory.
     #[arg(value_name = "PATH")]
     path: PathBuf,
-    /// Print machine-readable JSON.
+    /// Print machine-readable JSON on stdout. The login runs in this terminal all the same;
+    /// its output goes to stderr.
     #[arg(long)]
     json: bool,
 }
 
 pub fn add(core: &Core, args: AddArgs) -> Result<()> {
     let request = AddRequest {
-        label: args.label.clone(),
         config_dir: args.dir.as_deref().map(crate::user_path).transpose()?,
         login: !args.no_login,
+        // The CLI's login runs in its own terminal, on every OS.
+        ..AddRequest::new(args.label.clone(), LoginTerminal::CurrentTerminal)
     };
     // Unknown items of the primary instance are asked about first, so this run links them.
     if !args.json && std::io::stdin().is_terminal() {
@@ -96,7 +99,7 @@ pub fn login(core: &Core, args: LoginArgs) -> Result<()> {
             path.display()
         );
     }
-    let report = core.login(&path)?;
+    let report = core.login(&path, LoginTerminal::CurrentTerminal)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {

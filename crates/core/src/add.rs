@@ -50,15 +50,19 @@ pub struct AddRequest {
     /// Whether to open the login; without it the add stops once the instance is set up and
     /// registered, and [`Core::login`] finishes it later.
     pub login: bool,
+    /// Where the login opens: the front end decides (the app in a new window, the CLI in its
+    /// own terminal).
+    pub terminal: LoginTerminal,
 }
 
 impl AddRequest {
-    /// Adds `label`'s instance in the default folder, logging in.
-    pub fn new(label: impl Into<String>) -> Self {
+    /// Adds `label`'s instance in the default folder, logging in in `terminal`.
+    pub fn new(label: impl Into<String>, terminal: LoginTerminal) -> Self {
         Self {
             label: label.into(),
             config_dir: None,
             login: true,
+            terminal,
         }
     }
 }
@@ -176,7 +180,7 @@ impl Core {
         } else if self.logged_in_already(&config_dir) {
             LoginRun::AlreadyLoggedIn
         } else {
-            self.open_login(&config_dir)?
+            self.open_login(&config_dir, request.terminal)?
         };
         let mut login = self.after_login(&config_dir, run)?;
         login.new_account |= registration.new_account.is_some();
@@ -190,19 +194,25 @@ impl Core {
     }
 
     /// Opens Claude Code's official login in the registered instance in `config_dir`
-    /// (absolute, or starting with `~`), whatever its login state, and waits for it to end:
-    /// in a new terminal window on Windows, in the current terminal on Linux
-    /// ([`Error::LoginNeedsTerminal`] without one). Then registers the instance again, under
-    /// the account it is now logged in with, warning when that account has other instances
-    /// here. mccboard never sees the credentials: Claude Code writes them.
-    pub fn login(&self, config_dir: &Path) -> Result<LoginReport, Error> {
+    /// (absolute, or starting with `~`), whatever its login state, in `terminal`, and waits
+    /// for it to end. Then registers the instance again, under the account it is now logged in
+    /// with (giving it the label an add asked for, if one is waiting), warning when that
+    /// account has other instances here. mccboard never sees the credentials: Claude Code
+    /// writes them.
+    ///
+    /// Errors before opening anything when the instance's folder is gone
+    /// ([`Error::InstanceFolderMissing`]), when `claude` isn't on the PATH
+    /// ([`Error::ClaudeNotInstalled`]), and when there is no such terminal
+    /// ([`Error::LoginNeedsTerminal`]: no terminal for the current one, no terminal emulator
+    /// on Linux for a new window).
+    pub fn login(&self, config_dir: &Path, terminal: LoginTerminal) -> Result<LoginReport, Error> {
         let config_dir = paths::resolve(&self.home, config_dir)?;
         let config_dir = ConfigFile::load(&self.paths().config_file())?
             .config
             .instance(&config_dir)
             .map(|entry| entry.config_dir.clone())
             .ok_or(Error::NotRegistered { path: config_dir })?;
-        let run = self.open_login(&config_dir)?;
+        let run = self.open_login(&config_dir, terminal)?;
         self.after_login(&config_dir, run)
     }
 
@@ -298,22 +308,28 @@ impl Core {
             .any(|item| repair::needs_file_link(&item.repair)))
     }
 
-    /// Opens the login through the port: a new window on Windows, the current terminal
-    /// elsewhere.
-    fn open_login(&self, config_dir: &Path) -> Result<LoginRun, Error> {
-        let terminal = match self.env.os() {
-            OsKind::Windows => LoginTerminal::NewWindow,
-            OsKind::Linux => LoginTerminal::CurrentTerminal,
-        };
+    /// Opens the login through the port, in `terminal`. A primary instance, spelled however
+    /// (a link to it too), logs in in Claude Code's default folder.
+    fn open_login(&self, config_dir: &Path, terminal: LoginTerminal) -> Result<LoginRun, Error> {
+        if !config_dir.is_dir() {
+            return Err(Error::InstanceFolderMissing {
+                path: config_dir.to_path_buf(),
+            });
+        }
+        let kind = self.kind_of(config_dir);
         let invocation = LoginInvocation {
-            config_dir: config_dir.to_path_buf(),
-            kind: InstanceKind::of(&self.home, config_dir),
+            config_dir: match kind {
+                InstanceKind::Primary => doctor::primary_dir(&self.home),
+                InstanceKind::Linked => config_dir.to_path_buf(),
+            },
+            kind,
             terminal,
         };
         match self.env.open_login(&invocation) {
             Ok(exit) => Ok(LoginRun::Ran {
                 exit_code: exit.exit_code,
             }),
+            // The port answers `NotFound` only for `claude` itself: the folder is checked above.
             Err(error) => Err(match error.kind() {
                 io::ErrorKind::NotFound => Error::ClaudeNotInstalled,
                 io::ErrorKind::Unsupported => Error::LoginNeedsTerminal {

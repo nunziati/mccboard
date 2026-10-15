@@ -175,7 +175,7 @@
   "action.add": "Add",
   "action.login": "Log in",
   "action.login_hint": "Open Claude Code's login for this instance. You log in in the browser; mccboard never sees the credentials.",
-  "login.waiting": "Claude Code's login is open in a new window: log in in your browser, then close it if it stays open. This window updates when it ends.",
+  "login.waiting": "Claude Code's login is open in a new window: log in in your browser. This window updates when the login ends.",
   "notice.added": "Added {path}.",
   "notice.logged_in": "{path} is logged in with account “{label}”.",
   "notice.logged_in_new": "{path} is logged in with a new account, “{label}”: you can change its label and color.",
@@ -188,6 +188,7 @@
   "error.no_default_folder": "That label gives no folder name: choose the folder yourself.",
   "error.folder_not_created": "mccboard couldn't create the folder.",
   "error.claude_not_installed": "Claude Code (claude) isn't installed or isn't on the PATH. Install it, then try again: everything else is done.",
-  "error.login_needs_terminal": "The login needs a terminal here. Open one and run “mccboard login” with this folder; everything else is done.",
+  "error.instance_folder_missing": "This instance's folder doesn't exist any more, so there is nothing to log in to. Add the instance again, or remove it.",
+  "error.login_needs_terminal": "mccboard couldn't open a terminal window for the login here. Open a terminal and run “mccboard login” with this folder; everything else is done.",
   "error.login_not_opened": "mccboard couldn't open Claude Code's login. Everything else is done: try “Log in” again."
 }

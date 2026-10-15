@@ -55,13 +55,13 @@ enum Command {
         json: bool,
     },
     /// Add a linked instance for an account: create its folder (~/.claude-<label> by
-    /// default), link and align it, create its launcher, open Claude Code's login, then
+    /// default), link and align it, create its launcher, open Claude Code's login in this
+    /// terminal, then
     /// register it under the account it logged in with. Running it again completes what's
     /// missing.
     Add(add::AddArgs),
-    /// Open Claude Code's login in a registered instance (in this terminal on Linux, in a new
-    /// window on Windows), then record the account it logged in with. mccboard never sees
-    /// the credentials.
+    /// Open Claude Code's login in a registered instance, in this terminal, then record the
+    /// account it logged in with. mccboard never sees the credentials.
     Login(add::LoginArgs),
     /// Forget registered instances. Their folders stay as they are.
     Unregister {

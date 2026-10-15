@@ -182,6 +182,13 @@ pub enum Error {
     ClaudeNotInstalled,
 
     #[error(
+        "{} doesn't exist any more, so there is nothing to log in to: add the instance again, \
+         or remove it from mccboard",
+        path.display()
+    )]
+    InstanceFolderMissing { path: PathBuf },
+
+    #[error(
         "logging in to {} needs a terminal: run `mccboard login {}` in one",
         path.display(),
         path.display()
@@ -236,6 +243,7 @@ impl Error {
             Error::NoDefaultFolder { .. } => "no_default_folder",
             Error::FolderNotCreated { .. } => "folder_not_created",
             Error::ClaudeNotInstalled => "claude_not_installed",
+            Error::InstanceFolderMissing { .. } => "instance_folder_missing",
             Error::LoginNeedsTerminal { .. } => "login_needs_terminal",
             Error::LoginNotOpened { .. } => "login_not_opened",
         }
@@ -263,6 +271,7 @@ impl Error {
             | Error::FolderNotAddable { path }
             | Error::FolderHasAnotherAccount { path, .. }
             | Error::FolderNotCreated { path, .. }
+            | Error::InstanceFolderMissing { path }
             | Error::LoginNeedsTerminal { path }
             | Error::LoginNotOpened { path, .. } => Some(path),
             _ => None,

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use mccboard_core::{
     Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
-    Core, Doctor, LauncherStatus, LauncherSync, LoginReport, Registration, Registry, Removal,
-    RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
+    Core, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal, Registration, Registry,
+    Removal, RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -152,7 +152,8 @@ fn add_folder(core: tauri::State<'_, Core>, label: String) -> Result<PathBuf, Co
 }
 
 /// Adds a linked instance for the account labelled `label`, in `path` or the default folder,
-/// then opens Claude Code's login in a new terminal window and waits for it. It blocks until
+/// then opens Claude Code's login in a new terminal window (the app has no terminal of its
+/// own: a console on Windows, a terminal emulator on Linux) and waits for it. It blocks until
 /// the user is done, so it runs off the main thread.
 #[tauri::command]
 async fn add_instance(
@@ -163,7 +164,7 @@ async fn add_instance(
     let core = core.inner().clone();
     let request = AddRequest {
         config_dir: path,
-        ..AddRequest::new(label)
+        ..AddRequest::new(label, LoginTerminal::NewWindow)
     };
     tauri::async_runtime::spawn_blocking(move || core.add(&request))
         .await
@@ -171,15 +172,15 @@ async fn add_instance(
         .map_err(CommandError::from)
 }
 
-/// Opens Claude Code's login in the registered instance in `path` and waits for it, off the
-/// main thread; then records the account it logged in with.
+/// Opens Claude Code's login in the registered instance in `path`, in a new terminal window,
+/// and waits for it, off the main thread; then records the account it logged in with.
 #[tauri::command]
 async fn login_instance(
     core: tauri::State<'_, Core>,
     path: PathBuf,
 ) -> Result<LoginReport, CommandError> {
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || core.login(&path))
+    tauri::async_runtime::spawn_blocking(move || core.login(&path, LoginTerminal::NewWindow))
         .await
         .map_err(|_| CommandError::unknown())?
         .map_err(CommandError::from)
