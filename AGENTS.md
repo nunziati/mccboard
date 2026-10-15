@@ -47,7 +47,7 @@ Credentials are **read-only** to mccboard. Claude Code owns them.
 - **App language:** configurable, Italian and English. Every UI string goes through i18n.
 - **Settings:** `~/.mccboard/config.toml` (hand-editable: machines, accounts, instances, desktop profiles, preferences). Data mccboard writes on its own goes under `~/.mccboard/state/`. Instances exist for mccboard only once registered; scanning only proposes them.
 - **Tests:** test-first on the core. File operations are tested on real temporary directories, not mocks.
-- **Workflow:** one issue, one branch, one PR. CI (Ubuntu + Windows) must be green, then Giacomo merges.
+- **Workflow:** a spec's tickets are GitHub sub-issues of the spec, with blockers listed in each body. The base spec (#2) lands as one PR via `/implement-spec`. Later features: one issue, one branch, one PR. In both cases CI (Ubuntu + Windows) must be green, then Giacomo merges.
 
 ## Agent skills
 

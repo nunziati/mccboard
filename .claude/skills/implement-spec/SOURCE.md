@@ -1,0 +1,1 @@
+Vendored from mattpocock/skills (`skills/in-progress/implement-spec`, plugin version 1.2.3), MIT license (see LICENSE). It's a beta skill that the plugin doesn't ship. Replace this copy once it graduates into the plugin.
