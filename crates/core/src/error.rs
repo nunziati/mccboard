@@ -117,6 +117,30 @@ pub enum Error {
         path.display()
     )]
     DriftItemNotFound { path: PathBuf, id: String },
+
+    #[error(
+        "{} is the primary instance, which mccboard never removes or deletes",
+        path.display()
+    )]
+    PrimaryInstance { path: PathBuf },
+
+    #[error(
+        "{} holds your home folder, the primary instance or mccboard's own files, sits inside \
+         the primary instance, or is a link; mccboard won't delete it. Nothing was changed",
+        path.display()
+    )]
+    FolderNotDeletable { path: PathBuf },
+
+    #[error(
+        "cannot delete {}: {source}. It is still registered: close whatever uses it and remove \
+         it again",
+        path.display()
+    )]
+    FolderNotDeleted {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 fn describe_processes(processes: &[ClaudeProcess]) -> String {
@@ -154,6 +178,9 @@ impl Error {
             Error::DeveloperModeOff => "developer_mode_off",
             Error::DesktopAppFolder { .. } => "desktop_app_folder",
             Error::DriftItemNotFound { .. } => "drift_item_not_found",
+            Error::PrimaryInstance { .. } => "primary_instance",
+            Error::FolderNotDeletable { .. } => "folder_not_deletable",
+            Error::FolderNotDeleted { .. } => "folder_not_deleted",
         }
     }
 
@@ -172,7 +199,10 @@ impl Error {
             | Error::LauncherBlockCorrupt { path }
             | Error::InstanceInUse { path, .. }
             | Error::DesktopAppFolder { path }
-            | Error::DriftItemNotFound { path, .. } => Some(path),
+            | Error::DriftItemNotFound { path, .. }
+            | Error::PrimaryInstance { path }
+            | Error::FolderNotDeletable { path }
+            | Error::FolderNotDeleted { path, .. } => Some(path),
             _ => None,
         }
     }
