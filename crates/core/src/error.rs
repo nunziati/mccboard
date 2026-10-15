@@ -145,6 +145,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error(
+        "{} holds your home folder, the primary instance or mccboard's own files, sits inside \
+         one of them, or is a link; mccboard won't make an instance there. Nothing was changed",
+        path.display()
+    )]
+    FolderNotAddable { path: PathBuf },
+
     #[error("{label:?} gives no folder name; choose the instance's folder yourself")]
     NoDefaultFolder { label: String },
 
@@ -210,6 +217,7 @@ impl Error {
             Error::PrimaryInstance { .. } => "primary_instance",
             Error::FolderNotDeletable { .. } => "folder_not_deletable",
             Error::FolderNotDeleted { .. } => "folder_not_deleted",
+            Error::FolderNotAddable { .. } => "folder_not_addable",
             Error::NoDefaultFolder { .. } => "no_default_folder",
             Error::FolderNotCreated { .. } => "folder_not_created",
             Error::ClaudeNotInstalled => "claude_not_installed",
@@ -237,6 +245,7 @@ impl Error {
             | Error::PrimaryInstance { path }
             | Error::FolderNotDeletable { path }
             | Error::FolderNotDeleted { path, .. }
+            | Error::FolderNotAddable { path }
             | Error::FolderNotCreated { path, .. }
             | Error::LoginNeedsTerminal { path }
             | Error::LoginNotOpened { path, .. } => Some(path),

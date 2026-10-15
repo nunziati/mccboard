@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use jiff::Timestamp;
@@ -7,7 +8,9 @@ use crate::claude_files::{self, Read};
 use crate::{AccountUuid, Environment, ObservedAccount};
 
 /// Whether an instance lives in Claude Code's default config directory (`~/.claude`).
-/// Derived from the path, never stored.
+/// Derived from the path, never stored. A path that leads to `~/.claude` through links (a
+/// symlink or junction to it, a linked parent folder) is the primary instance too, so such an
+/// alias is never linked or repaired as if it were another instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceKind {
@@ -17,7 +20,13 @@ pub enum InstanceKind {
 
 impl InstanceKind {
     pub(crate) fn of(home: &Path, config_dir: &Path) -> Self {
-        if crate::paths::same(config_dir, &home.join(".claude")) {
+        let primary = home.join(".claude");
+        let resolved = |path: &Path| fs::canonicalize(path).map(|p| crate::paths::normalize(&p));
+        let alias = || match (resolved(config_dir), resolved(&primary)) {
+            (Ok(dir), Ok(primary)) => crate::paths::same(&dir, &primary),
+            _ => false,
+        };
+        if crate::paths::same(config_dir, &primary) || alias() {
             InstanceKind::Primary
         } else {
             InstanceKind::Linked

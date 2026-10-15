@@ -2,9 +2,9 @@
 //! with its folder too.
 //!
 //! The primary instance is never removed at either level. Deleting a folder:
-//! - refuses a folder that holds the home, the primary instance or mccboard's own files, one
-//!   inside the primary instance, and an instance folder that is itself a link (its target is
-//!   never followed);
+//! - refuses a protected folder ([`crate::folder_guard`]): one that holds the home, the
+//!   primary instance or mccboard's own files, one inside the primary instance or mccboard's
+//!   files, and an instance folder that is itself a link (its target is never followed);
 //! - passes the session guard first: on Windows, deleting a folder under a running
 //!   `claude.exe` pins a core at 100% (anthropics/claude-code#101027);
 //! - removes every link inside as a link, never following it, so a linked instance's links
@@ -20,9 +20,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::config::ConfigFile;
-use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
-use crate::{Environment, Error, LauncherSync, Paths, paths, registry, session_guard};
+use crate::{
+    Environment, Error, LauncherSync, Paths, folder_guard, paths, registry, session_guard,
+};
 
 /// How far removing an instance goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -65,7 +66,9 @@ pub(crate) fn remove(
 ) -> Result<Removal, Error> {
     let config_dir = paths::resolve(home, path)?;
     let primary = home.join(".claude");
-    if InstanceKind::of(home, &config_dir) == InstanceKind::Primary {
+    // The primary's own folder, by spelling. A link to it registered as an instance (an
+    // alias) can be forgotten; deleting it is refused below, since it is a link.
+    if paths::same(&config_dir, &primary) {
         return Err(Error::PrimaryInstance { path: primary });
     }
     let config_file = paths.config_file();
@@ -78,17 +81,14 @@ pub(crate) fn remove(
 
     let folder = match level {
         RemoveLevel::FromMccboard => FolderOutcome::Kept,
-        RemoveLevel::WithFolder => match links::inspect(&config_dir) {
-            Entry::Missing => FolderOutcome::AlreadyGone,
-            Entry::Link { .. } => return Err(Error::FolderNotDeletable { path: config_dir }),
-            Entry::Real => {
-                if !config_dir.is_dir() {
-                    return Err(Error::NotADirectory { path: config_dir });
-                }
-                let protected = [home, primary.as_path(), paths.root()];
-                if protected.iter().any(|p| holds(&config_dir, p)) || holds(&primary, &config_dir) {
-                    return Err(Error::FolderNotDeletable { path: config_dir });
-                }
+        RemoveLevel::WithFolder => {
+            if links::inspect(&config_dir) == Entry::Missing {
+                FolderOutcome::AlreadyGone
+            } else if folder_guard::is_protected(home, paths.root(), &config_dir) {
+                return Err(Error::FolderNotDeletable { path: config_dir });
+            } else if !config_dir.is_dir() {
+                return Err(Error::NotADirectory { path: config_dir });
+            } else {
                 session_guard::ensure_idle(home, env, &config_dir)?;
                 delete_folder(&config_dir).map_err(|source| Error::FolderNotDeleted {
                     path: config_dir.clone(),
@@ -96,26 +96,12 @@ pub(crate) fn remove(
                 })?;
                 FolderOutcome::Deleted
             }
-        },
+        }
     };
 
     registry::unregister(home, &config_file, &config_dir)?;
     sync_launchers()?;
     Ok(Removal { config_dir, folder })
-}
-
-/// Whether `inner` is `outer` or somewhere inside it, by spelling or once links are resolved.
-fn holds(outer: &Path, inner: &Path) -> bool {
-    let inside = |outer: &Path, inner: &Path| {
-        Path::new(&paths::key(inner)).starts_with(Path::new(&paths::key(outer)))
-    };
-    if inside(outer, inner) {
-        return true;
-    }
-    match (fs::canonicalize(outer), fs::canonicalize(inner)) {
-        (Ok(outer), Ok(inner)) => inside(&paths::normalize(&outer), &paths::normalize(&inner)),
-        _ => false,
-    }
 }
 
 /// Deletes a real folder and everything in it. Links (symlinks, junctions) are removed as

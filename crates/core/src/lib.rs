@@ -19,6 +19,7 @@ mod desktop_app;
 mod doctor;
 mod environment;
 mod error;
+mod folder_guard;
 mod instance;
 mod language;
 mod launcher;
@@ -200,6 +201,8 @@ impl Core {
     }
 
     /// Whether `config_dir` is the primary instance's (Claude Code's default) or a linked one.
+    /// A link to the primary's folder, or a path that leads there through links, is the
+    /// primary instance too: it is never linked or repaired as a linked instance.
     pub fn kind_of(&self, config_dir: &Path) -> InstanceKind {
         InstanceKind::of(&self.home, config_dir)
     }

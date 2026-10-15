@@ -41,7 +41,9 @@ pub(crate) fn scan(
         }
         if is_primary {
             primary = Some(entry.path());
-        } else {
+        } else if InstanceKind::of(home, &entry.path()) == InstanceKind::Linked {
+            // A `.claude-*` link to the primary's folder is the primary again, not another
+            // instance: it isn't proposed.
             linked.push(entry.path());
         }
     }

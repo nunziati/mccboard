@@ -32,6 +32,15 @@ fn read_json(path: impl AsRef<Path>) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// Creates a folder link at `at` to `target`, the way a user would by hand.
+fn link_dir(target: &Path, at: &Path) {
+    fs::create_dir_all(at.parent().unwrap()).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, at).unwrap();
+}
+
 fn is_link(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
@@ -621,6 +630,71 @@ fn the_primary_instance_and_odd_paths_are_refused() {
     ));
     assert!(!f.path("AppData").exists());
     assert!(f.env.login_invocations().is_empty());
+}
+
+#[test]
+fn protected_folders_are_refused_before_anything_changes() {
+    let f = fixture();
+    let data = f.path("data/b");
+    fs::create_dir_all(&data).unwrap();
+    link_dir(&data, &f.path(".claude-b"));
+    link_dir(&f.primary, &f.path("via"));
+    let outside_home = f.home.path().parent().unwrap().to_path_buf();
+    let config = f.home.config_text();
+
+    let refused = [
+        // The home itself, and a folder holding it.
+        (PathBuf::from("~"), "folder_not_addable"),
+        (outside_home, "folder_not_addable"),
+        // mccboard's own files, and inside them.
+        (PathBuf::from("~/.mccboard"), "folder_not_addable"),
+        (PathBuf::from("~/.mccboard/b"), "folder_not_addable"),
+        // Inside the primary instance, spelled directly or reached through a link.
+        (PathBuf::from("~/.claude/b"), "folder_not_addable"),
+        (PathBuf::from("~/via/b"), "folder_not_addable"),
+        // A link elsewhere: never followed.
+        (PathBuf::from("~/.claude-b"), "folder_not_addable"),
+        // A link to the primary instance is the primary instance.
+        (PathBuf::from("~/via"), "primary_instance"),
+    ];
+    for (dir, code) in refused {
+        let request = AddRequest {
+            config_dir: Some(dir.clone()),
+            ..add("B")
+        };
+        let error = f.core.add(&request).unwrap_err();
+        assert_eq!(error.code(), code, "{}: {error}", dir.display());
+    }
+
+    assert!(!f.path(".mccboard/b").exists());
+    assert!(!f.primary.join("b").exists());
+    assert_eq!(fs::read_dir(&data).unwrap().count(), 0);
+    assert!(!is_link(&f.primary.join("settings.json")));
+    assert_eq!(f.home.config_text(), config);
+    assert!(f.env.login_invocations().is_empty());
+}
+
+#[test]
+fn a_link_to_the_primary_folder_is_the_primary_instance_and_never_relinked() {
+    let f = fixture();
+    let alias = f.path(".claude-alias");
+    link_dir(&f.primary, &alias);
+
+    assert_eq!(f.core.kind_of(&alias), InstanceKind::Primary);
+    assert!(
+        f.core.scan().unwrap().iter().all(|c| c.config_dir != alias),
+        "an alias of the primary isn't proposed"
+    );
+    let registration = f.core.register(&alias).unwrap();
+    assert_eq!(registration.instance.kind, InstanceKind::Primary);
+    let report = f.core.repair(&alias, None).unwrap();
+
+    assert!(report.items.is_empty(), "{:?}", report.items);
+    assert_eq!(f.core.drift(&alias).unwrap().drift_count, 0);
+    // The primary's own items stay real: nothing was linked to itself.
+    assert!(!is_link(&f.primary.join("settings.json")));
+    assert!(!is_link(&f.primary.join("agents")));
+    assert!(!f.rc_file().contains(".claude-alias"), "{}", f.rc_file());
 }
 
 // ---------------------------------------------------------------------------------------------

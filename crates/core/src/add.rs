@@ -1,8 +1,10 @@
 //! Adding a linked instance, and logging an instance in.
 //!
 //! Adding composes the other operations, in order:
-//! 1. checks, before anything changes: the folder isn't the primary instance's, a file or in
-//!    the Claude desktop app's data folder; file links can be made (Developer Mode on
+//! 1. checks, before anything changes: the folder isn't the primary instance's (or a link to
+//!    it), a file, a protected folder ([`crate::folder_guard`]: one holding the home, the
+//!    primary or mccboard's files, one inside them, or a link) or in the Claude desktop app's
+//!    data folder; file links can be made (Developer Mode on
 //!    Windows) when the primary has files to link; no Claude Code session uses the folder;
 //! 2. creates the folder (`~/.claude-<label>` by default);
 //! 3. registers it, without an account until it is logged in: this creates its launcher;
@@ -29,7 +31,7 @@ use crate::links::{self, Entry};
 use crate::sharing::{self, Sharing};
 use crate::{
     Core, Error, InstanceStatus, LoginInvocation, LoginTerminal, OsKind, RepairReport,
-    SharingQuestion, desktop_app, doctor, paths, session_guard,
+    SharingQuestion, desktop_app, doctor, folder_guard, paths, session_guard,
 };
 
 /// What to add: a linked instance for the account the user calls `label`.
@@ -134,8 +136,10 @@ impl Core {
     /// gets the label, when no other account has it. A login with an account that already
     /// has an instance here is registered with a warning.
     ///
-    /// Refuses before changing anything for the primary instance's folder
-    /// ([`Error::PrimaryInstance`]), a file, a folder in the Claude desktop app's data, when
+    /// Refuses before changing anything for the primary instance's folder or a path leading
+    /// there through links ([`Error::PrimaryInstance`]), a file, a folder holding the home, the
+    /// primary instance or mccboard's files, one inside them, or a link
+    /// ([`Error::FolderNotAddable`]), a folder in the Claude desktop app's data, when
     /// file links are needed and Windows Developer Mode is off, and while a Claude Code
     /// process uses the folder. Idempotent and resumable: after a failure at any step,
     /// adding again completes what's missing; an instance set up but not logged in is
@@ -199,13 +203,18 @@ impl Core {
     }
 
     fn check_addable(&self, config_dir: &Path) -> Result<(), Error> {
-        if InstanceKind::of(&self.home, config_dir) == InstanceKind::Primary {
+        if self.kind_of(config_dir) == InstanceKind::Primary {
             return Err(Error::PrimaryInstance {
                 path: config_dir.to_path_buf(),
             });
         }
         if config_dir.exists() && !config_dir.is_dir() {
             return Err(Error::NotADirectory {
+                path: config_dir.to_path_buf(),
+            });
+        }
+        if folder_guard::is_protected(&self.home, self.paths().root(), config_dir) {
+            return Err(Error::FolderNotAddable {
                 path: config_dir.to_path_buf(),
             });
         }
