@@ -175,24 +175,29 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
             format!("{} is not a folder", login.config_dir.display()),
         ));
     }
+    // The terminal next: without one, nothing else matters.
+    let window = match login.terminal {
+        LoginTerminal::CurrentTerminal if !io::stdin().is_terminal() => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the login needs a terminal",
+            ));
+        }
+        LoginTerminal::CurrentTerminal => None,
+        LoginTerminal::NewWindow => Some(window(lookup)?),
+    };
     let claude = lookup
         .find("claude")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "claude is not on the PATH"))?;
-    let mut command = match login.terminal {
-        LoginTerminal::CurrentTerminal => {
-            if !io::stdin().is_terminal() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "the login needs a terminal",
-                ));
-            }
+    let mut command = match window {
+        None => {
             let mut command = Command::new(&claude);
             // Claude Code's output goes to mccboard's standard error, which is the terminal
             // too: mccboard's standard output carries only its own report (`--json`).
             command.args(LOGIN_ARGS).stdout(io::stderr());
             command
         }
-        LoginTerminal::NewWindow => new_window(&claude, lookup)?,
+        Some(window) => new_window(&claude, window),
     };
     match login.kind {
         InstanceKind::Linked => {
@@ -226,13 +231,33 @@ const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 /// The child keeps no standard handles of mccboard's: the app has none (it runs without a
 /// console), so the new console's own are used.
 #[cfg(windows)]
-fn new_window(claude: &Path, _lookup: &Lookup) -> io::Result<Command> {
+fn new_window(claude: &Path, _window: Console) -> Command {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let mut command = Command::new(claude);
     command.args(LOGIN_ARGS).creation_flags(CREATE_NEW_CONSOLE);
-    Ok(command)
+    command
+}
+
+/// What opens a new window on Windows: a console of its own, always available.
+#[cfg(windows)]
+struct Console;
+
+#[cfg(windows)]
+fn window(_lookup: &Lookup) -> io::Result<Console> {
+    Ok(Console)
+}
+
+/// What opens a new window on Linux: a terminal emulator, `Unsupported` when there is none.
+#[cfg(not(windows))]
+fn window(lookup: &Lookup) -> io::Result<PathBuf> {
+    lookup.terminal().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "no terminal emulator found ($TERMINAL, x-terminal-emulator, xterm)",
+        )
+    })
 }
 
 /// Claude Code in a terminal emulator's new window: `<terminal> -e <claude> auth login …`,
@@ -240,13 +265,7 @@ fn new_window(claude: &Path, _lookup: &Lookup) -> io::Result<Command> {
 /// returns at once (some `gnome-terminal` setups) ends the wait early: the instance then reads
 /// as not logged in until "Log in" is run again or the instance is registered again.
 #[cfg(not(windows))]
-fn new_window(claude: &Path, lookup: &Lookup) -> io::Result<Command> {
-    let terminal = lookup.terminal().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "no terminal emulator found ($TERMINAL, x-terminal-emulator, xterm)",
-        )
-    })?;
+fn new_window(claude: &Path, terminal: PathBuf) -> Command {
     let mut command = Command::new(terminal);
     command
         .arg("-e")
@@ -255,7 +274,7 @@ fn new_window(claude: &Path, lookup: &Lookup) -> io::Result<Command> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    Ok(command)
+    command
 }
 
 #[cfg(test)]
@@ -298,6 +317,8 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let bin = home.path().join("bin");
         fs::create_dir_all(&bin).unwrap();
+        #[cfg(unix)]
+        write_program(&bin.join("xterm"), "#!/bin/sh\nexit 0\n");
 
         let error = login_with(
             &invocation(home.path(), LoginTerminal::NewWindow),

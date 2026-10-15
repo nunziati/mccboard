@@ -1,5 +1,5 @@
 //! Smoke tests for `mccboard add` and `mccboard login`. No test opens a real login: either
-//! `--no-login`, an unregistered folder, or (on Linux) no terminal stops it first.
+//! `--no-login`, an unregistered folder, or no terminal stops it first.
 
 use std::fs;
 use std::path::Path;
@@ -93,9 +93,8 @@ fn login_refuses_an_unregistered_folder() {
     );
 }
 
-/// On Linux the login runs in the current terminal: without one, it says how to log in, and
-/// everything before the login is done.
-#[cfg(not(windows))]
+/// The CLI's login runs in its own terminal, on every OS: without one, it says how to log in,
+/// and everything before the login is done.
 #[test]
 fn without_a_terminal_add_sets_up_and_says_how_to_log_in() {
     let home = fixture_home();
