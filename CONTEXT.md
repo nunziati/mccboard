@@ -36,7 +36,7 @@ The command that starts Claude Code in a linked instance (`claude-b`). The prima
 _Avoid_: alias, shim, wrapper
 
 **Desktop profile**:
-A Claude desktop app installation with its own data directory and its own sign-in, bound to one account by the user.
+A Claude desktop app installation with its own data directory and its own sign-in, bound to one account by the user. It may also name the instance whose config directory its local Code sessions use.
 _Avoid_: desktop instance, app instance
 
 ### Sharing between instances
@@ -56,3 +56,29 @@ _Avoid_: local item, excluded item
 **Drift**:
 Any difference between how an instance is and how its sharing says it should be: a broken link, a misaligned key, a missing plugin, a new unshared skill.
 _Avoid_: inconsistency, mismatch
+
+### Usage
+
+**Usage window**:
+A rolling period over which Anthropic limits an account's usage, with a utilization (0–100) and a reset time.
+_Avoid_: limit, quota, rate limit
+
+**Session window**:
+The 5-hour usage window.
+_Avoid_: 5h limit, session limit
+
+**Weekly window**:
+The 7-day usage window covering all models.
+_Avoid_: 7d limit, weekly limit
+
+**Model window**:
+A 7-day usage window that applies to one model only.
+_Avoid_: per-model limit, scoped limit
+
+**Usage reading**:
+All of an account's usage windows at one moment, with its source (endpoint or session) and the time it was read.
+_Avoid_: snapshot, usage data, stats
+
+**Stale**:
+Said of a usage reading too old to trust as current; it is still shown, marked as such.
+_Avoid_: expired, outdated
