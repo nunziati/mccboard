@@ -183,3 +183,45 @@ fn no_token_in_registration_output_or_config() {
         assert!(!text.contains("FIXTURE"), "{text}");
     }
 }
+
+#[test]
+fn launcher_status_and_sync() {
+    let home = fixture_home();
+    let b = home.path().join(".claude-b");
+    let out = mccboard(home.path(), &["register", "~/.claude", b.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Launcher: claude-b."));
+
+    let status = |expected_state: &str| -> serde_json::Value {
+        let out = mccboard(home.path(), &["launcher", "status", "--json"]);
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["instances"][0]["name"], "claude-b");
+        assert_eq!(json["instances"][0]["state"], expected_state, "{json}");
+        if expected_state != "ok" {
+            assert_eq!(out.status.code(), Some(2));
+        }
+        json
+    };
+    let json = status("ok");
+
+    // Take the launcher away by hand: the status reports it, and a sync puts it back.
+    let place = std::path::PathBuf::from(json["place"]["path"].as_str().unwrap());
+    match json["place"]["kind"].as_str().unwrap() {
+        "rc_file" => fs::write(&place, "").unwrap(),
+        _ => fs::remove_dir_all(&place).unwrap(),
+    }
+    status("missing");
+
+    let out = mccboard(home.path(), &["launcher", "sync"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Created claude-b"));
+    status("ok");
+}

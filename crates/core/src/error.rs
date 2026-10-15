@@ -59,6 +59,27 @@ pub enum Error {
          and not \"claude\""
     )]
     InvalidLauncher { name: String },
+
+    #[error("cannot read the launchers in {}: {source}", path.display())]
+    LauncherUnreadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("cannot write the launchers in {}: {source}", path.display())]
+    LauncherUnwritable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "{} has a mccboard launchers block without its end marker; fix or remove it by hand, \
+         mccboard won't rewrite it",
+        path.display()
+    )]
+    LauncherBlockCorrupt { path: PathBuf },
 }
 
 impl Error {
@@ -77,6 +98,9 @@ impl Error {
             Error::LabelTaken { .. } => "label_taken",
             Error::InvalidColor { .. } => "invalid_color",
             Error::InvalidLauncher { .. } => "invalid_launcher",
+            Error::LauncherUnreadable { .. } => "launcher_unreadable",
+            Error::LauncherUnwritable { .. } => "launcher_unwritable",
+            Error::LauncherBlockCorrupt { .. } => "launcher_block_corrupt",
         }
     }
 
@@ -89,7 +113,10 @@ impl Error {
             | Error::ConfigUnwritable { path, .. }
             | Error::RelativePath { path }
             | Error::NotADirectory { path }
-            | Error::NotRegistered { path } => Some(path),
+            | Error::NotRegistered { path }
+            | Error::LauncherUnreadable { path, .. }
+            | Error::LauncherUnwritable { path, .. }
+            | Error::LauncherBlockCorrupt { path } => Some(path),
             _ => None,
         }
     }
