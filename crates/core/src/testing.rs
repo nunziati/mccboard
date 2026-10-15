@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use jiff::{SignedDuration, Timestamp};
 
-use crate::{AccessToken, EndpointReply, Environment, OsKind};
+use crate::{AccessToken, ClaudeProcess, EndpointReply, Environment, OsKind};
 
 /// A scriptable [`Environment`] for tests. Clones share state, so a test can keep a handle
 /// after giving one to [`crate::Core::new`] and keep steering it.
@@ -30,10 +30,13 @@ struct State {
     user_path: Vec<PathBuf>,
     user_path_additions: usize,
     user_path_fails: bool,
+    processes: Vec<ClaudeProcess>,
+    developer_mode: bool,
 }
 
 impl FakeEnvironment {
-    /// A fake whose clock reads `now` until moved.
+    /// A fake whose clock reads `now` until moved, with no Claude Code process running and
+    /// Developer Mode on.
     pub fn new(now: Timestamp) -> Self {
         Self {
             state: Arc::new(Mutex::new(State {
@@ -45,6 +48,8 @@ impl FakeEnvironment {
                 user_path: Vec::new(),
                 user_path_additions: 0,
                 user_path_fails: false,
+                processes: Vec::new(),
+                developer_mode: true,
             })),
         }
     }
@@ -107,6 +112,21 @@ impl FakeEnvironment {
         self.state().user_path_fails = fails;
     }
 
+    /// Replaces the running Claude Code processes.
+    pub fn set_processes(&self, processes: Vec<ClaudeProcess>) {
+        self.state().processes = processes;
+    }
+
+    /// Starts one more Claude Code process.
+    pub fn add_process(&self, process: ClaudeProcess) {
+        self.state().processes.push(process);
+    }
+
+    /// Turns Windows Developer Mode on or off: off, file links can't be created.
+    pub fn set_developer_mode(&self, on: bool) {
+        self.state().developer_mode = on;
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
@@ -163,5 +183,13 @@ impl Environment for FakeEnvironment {
         state.user_path.push(dir.to_path_buf());
         state.user_path_additions += 1;
         Ok(())
+    }
+
+    fn claude_processes(&self) -> Vec<ClaudeProcess> {
+        self.state().processes.clone()
+    }
+
+    fn file_links_allowed(&self) -> bool {
+        self.state().developer_mode
     }
 }

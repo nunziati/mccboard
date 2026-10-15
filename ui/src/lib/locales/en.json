@@ -126,5 +126,21 @@
   "notice.path_not_added": "Couldn't add {path} to your user PATH: add it by hand.",
   "error.launcher_unreadable": "mccboard can't read the file or folder that holds the launchers.",
   "error.launcher_unwritable": "mccboard can't write the launchers. Any other change was saved.",
-  "error.launcher_block_corrupt": "mccboard's block in your shell's rc file has lost its end marker. Fix or remove it by hand: mccboard won't rewrite it."
+  "error.launcher_block_corrupt": "mccboard's block in your shell's rc file has lost its end marker. Fix or remove it by hand: mccboard won't rewrite it.",
+  "action.repair": "Repair",
+  "action.repair_hint": "Fix this instance's drift. Copies replaced by links are first backed up in ~/.mccboard/state/backups/.",
+  "action.repair_item": "Repair this",
+  "repair.nothing": "Nothing to repair in {path}.",
+  "repair.done_one": "Repaired 1 item in {path}.",
+  "repair.done": "Repaired {count} items in {path}.",
+  "repair.left": "Drift items left: {count}.",
+  "repair.item_done": "done",
+  "repair.item_backup": "done; the copy that was there is in {backup}",
+  "repair.item_failed": "not repaired: {reason}",
+  "error.instance_in_use": "Claude Code is running in this instance, so mccboard won't change it. Close these sessions, then try again. Nothing was changed.",
+  "error.process": "{name}, process {pid}",
+  "error.process_in": "{name}, process {pid}, in {cwd}",
+  "error.developer_mode_off": "Linking files on Windows needs Developer Mode, which is off. Turn it on in Settings › System › For developers, then repair again. Nothing was changed.",
+  "error.desktop_app_folder": "This folder is inside the Claude desktop app's data folder, where mccboard never creates links. Nothing was changed.",
+  "error.drift_item_not_found": "That drift item isn't there any more: it may be repaired already."
 }

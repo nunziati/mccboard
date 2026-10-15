@@ -80,3 +80,48 @@ pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
         _ => false,
     }
 }
+
+/// Creates a link at `at` to `target` (absolute, the real item): a symlink on Linux; on
+/// Windows a junction for a folder, which needs no privilege, and a file symlink for a file,
+/// which needs Developer Mode (ADR 0006; check [`crate::Environment::file_links_allowed`]
+/// first).
+pub(crate) fn create_link(target: &Path, at: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, at)
+    }
+    #[cfg(windows)]
+    {
+        if target.is_dir() {
+            junction::create(target, at)
+        } else {
+            std::os::windows::fs::symlink_file(target, at)
+        }
+    }
+}
+
+/// Whether a link to `target` would be a file link (needing Developer Mode on Windows).
+pub(crate) fn is_file_link(target: &Path) -> bool {
+    !target.is_dir()
+}
+
+/// Removes the link at `path`, never what it points to. Refuses if `path` is not a link.
+pub(crate) fn remove_link(path: &Path) -> std::io::Result<()> {
+    let file_type = fs::symlink_metadata(path)?.file_type();
+    if !file_type.is_symlink() {
+        return Err(std::io::Error::other(format!(
+            "{} is not a link",
+            path.display()
+        )));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        // Directory symlinks and junctions are removed as (empty) folders, which leaves
+        // their target alone.
+        if file_type.is_symlink_dir() {
+            return fs::remove_dir(path);
+        }
+    }
+    fs::remove_file(path)
+}

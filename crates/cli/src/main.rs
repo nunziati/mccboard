@@ -1,6 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod doctor;
+mod repair;
 mod usage;
 
 use std::path::{Path, PathBuf};
@@ -79,6 +80,9 @@ enum Command {
     /// Answer whether an unknown item of the primary instance is linked in every linked
     /// instance or kept private. Remembered in config.toml.
     Share(doctor::ShareArgs),
+    /// Repair instances' drift, all of it or one item. Refuses while Claude Code runs in an
+    /// instance. Real files a link replaces are backed up under ~/.mccboard/state/backups/.
+    Repair(repair::RepairArgs),
     /// Launchers: the `claude-b` commands that start Claude Code in linked instances.
     Launcher {
         #[command(subcommand)]
@@ -151,6 +155,7 @@ fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Doctor(args) => doctor::doctor(&core, args)?,
         Command::Share(args) => doctor::share(&core, args)?,
+        Command::Repair(args) => repair::repair(&core, args)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {

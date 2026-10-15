@@ -6,6 +6,7 @@
   import LauncherCell from './lib/LauncherCell.svelte'
   import Launchers from './lib/Launchers.svelte'
   import Login from './lib/Login.svelte'
+  import RepairResult from './lib/RepairResult.svelte'
   import SharingQuestions from './lib/SharingQuestions.svelte'
   import {
     answerSharing,
@@ -17,6 +18,8 @@
     onConfigChanged,
     register,
     registry as loadRegistry,
+    repair,
+    type RepairReport,
     scan,
     syncLaunchers,
     unregister,
@@ -52,6 +55,16 @@
   let doctor = $state<Doctor | null>(null)
   /** Instances whose explained drift list is open, by config directory. */
   let openDrift = $state<Record<string, boolean>>({})
+  /** What the last repair did, until dismissed. */
+  let repairReport = $state<RepairReport | null>(null)
+
+  function repairInstance(path: string, item?: string) {
+    repairReport = null
+    return act(async () => {
+      repairReport = await repair(path, item)
+      return null
+    })
+  }
 
   function driftOf(instance: InstanceStatus) {
     return doctor?.instances.find((d) => d.config_dir === instance.config_dir)
@@ -203,6 +216,17 @@
     <p>{errorMessage(error.code)}</p>
     {#if error.detail}<p class="small"><code>{error.detail}</code></p>{/if}
     {#if error.path}<p class="small"><code>{error.path}</code></p>{/if}
+    {#if error.processes?.length}
+      <ul class="small">
+        {#each error.processes as process (process.pid)}
+          <li>
+            {process.cwd
+              ? t('error.process_in', { name: process.name, pid: process.pid, cwd: process.cwd })
+              : t('error.process', { name: process.name, pid: process.pid })}
+          </li>
+        {/each}
+      </ul>
+    {/if}
     {#if dismiss}<button onclick={dismiss}>{t('action.dismiss')}</button>{/if}
   </div>
 {/snippet}
@@ -237,6 +261,9 @@
     {/if}
     {#if notice}
       <p class="notice" role="status">{notice}</p>
+    {/if}
+    {#if repairReport}
+      <RepairResult report={repairReport} ondismiss={() => (repairReport = null)} />
     {/if}
 
     <SharingQuestions questions={doctor?.questions ?? []} {busy} onanswer={answer} />
@@ -302,6 +329,15 @@
                     </td>
                     <td><LauncherCell kind={instance.kind} launcher={launcherOf(instance)} /></td>
                     <td class="row-actions">
+                      {#if instance.kind === 'linked' && drift && drift.drift_count > 0}
+                        <button
+                          disabled={busy}
+                          title={t('action.repair_hint')}
+                          onclick={() => repairInstance(instance.config_dir)}
+                        >
+                          {t('action.repair')}
+                        </button>
+                      {/if}
                       {#if instance.account_status.status === 'changed'}
                         <button disabled={busy} onclick={() => registerPath(instance.config_dir)}>
                           {t('action.accept_account')}
@@ -322,7 +358,15 @@
                   </tr>
                   {#if drift && openDrift[instance.config_dir] && drift.items.length > 0}
                     <tr>
-                      <td colspan="6"><DriftList items={drift.items} /></td>
+                      <td colspan="6">
+                        <DriftList
+                          items={drift.items}
+                          {busy}
+                          onrepair={instance.kind === 'linked'
+                            ? (id) => repairInstance(instance.config_dir, id)
+                            : undefined}
+                        />
+                      </td>
                     </tr>
                   {/if}
                 {/each}

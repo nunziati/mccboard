@@ -32,6 +32,12 @@ impl Paths {
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
     }
+
+    /// `~/.mccboard/state/backups/`: real files and folders a repair replaced with links,
+    /// as `<UTC time>/<instance>/<item>`.
+    pub fn backups_dir(&self) -> PathBuf {
+        self.state_dir().join("backups")
+    }
 }
 
 /// Turns a path the user typed into the form mccboard stores: `~` expanded to the home,

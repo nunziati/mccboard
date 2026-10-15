@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use common::{TempHome, UUID_A, UUID_B, UUID_C};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
-    AccountUpdate, AccountUuid, Core, DriftItem, Launcher, LauncherPlace, LauncherState, OsKind,
-    Problem, Repair, UserPathChange,
+    AccountUpdate, AccountUuid, ClaudeProcess, Core, DriftItem, Error, Launcher, LauncherPlace,
+    LauncherState, OsKind, Problem, ProcessConfigDir, Repair, RepairOutcome, UserPathChange,
 };
 
 const BEGIN: &str = "# >>> mccboard launchers >>>";
@@ -423,6 +423,69 @@ fn launchers_that_cant_be_read_leave_the_doctor_working() {
             .flat_map(|i| &i.items)
             .all(|item| !item.id.starts_with("launcher:"))
     );
+}
+
+#[test]
+fn repair_fixes_a_launcher_item_by_syncing_the_launchers() {
+    let (home, core, env) = home_with_b(OsKind::Linux);
+    let b = home.path().join(".claude-b");
+    fs::write(bashrc(&home), "# cleaned up by hand\n").unwrap();
+    assert_eq!(launcher_drift(&home, &core).len(), 1);
+    // Launchers live outside the instance's folder: a running session is no obstacle.
+    env.add_process(ClaudeProcess {
+        pid: 7,
+        name: "claude".into(),
+        config_dir: ProcessConfigDir::Dir { path: b.clone() },
+        cwd: None,
+    });
+
+    let report = core.repair(&b, Some("launcher:claude-b")).unwrap();
+
+    assert_eq!(report.items.len(), 1);
+    let item = &report.items[0];
+    assert_eq!(item.id, "launcher:claude-b");
+    assert_eq!(item.repair, Repair::SyncLaunchers);
+    assert_eq!(item.outcome, RepairOutcome::Done { backup: None });
+    assert_eq!(
+        block_aliases(&read(&bashrc(&home))),
+        vec![alias("claude-b", &b)]
+    );
+    assert!(launcher_drift(&home, &core).is_empty());
+    assert!(
+        report
+            .drift
+            .items
+            .iter()
+            .all(|i| !i.id.starts_with("launcher:"))
+    );
+    // Repaired already: the item is gone.
+    assert!(matches!(
+        core.repair(&b, Some("launcher:claude-b")),
+        Err(Error::DriftItemNotFound { .. })
+    ));
+}
+
+#[test]
+fn repairing_every_item_of_an_instance_fixes_its_stale_launcher_too() {
+    let (home, core, _env) = home_with_b(OsKind::Linux);
+    let b = home.path().join(".claude-b");
+    let text = read(&bashrc(&home)).replace(".claude-b claude", ".claude-x claude");
+    fs::write(bashrc(&home), text).unwrap();
+
+    let report = core.repair(&b, None).unwrap();
+
+    let launcher = report
+        .items
+        .iter()
+        .find(|i| i.id == "launcher:claude-b")
+        .expect("the launcher item among the repaired ones");
+    assert_eq!(launcher.outcome, RepairOutcome::Done { backup: None });
+    assert_eq!(
+        block_aliases(&read(&bashrc(&home))),
+        vec![alias("claude-b", &b)]
+    );
+    assert!(launcher_drift(&home, &core).is_empty());
+    assert_eq!(core.repair(&b, None).unwrap().items, vec![]);
 }
 
 #[test]

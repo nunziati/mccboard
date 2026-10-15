@@ -113,6 +113,8 @@ export interface CoreError {
   code: string
   path?: string | null
   detail?: string | null
+  /** For `instance_in_use`: the Claude Code processes using the instance. */
+  processes?: ClaudeProcess[] | null
 }
 
 export function isCoreError(value: unknown): value is CoreError {
@@ -217,4 +219,37 @@ export function doctor(): Promise<Doctor> {
 
 export function answerSharing(item: string, answer: SharingAnswer): Promise<void> {
   return invoke<void>('answer_sharing', { item, answer })
+}
+
+// Repair: fixing an instance's drift, behind the session guard.
+
+/** A running Claude Code process, as the session guard sees it. */
+export interface ClaudeProcess {
+  pid: number
+  name: string
+  config_dir: { kind: 'default' } | { kind: 'dir'; path: string } | { kind: 'unknown' }
+  cwd: string | null
+}
+
+export type RepairOutcome =
+  | { outcome: 'done'; backup: string | null }
+  | { outcome: 'failed'; reason: string }
+
+export interface RepairedItem {
+  id: string
+  item: string
+  repair: Repair
+  outcome: RepairOutcome
+}
+
+export interface RepairReport {
+  config_dir: string
+  items: RepairedItem[]
+  /** The instance's drift after the repair. */
+  drift: InstanceDrift
+}
+
+/** Repairs the instance in `path`: every drift item, or only the one with id `item`. */
+export function repair(path: string, item?: string): Promise<RepairReport> {
+  return invoke<RepairReport>('repair', { path, item: item ?? null })
 }

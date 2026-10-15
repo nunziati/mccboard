@@ -5,12 +5,12 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::AccessToken;
+use crate::session_guard::ClaudeProcess;
 
 /// The port through which the core reaches everything outside the filesystem.
 ///
 /// One real implementation per OS ([`SystemEnvironment`]) and one fake for tests
-/// (`testing::FakeEnvironment`). Later features add to it: running `claude` commands, listing
-/// processes, checking Windows Developer Mode.
+/// (`testing::FakeEnvironment`). Later features add to it: running `claude` commands.
 pub trait Environment: Send + Sync {
     /// The current time.
     fn now(&self) -> Timestamp;
@@ -34,6 +34,14 @@ pub trait Environment: Send + Sync {
     /// Appends `dir` to the user PATH that new terminals get, and tells running programs that
     /// it changed. Terminals already open keep their PATH.
     fn add_to_user_path(&self, dir: &Path) -> io::Result<()>;
+
+    /// Every running Claude Code process on this machine, each with the config directory it
+    /// uses. The core matches them to instances (the session guard).
+    fn claude_processes(&self) -> Vec<ClaudeProcess>;
+
+    /// Whether file links (symlinks to files) can be created without elevation: on Windows,
+    /// whether Developer Mode is on (ADR 0006); elsewhere always.
+    fn file_links_allowed(&self) -> bool;
 }
 
 /// What the usage endpoint answered. The core reads it; the port only carries it.
@@ -119,5 +127,13 @@ impl Environment for SystemEnvironment {
             io::ErrorKind::Unsupported,
             "the user PATH is managed on Windows only",
         ))
+    }
+
+    fn claude_processes(&self) -> Vec<ClaudeProcess> {
+        crate::system::claude_processes()
+    }
+
+    fn file_links_allowed(&self) -> bool {
+        crate::system::file_links_allowed()
     }
 }

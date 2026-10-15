@@ -5,7 +5,20 @@
   import en from './locales/en.json'
   import { t, type Key } from './i18n.svelte'
 
-  let { items }: { items: DriftItem[] } = $props()
+  let {
+    items,
+    busy = false,
+    onrepair,
+  }: {
+    items: DriftItem[]
+    busy?: boolean
+    /** Repairs one item by id; without it, no repair buttons are shown. */
+    onrepair?: (id: string) => void
+  } = $props()
+
+  function repairable(item: DriftItem): boolean {
+    return !item.informational && item.repair.action !== 'nothing'
+  }
 
   function translated(key: string, vars: Record<string, string>, fallback: string): string {
     return key in en ? t(key as Key, vars) : fallback
@@ -54,7 +67,14 @@
         {problemText(item)}
       </div>
       <div class="muted small">{t('drift.repair', { repair: repairText(item) })}</div>
-      <div class="muted small"><code>{item.id}</code></div>
+      <div class="muted small">
+        <code>{item.id}</code>
+        {#if onrepair && repairable(item)}
+          <button class="small" disabled={busy} onclick={() => onrepair(item.id)}>
+            {t('action.repair_item')}
+          </button>
+        {/if}
+      </div>
     </li>
   {/each}
 </ul>

@@ -1,0 +1,141 @@
+//! Smoke tests for `mccboard repair`: exit codes, `--item`, `--json`, the session guard.
+
+use std::fs;
+use std::path::Path;
+use std::process::{Command, Output, Stdio};
+
+fn mccboard(home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mccboard"))
+        .arg("--home")
+        .arg(home)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// A primary with settings.json and agents/, and a registered linked instance `b` with a
+/// copy of settings.json of its own.
+fn fixture_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let primary = home.path().join(".claude");
+    fs::create_dir_all(primary.join("agents")).unwrap();
+    fs::write(primary.join("settings.json"), "{}").unwrap();
+    let b = home.path().join(".claude-b");
+    fs::create_dir_all(&b).unwrap();
+    fs::write(b.join("settings.json"), r#"{"old": true}"#).unwrap();
+    let out = mccboard(home.path(), &["register", "~/.claude", "~/.claude-b"]);
+    assert!(out.status.success(), "{}", text(&out));
+    home
+}
+
+#[test]
+fn repair_fixes_every_registered_instance_and_doctor_then_finds_no_drift() {
+    let home = fixture_home();
+    let b = home.path().join(".claude-b");
+
+    let out = mccboard(home.path(), &["repair"]);
+
+    assert!(out.status.success(), "{}", text(&out));
+    let printed = text(&out);
+    assert!(printed.contains("link:settings.json"), "{printed}");
+    assert!(printed.contains("backups"), "{printed}");
+    assert!(
+        fs::symlink_metadata(b.join("agents"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let doctor = mccboard(home.path(), &["doctor", "--no-ask"]);
+    assert_eq!(doctor.status.code(), Some(0), "{}", text(&doctor));
+
+    let again = mccboard(home.path(), &["repair"]);
+    assert!(again.status.success());
+    assert!(
+        text(&again).contains("Nothing to repair"),
+        "{}",
+        text(&again)
+    );
+}
+
+#[test]
+fn one_item_by_id_with_json_output() {
+    let home = fixture_home();
+
+    let out = mccboard(
+        home.path(),
+        &["repair", "~/.claude-b", "--item", "link:agents", "--json"],
+    );
+
+    assert!(out.status.success(), "{}", text(&out));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let items = json[0]["report"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], "link:agents");
+    assert_eq!(items[0]["outcome"]["outcome"], "done");
+    // settings.json is still b's own copy.
+    let settings = fs::symlink_metadata(home.path().join(".claude-b/settings.json")).unwrap();
+    assert!(!settings.file_type().is_symlink());
+}
+
+#[test]
+fn an_unknown_item_or_a_missing_path_fails_with_1() {
+    let home = fixture_home();
+
+    let unknown = mccboard(
+        home.path(),
+        &["repair", "~/.claude-b", "--item", "link:nope"],
+    );
+    assert_eq!(unknown.status.code(), Some(1), "{}", text(&unknown));
+    assert!(text(&unknown).contains("link:nope"));
+
+    let no_path = mccboard(home.path(), &["repair", "--item", "link:agents"]);
+    assert_eq!(no_path.status.code(), Some(1), "{}", text(&no_path));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn repair_refuses_while_claude_code_runs_in_the_instance() {
+    let home = fixture_home();
+    let b = home.path().join(".claude-b");
+    let bin = home.path().join("bin").join("claude");
+    fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    fs::copy("/bin/sleep", &bin).unwrap();
+    let mut claude = Command::new(&bin)
+        .arg("30")
+        .env("CLAUDE_CONFIG_DIR", &b)
+        .spawn()
+        .unwrap();
+    for _ in 0..50 {
+        if fs::read_link(format!("/proc/{}/exe", claude.id())).is_ok_and(|e| e == bin) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    let out = mccboard(home.path(), &["repair", "~/.claude-b"]);
+    let _ = claude.kill();
+    let _ = claude.wait();
+
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        text(&out).contains(&claude.id().to_string()),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        !fs::symlink_metadata(b.join("settings.json"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!b.join("agents").exists());
+}

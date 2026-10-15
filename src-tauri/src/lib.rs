@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mccboard_core::{
-    Account, AccountUpdate, AccountUuid, Candidate, Color, Core, Doctor, LauncherStatus,
-    LauncherSync, Registration, Registry, SharingAnswer, SystemEnvironment,
+    Account, AccountUpdate, AccountUuid, Candidate, ClaudeProcess, Color, Core, Doctor,
+    LauncherStatus, LauncherSync, Registration, Registry, RepairReport, SharingAnswer,
+    SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -25,6 +26,8 @@ struct CommandError {
     code: &'static str,
     path: Option<PathBuf>,
     detail: Option<String>,
+    /// For `instance_in_use`: the Claude Code processes using the instance.
+    processes: Option<Vec<ClaudeProcess>>,
 }
 
 impl CommandError {
@@ -34,6 +37,7 @@ impl CommandError {
             code: "unknown",
             path: None,
             detail: None,
+            processes: None,
         }
     }
 }
@@ -44,6 +48,7 @@ impl From<mccboard_core::Error> for CommandError {
             code: error.code(),
             path: error.path().map(PathBuf::from),
             detail: error.detail().map(str::to_owned),
+            processes: error.processes().map(<[ClaudeProcess]>::to_vec),
         }
     }
 }
@@ -109,6 +114,16 @@ fn sync_launchers(core: tauri::State<'_, Core>) -> Result<LauncherSync, CommandE
     Ok(core.sync_launchers()?)
 }
 
+/// Repairs an instance's drift: every item, or only `item` (a drift item id).
+#[tauri::command]
+fn repair(
+    core: tauri::State<'_, Core>,
+    path: PathBuf,
+    item: Option<String>,
+) -> Result<RepairReport, CommandError> {
+    Ok(core.repair(&path, item.as_deref())?)
+}
+
 /// Watches `~/.mccboard/` (the folder, since editors and the core save by renaming) and tells
 /// the windows when `config.toml` changes.
 fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error::Error>> {
@@ -154,7 +169,8 @@ pub fn run() {
             usage::usage,
             usage::refresh_usage,
             launchers,
-            sync_launchers
+            sync_launchers,
+            repair
         ])
         .setup(move |app| {
             // Without the watcher the window still works; it just won't see outside edits
