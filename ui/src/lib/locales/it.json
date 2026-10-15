@@ -142,5 +142,6 @@
   "error.process_in": "{name}, processo {pid}, in {cwd}",
   "error.developer_mode_off": "Su Windows i link ai file richiedono la Modalità sviluppatore, che è disattivata. Attivala in Impostazioni › Sistema › Per sviluppatori, poi ripara di nuovo. Non è stato cambiato nulla.",
   "error.desktop_app_folder": "Questa cartella è dentro la cartella dati dell'app desktop di Claude, dove mccboard non crea mai link. Non è stato cambiato nulla.",
-  "error.drift_item_not_found": "Quell'elemento di drift non c'è più: forse è già stato riparato."
+  "error.drift_item_not_found": "Quell'elemento di drift non c'è più: forse è già stato riparato.",
+  "error.invalid_language": "Lingua non disponibile: scegli italiano o inglese."
 }

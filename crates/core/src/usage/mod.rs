@@ -372,7 +372,7 @@ fn view(
 }
 
 /// The reading with every window whose reset time has passed read as zero.
-fn as_of(mut reading: UsageReading, now: Timestamp) -> UsageReading {
+pub(crate) fn as_of(mut reading: UsageReading, now: Timestamp) -> UsageReading {
     let reset = |utilization: &mut f64, resets_at: &mut Option<Timestamp>| {
         if resets_at.is_some_and(|at| at <= now) {
             *utilization = 0.0;

@@ -21,6 +21,9 @@
 //!
 //! [sharing.items]               # answers about unknown items of the primary instance
 //! gsd-core = "link"             # "link" from the primary, or keep "private" to each instance
+//!
+//! [preferences]
+//! language = "it"               # the app's language, "en" or "it"; absent: the system's
 //! ```
 
 use std::collections::BTreeMap;
@@ -33,7 +36,7 @@ use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::account::{self, Account, AccountUuid, Color};
 use crate::sharing::{self, SharingAnswer};
-use crate::{Error, paths};
+use crate::{Error, Language, paths};
 
 /// An instance as registered.
 #[derive(Debug, Clone)]
@@ -49,6 +52,8 @@ pub(crate) struct Config {
     pub instances: Vec<InstanceEntry>,
     /// Answers about unknown items, by item name.
     pub sharing: BTreeMap<String, SharingAnswer>,
+    /// The app's language, when the user chose one.
+    pub language: Option<Language>,
 }
 
 impl Config {
@@ -251,6 +256,18 @@ impl ConfigFile {
         self.config.sharing.insert(item.to_owned(), answer);
     }
 
+    /// Sets the app's language in `[preferences]`, keeping the comment after an existing one.
+    pub fn set_language(&mut self, language: Language) {
+        let preferences = self
+            .doc
+            .entry("preferences")
+            .or_insert_with(|| Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut()
+            .expect("validated: preferences is a table");
+        set_str(preferences, "language", Some(language.code()));
+        self.config.language = Some(language);
+    }
+
     /// Forgets an instance; `false` if it wasn't registered.
     pub fn remove_instance(&mut self, config_dir: &Path) -> bool {
         let before = self.config.instances.len();
@@ -318,6 +335,13 @@ struct RawConfig {
     instances: Vec<RawInstance>,
     #[serde(default)]
     sharing: RawSharing,
+    #[serde(default)]
+    preferences: RawPreferences,
+}
+
+#[derive(Deserialize, Default)]
+struct RawPreferences {
+    language: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -391,10 +415,18 @@ impl RawConfig {
             sharing.insert(item, answer);
         }
 
+        let language = self
+            .preferences
+            .language
+            .map(|code| code.parse::<Language>())
+            .transpose()
+            .map_err(|e| format!("preferences.language: {e}"))?;
+
         Ok(Config {
             accounts,
             instances,
             sharing,
+            language,
         })
     }
 }

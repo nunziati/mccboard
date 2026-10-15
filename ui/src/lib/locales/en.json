@@ -142,5 +142,6 @@
   "error.process_in": "{name}, process {pid}, in {cwd}",
   "error.developer_mode_off": "Linking files on Windows needs Developer Mode, which is off. Turn it on in Settings › System › For developers, then repair again. Nothing was changed.",
   "error.desktop_app_folder": "This folder is inside the Claude desktop app's data folder, where mccboard never creates links. Nothing was changed.",
-  "error.drift_item_not_found": "That drift item isn't there any more: it may be repaired already."
+  "error.drift_item_not_found": "That drift item isn't there any more: it may be repaired already.",
+  "error.invalid_language": "That isn’t a language mccboard speaks: use English or Italian."
 }

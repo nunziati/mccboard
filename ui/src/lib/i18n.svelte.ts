@@ -1,6 +1,7 @@
 // The i18n layer: every UI string goes through `t`. English is the source of truth for keys;
 // a key missing from another language fails type-checking.
 
+import { invoke } from '@tauri-apps/api/core'
 import en from './locales/en.json'
 import it from './locales/it.json'
 
@@ -29,6 +30,27 @@ export const i18n = {
     current = lang
     document.documentElement.lang = lang
   },
+}
+
+function isLang(value: unknown): value is Lang {
+  return (LANGUAGES as readonly unknown[]).includes(value)
+}
+
+/** Takes the app's language from the core: the one saved in config.toml, else the system's.
+ * Until it answers, the browser's language is used. */
+export async function loadLanguage(): Promise<void> {
+  try {
+    const lang = await invoke<string>('language')
+    if (isLang(lang)) i18n.lang = lang
+  } catch {
+    // Keep the current language; the tray shows the same one from config.toml.
+  }
+}
+
+/** Switches to `lang` and saves it in config.toml, so the tray and later starts use it too. */
+export async function chooseLanguage(lang: Lang): Promise<void> {
+  i18n.lang = lang
+  await invoke<void>('set_language', { language: lang })
 }
 
 /** The string for `key` in the current language, with `{name}` placeholders filled from `vars`. */

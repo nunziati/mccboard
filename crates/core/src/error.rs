@@ -117,6 +117,9 @@ pub enum Error {
         path.display()
     )]
     DriftItemNotFound { path: PathBuf, id: String },
+
+    #[error("{language:?} is not a language mccboard speaks: use \"en\" or \"it\"")]
+    InvalidLanguage { language: String },
 }
 
 fn describe_processes(processes: &[ClaudeProcess]) -> String {
@@ -154,6 +157,7 @@ impl Error {
             Error::DeveloperModeOff => "developer_mode_off",
             Error::DesktopAppFolder { .. } => "desktop_app_folder",
             Error::DriftItemNotFound { .. } => "drift_item_not_found",
+            Error::InvalidLanguage { .. } => "invalid_language",
         }
     }
 

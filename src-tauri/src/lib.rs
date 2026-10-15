@@ -1,5 +1,7 @@
 //! The Tauri binding: exposes core operations as commands. No logic lives here (ADR 0004).
 
+mod settings;
+mod tray;
 mod usage;
 
 use std::path::PathBuf;
@@ -17,6 +19,9 @@ use tauri::{Emitter, Manager};
 /// Emitted to the windows whenever `config.toml` changes on disk, whoever changed it (the CLI,
 /// a text editor, this app).
 const CONFIG_CHANGED: &str = "config-changed";
+
+/// The label of the Instances window in `tauri.conf.json`.
+const INSTANCES_WINDOW: &str = "instances";
 
 /// A core error as the UI sees it: a stable code it translates, plus the path it is about and,
 /// for a corrupt `config.toml`, where it is wrong. Nothing from Claude Code's files can reach
@@ -140,6 +145,7 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
             });
             if changed {
                 let _ = handle.emit(CONFIG_CHANGED, ());
+                tray::redraw(&handle);
             }
         },
     )?;
@@ -170,9 +176,12 @@ pub fn run() {
             usage::refresh_usage,
             launchers,
             sync_launchers,
-            repair
+            repair,
+            settings::language,
+            settings::set_language
         ])
         .setup(move |app| {
+            tray::setup(app, &core)?;
             // Without the watcher the window still works; it just won't see outside edits
             // until it reloads.
             if let Err(error) = watch_config(app, &core) {
@@ -180,6 +189,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running the mccboard app");
+        .build(tauri::generate_context!())
+        .expect("error while building the mccboard app")
+        .run(|_app, event| {
+            // Closing the last window leaves mccboard in the tray; Quit in its menu exits.
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }
