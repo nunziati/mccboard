@@ -48,11 +48,27 @@ pub(crate) fn render(icon: &TrayIcon) -> Vec<u8> {
     };
     let glyphs: Vec<&[u8; GLYPH_H]> = text.chars().filter_map(glyph).collect();
     let (scale, gap) = if glyphs.len() <= 2 { (4, 4) } else { (3, 2) };
-    let width = glyphs.len() * GLYPH_W * scale + glyphs.len().saturating_sub(1) * gap;
-    let x0 = (size - width.min(size)) / 2;
-    let y0 = (size - GLYPH_H * scale) / 2;
+    let step = GLYPH_W * scale + gap;
+    // Centred on the cells actually drawn, so a glyph that leaves some of its cells empty
+    // (the dots) isn't off-centre. Digits fill their first and last column and row anyway.
+    let (Some(first), Some(last)) = (glyphs.first(), glyphs.last()) else {
+        return rgba;
+    };
+    let columns = |rows: &[u8; GLYPH_H]| rows.iter().fold(0u8, |all, row| all | row);
+    let left = (columns(first).leading_zeros() as usize - (8 - GLYPH_W)) * scale;
+    let right =
+        (glyphs.len() - 1) * step + (GLYPH_W - columns(last).trailing_zeros() as usize) * scale;
+    let lit_rows: Vec<usize> = (0..GLYPH_H)
+        .filter(|&row| glyphs.iter().any(|rows| rows[row] != 0))
+        .collect();
+    let (top, bottom) = match (lit_rows.first(), lit_rows.last()) {
+        (Some(&top), Some(&bottom)) => (top * scale, (bottom + 1) * scale),
+        _ => return rgba,
+    };
+    let x0 = (size as isize - (right - left) as isize) / 2 - left as isize;
+    let y0 = (size as isize - (bottom - top) as isize) / 2 - top as isize;
     for (index, rows) in glyphs.iter().enumerate() {
-        let left = x0 + index * (GLYPH_W * scale + gap);
+        let glyph_left = x0 + (index * step) as isize;
         for (row, bits) in rows.iter().enumerate() {
             for column in 0..GLYPH_W {
                 if bits & (0b100 >> column) == 0 {
@@ -60,8 +76,12 @@ pub(crate) fn render(icon: &TrayIcon) -> Vec<u8> {
                 }
                 for dy in 0..scale {
                     for dx in 0..scale {
-                        let (x, y) = (left + column * scale + dx, y0 + row * scale + dy);
-                        if x < size && y < size {
+                        let x = glyph_left + (column * scale + dx) as isize;
+                        let y = y0 + (row * scale + dy) as isize;
+                        if let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y))
+                            && x < size
+                            && y < size
+                        {
                             put(&mut rgba, x, y, foreground);
                         }
                     }
@@ -199,6 +219,28 @@ mod tests {
         assert_ne!(rgba, render(&icon(None, "#6b7280", false)));
         // Three dots of 2×2 cells, scaled by 3.
         assert_eq!(count(&rgba, [255, 255, 255, 255]), 3 * 4 * 9);
+        // Centred on what is drawn, though each dot is off-centre in its glyph.
+        let (left, right, top, bottom) = margins(&rgba, [255, 255, 255, 255]);
+        assert_eq!(left, right);
+        assert_eq!(top, bottom);
+    }
+
+    /// The empty columns left and right of the pixels of `color`, then the empty rows above
+    /// and below them.
+    fn margins(rgba: &[u8], color: [u8; 4]) -> (usize, usize, usize, usize) {
+        let size = SIZE as usize;
+        let drawn: Vec<(usize, usize)> = (0..size)
+            .flat_map(|y| (0..size).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(rgba, x, y) == color)
+            .collect();
+        let xs = drawn.iter().map(|&(x, _)| x);
+        let ys = drawn.iter().map(|&(_, y)| y);
+        (
+            xs.clone().min().unwrap(),
+            size - 1 - xs.max().unwrap(),
+            ys.clone().min().unwrap(),
+            size - 1 - ys.max().unwrap(),
+        )
     }
 
     #[test]
