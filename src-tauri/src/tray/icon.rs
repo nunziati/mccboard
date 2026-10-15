@@ -1,6 +1,7 @@
 //! Draws the tray icon at runtime: the percentage in a blocky pixel font on a rounded square
 //! in the account's color. The digits are integer-scaled 3×5 glyphs, so they stay crisp when
-//! the shell scales the 32-pixel icon down to 16.
+//! the shell scales the 32-pixel icon down to 16. Without a percentage it shows a dash, or
+//! three dots while an account's access token waits for Claude Code to renew it.
 
 use mccboard_core::TrayIcon;
 
@@ -40,7 +41,9 @@ pub(crate) fn render(icon: &TrayIcon) -> Vec<u8> {
 
     let text = match icon.percent {
         Some(percent) => percent.to_string(),
-        None if icon.login_expired => "!".to_owned(),
+        // An expired token isn't an alarm: Claude Code renews it when it runs. Three dots
+        // say "waiting for it".
+        None if icon.token_expired => "···".to_owned(),
         None => "-".to_owned(),
     };
     let glyphs: Vec<&[u8; GLYPH_H]> = text.chars().filter_map(glyph).collect();
@@ -122,7 +125,8 @@ fn glyph(c: char) -> Option<&'static [u8; GLYPH_H]> {
         '8' => &[0b111, 0b101, 0b111, 0b101, 0b111],
         '9' => &[0b111, 0b101, 0b111, 0b001, 0b111],
         '-' => &[0b000, 0b000, 0b111, 0b000, 0b000],
-        '!' => &[0b010, 0b010, 0b010, 0b000, 0b010],
+        // A bold dot, so three of them stay visible at 16 pixels.
+        '·' => &[0b000, 0b000, 0b011, 0b011, 0b000],
         _ => return None,
     })
 }
@@ -137,7 +141,7 @@ mod tests {
             color: color.parse().unwrap(),
             account: None,
             stale,
-            login_expired: false,
+            token_expired: false,
         }
     }
 
@@ -185,6 +189,16 @@ mod tests {
         let fresh = render(&icon(Some(42), "#2563eb", false));
         let stale = render(&icon(Some(42), "#2563eb", true));
         assert_ne!(pixel(&fresh, 16, 1), pixel(&stale, 16, 1));
+    }
+
+    #[test]
+    fn an_expired_token_without_a_percentage_draws_three_dots() {
+        let mut expired = icon(None, "#6b7280", false);
+        expired.token_expired = true;
+        let rgba = render(&expired);
+        assert_ne!(rgba, render(&icon(None, "#6b7280", false)));
+        // Three dots of 2×2 cells, scaled by 3.
+        assert_eq!(count(&rgba, [255, 255, 255, 255]), 3 * 4 * 9);
     }
 
     #[test]
