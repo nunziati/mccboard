@@ -563,11 +563,16 @@ fn claude_codes_runtime_items_are_never_asked_about() {
         "server.lock",
         "daemon-auth-cooldown",
         "daemon-auth-status.json",
+        "daemon-auth-foo",
     ] {
         write(p.join(name), "{}");
     }
-    // The prompt `/loop` reads: written by the user, so still asked about.
+    // The prompt `/loop` reads: written by the user, so still asked about. So are the
+    // user's own files that merely start like the daemon's.
     write(p.join("loop.md"), "Check the deploy.\n");
+    write(p.join("daemon-start.sh"), "echo start\n");
+    mkdir(p.join("daemon-tools"));
+    write(p.join("daemonic"), "x");
     let b = safe_linked(&home, ".claude-b", &p);
     let (core, _env) = home.core();
     core.register(&b).unwrap();
@@ -579,7 +584,10 @@ fn claude_codes_runtime_items_are_never_asked_about() {
         .map(|q| q.item)
         .collect();
 
-    assert_eq!(asked, vec!["loop.md"]);
+    assert_eq!(
+        asked,
+        vec!["daemon-start.sh", "daemon-tools", "daemonic", "loop.md"]
+    );
     assert_eq!(drift_of(&core, &b).items, vec![]);
 }
 
@@ -659,6 +667,33 @@ fn a_stored_answer_for_a_linked_item_is_still_reported() {
 
     assert!(matches!(error, Error::ConfigCorrupt { .. }), "{error}");
     assert!(error.detail().unwrap().contains("settings.json"));
+}
+
+#[test]
+fn a_stored_answer_for_an_item_now_known_private_must_still_be_well_formed() {
+    // A bad answer, and keys that match a private pattern but are no plain name.
+    for (text, culprit) in [
+        ("[sharing.items]\ndownloads = \"maybe\"\n", "downloads"),
+        ("[sharing.items]\n\"x/y.lock\" = \"private\"\n", "x/y.lock"),
+        (
+            "[sharing.items]\n\"daemon-auth-/../a\" = \"private\"\n",
+            "daemon-auth-/../a",
+        ),
+    ] {
+        let home = TempHome::new();
+        full_primary(&home);
+        home.write_config(text);
+        let (core, _env) = home.core();
+
+        let error = core.doctor().unwrap_err();
+
+        assert!(
+            matches!(error, Error::ConfigCorrupt { .. }),
+            "{text}: {error}"
+        );
+        assert!(error.detail().unwrap().contains(culprit), "{text}: {error}");
+        assert_eq!(home.config_text().unwrap(), text);
+    }
 }
 
 #[test]

@@ -437,6 +437,7 @@ impl RawConfig {
         let mut sharing = BTreeMap::new();
         for (item, answer) in self.sharing.items {
             let at = format!("sharing.items.{item}");
+            sharing::check_plain(&item).map_err(|e| format!("{at}: {e}"))?;
             let answer = answer
                 .parse::<SharingAnswer>()
                 .map_err(|e| format!("{at}: {e}"))?;

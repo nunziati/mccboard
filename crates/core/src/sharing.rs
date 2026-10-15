@@ -129,7 +129,7 @@ const PRIVATE_PREFIXES: &[&str] = &[
     ".claude.json",
     ".credentials.json",
     "security_warnings_state",
-    "daemon-",
+    "daemon-auth-",
 ];
 const PRIVATE_SUFFIXES: &[&str] = &[".lock", ".tmp", ".backup", ".bak"];
 
@@ -222,6 +222,17 @@ pub(crate) fn classify(name: &str, answers: &BTreeMap<String, SharingAnswer>) ->
 /// Checks that `item` can take an answer: one plain name in the config directory, not in
 /// the sharing table. The message says why not.
 pub(crate) fn check_item(item: &str) -> Result<(), String> {
+    check_plain(item)?;
+    if in_table(item) {
+        return Err(format!(
+            "{item:?} is in the sharing table already; only unknown items take an answer"
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that `item` is one plain name in the config directory: no path, no `.` or `..`.
+pub(crate) fn check_plain(item: &str) -> Result<(), String> {
     let plain = !item.is_empty()
         && item != "."
         && item != ".."
@@ -230,11 +241,6 @@ pub(crate) fn check_item(item: &str) -> Result<(), String> {
     if !plain {
         return Err(format!(
             "{item:?} is not the name of an item in a config folder"
-        ));
-    }
-    if in_table(item) {
-        return Err(format!(
-            "{item:?} is in the sharing table already; only unknown items take an answer"
         ));
     }
     Ok(())
