@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 
 use common::{FIXTURE_REFRESH, FIXTURE_TOKEN, TempHome, now};
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use mccboard_core::{AccountUuid, Error, InstanceKind, LoginState, ObservedAccount, Warning};
 
 const UUID_A: &str = "11111111-1111-4111-8111-111111111111";
@@ -195,8 +195,9 @@ fn login_state_follows_the_clock() {
 }
 
 #[test]
-fn a_token_cleared_by_claude_code_reads_as_expired() {
-    // After a dead refresh token Claude Code writes empty tokens and `expiresAt: 0`.
+fn a_token_cleared_by_claude_code_reads_as_not_logged_in() {
+    // After a dead refresh token Claude Code writes empty tokens and `expiresAt: 0`: that is a
+    // logout, not an expired token Claude Code will renew.
     let home = TempHome::new();
     home.primary()
         .raw_credentials(r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#);
@@ -204,9 +205,7 @@ fn a_token_cleared_by_claude_code_reads_as_expired() {
 
     assert_eq!(
         core.scan().unwrap()[0].observation.login,
-        LoginState::Expired {
-            expired_at: Timestamp::UNIX_EPOCH
-        }
+        LoginState::NotLoggedIn
     );
 }
 

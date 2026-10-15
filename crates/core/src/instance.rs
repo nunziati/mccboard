@@ -34,15 +34,17 @@ impl InstanceKind {
     }
 }
 
-/// An instance's login, told from the credentials' expiry alone. mccboard never renews it.
+/// An instance's login, told from the credentials' expiry and whether they still hold a token.
+/// mccboard never renews it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum LoginState {
     /// The access token is valid until `expires_at`.
     LoggedIn { expires_at: Timestamp },
-    /// The access token expired; Claude Code renews it the next time it runs.
+    /// The access token expired, but the credentials are still there: Claude Code renews it
+    /// the next time it runs. Not a logout.
     Expired { expired_at: Timestamp },
-    /// No claude.ai credentials in the instance.
+    /// No claude.ai credentials in the instance, or ones Claude Code emptied on logout.
     NotLoggedIn,
     /// The credentials exist but can't be read; see the observation's warnings.
     Unknown,
@@ -95,6 +97,8 @@ pub(crate) fn observe(home: &Path, config_dir: &Path, env: &dyn Environment) -> 
     let login = match claude_files::read_credentials_expiry(config_dir) {
         Read::Missing => LoginState::NotLoggedIn,
         Read::Parsed(credentials) => match credentials.claude_ai_oauth {
+            // An emptied token: Claude Code logged out (a dead refresh token).
+            Some(oauth) if !oauth.has_access_token => LoginState::NotLoggedIn,
             None => LoginState::NotLoggedIn,
             Some(oauth) => match oauth
                 .expires_at
