@@ -9,15 +9,19 @@
 //!
 //! Then it repairs item by item: a failed item is reported and the others still repaired.
 //! Every link is a single hop to the primary's real item; a real file or folder in the way
-//! is moved to a backup first. Private items are never touched: repairs act only on the
+//! is moved to a backup first. Aligned items are brought in line with the primary: only the
+//! listed keys of `.claude.json` are written, and plugins are installed with Claude Code's
+//! own `claude plugin` commands. Private items are never touched: repairs act only on the
 //! items the doctor reports, which are never private.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::alignment::{self, PluginRun};
 use crate::backup::Backup;
 use crate::config::ConfigFile;
 use crate::doctor::{self, DriftItem, InstanceDrift, Repair};
@@ -87,15 +91,79 @@ pub(crate) fn repair(
     if config.instance(&config_dir).is_none() {
         return Err(Error::NotRegistered { path: config_dir });
     }
+    let select = match only {
+        None => Select::All,
+        Some(id) => Select::Only(id),
+    };
+    run(
+        home,
+        paths,
+        env,
+        config_dir,
+        &config.sharing,
+        select,
+        launchers,
+        sync_launchers,
+    )
+}
+
+/// Aligns the instance in `config_dir`, registered or not: its Global config keys,
+/// marketplaces and plugins, as [`repair`] would, and nothing else.
+pub(crate) fn align(
+    home: &Path,
+    paths: &Paths,
+    env: &dyn Environment,
+    config_dir: &Path,
+    launchers: &dyn Fn() -> Option<LauncherStatus>,
+    sync_launchers: &dyn Fn() -> Result<LauncherSync, Error>,
+) -> Result<RepairReport, Error> {
+    let config_dir = paths::resolve(home, config_dir)?;
+    let answers = ConfigFile::load(&paths.config_file())?.config.sharing;
+    run(
+        home,
+        paths,
+        env,
+        config_dir,
+        &answers,
+        Select::Aligned,
+        launchers,
+        sync_launchers,
+    )
+}
+
+/// Which drift items a run repairs.
+enum Select<'a> {
+    All,
+    /// The one with this id; an error when there is none.
+    Only(&'a str),
+    /// Aligned items only.
+    Aligned,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    home: &Path,
+    paths: &Paths,
+    env: &dyn Environment,
+    config_dir: PathBuf,
+    answers: &BTreeMap<String, sharing::SharingAnswer>,
+    select: Select,
+    launchers: &dyn Fn() -> Option<LauncherStatus>,
+    sync_launchers: &dyn Fn() -> Result<LauncherSync, Error>,
+) -> Result<RepairReport, Error> {
     if !config_dir.is_dir() {
         return Err(Error::NotADirectory { path: config_dir });
     }
-    let answers = &config.sharing;
     let drift = doctor::drift(home, &config_dir, answers, launchers().as_ref());
 
-    let selected: Vec<&DriftItem> = match only {
-        None => drift.items.iter().collect(),
-        Some(id) => {
+    let selected: Vec<&DriftItem> = match select {
+        Select::All => drift.items.iter().collect(),
+        Select::Aligned => drift
+            .items
+            .iter()
+            .filter(|i| is_aligned(&i.repair))
+            .collect(),
+        Select::Only(id) => {
             let found = drift.items.iter().find(|i| i.id == id);
             vec![found.ok_or_else(|| Error::DriftItemNotFound {
                 path: config_dir.clone(),
@@ -135,6 +203,7 @@ pub(crate) fn repair(
 
     let primary = doctor::primary_dir(home);
     let mut backup = Backup::new(paths.backups_dir(), env.now(), home, &config_dir);
+    let mut plugins = PluginRun::new(env, &primary, &config_dir);
     let mut items = Vec::new();
     for item in selected {
         let applied = apply(
@@ -144,6 +213,7 @@ pub(crate) fn repair(
             &config_dir,
             item,
             &mut backup,
+            &mut plugins,
             sync_launchers,
         );
         let outcome = match applied {
@@ -167,6 +237,13 @@ pub(crate) fn repair(
     })
 }
 
+fn is_aligned(repair: &Repair) -> bool {
+    matches!(
+        repair,
+        Repair::AlignKey { .. } | Repair::AddMarketplace { .. } | Repair::InstallPlugin { .. }
+    )
+}
+
 fn needs_file_link(repair: &Repair) -> bool {
     match repair {
         Repair::CreateLink { target }
@@ -176,11 +253,15 @@ fn needs_file_link(repair: &Repair) -> bool {
         Repair::MigrateSkills { .. }
         | Repair::MigratePlugins
         | Repair::SyncLaunchers
+        | Repair::AlignKey { .. }
+        | Repair::AddMarketplace { .. }
+        | Repair::InstallPlugin { .. }
         | Repair::Nothing => false,
     }
 }
 
 /// Repairs one item; returns where a replaced real item was backed up, if any.
+#[allow(clippy::too_many_arguments)]
 fn apply(
     home: &Path,
     env: &dyn Environment,
@@ -188,6 +269,7 @@ fn apply(
     config_dir: &Path,
     item: &DriftItem,
     backup: &mut Backup,
+    plugins: &mut PluginRun,
     sync_launchers: &dyn Fn() -> Result<LauncherSync, Error>,
 ) -> io::Result<Option<PathBuf>> {
     let at = &item.path;
@@ -234,6 +316,21 @@ fn apply(
             // Touches only mccboard's launchers (rc file block or bin folder), never the
             // instance's folder.
             sync_launchers().map_err(|error| io::Error::other(error.to_string()))?;
+            Ok(None)
+        }
+        Repair::AlignKey { key, value } => {
+            alignment::align_key(at, key, value)?;
+            Ok(None)
+        }
+        Repair::AddMarketplace {
+            marketplace,
+            source,
+        } => {
+            plugins.add_marketplace(marketplace, source.as_deref())?;
+            Ok(None)
+        }
+        Repair::InstallPlugin { plugin } => {
+            plugins.install(plugin)?;
             Ok(None)
         }
         Repair::Nothing => Ok(None),

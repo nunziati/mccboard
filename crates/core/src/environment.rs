@@ -10,7 +10,7 @@ use crate::session_guard::ClaudeProcess;
 /// The port through which the core reaches everything outside the filesystem.
 ///
 /// One real implementation per OS ([`SystemEnvironment`]) and one fake for tests
-/// (`testing::FakeEnvironment`). Later features add to it: running `claude` commands.
+/// (`testing::FakeEnvironment`).
 pub trait Environment: Send + Sync {
     /// The current time.
     fn now(&self) -> Timestamp;
@@ -42,6 +42,52 @@ pub trait Environment: Send + Sync {
     /// Whether file links (symlinks to files) can be created without elevation: on Windows,
     /// whether Developer Mode is on (ADR 0006); elsewhere always.
     fn file_links_allowed(&self) -> bool;
+
+    /// Runs Claude Code (`claude <args>`) in the linked instance `invocation.config_dir`:
+    /// with `CLAUDE_CONFIG_DIR` set to it, without the variables that would override its own
+    /// login (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`), with no
+    /// input, and waits for it to exit. Never for the primary instance, whose global config
+    /// lives outside its folder. Errors when `claude` can't be started (`NotFound` when it
+    /// isn't installed) or doesn't finish in time.
+    fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun>;
+}
+
+/// A `claude` command to run in an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClaudeInvocation {
+    /// The instance's config directory.
+    pub config_dir: PathBuf,
+    /// The arguments after `claude` (`plugin install review@tools --json`).
+    pub args: Vec<String>,
+}
+
+/// How a `claude` command ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeRun {
+    /// The exit code; `None` when it was ended by a signal.
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl ClaudeRun {
+    /// A run that exited with 0 and printed `stdout`.
+    pub fn ok(stdout: &str) -> Self {
+        Self::exit(0, stdout, "")
+    }
+
+    /// A run that exited with `code`.
+    pub fn exit(code: i32, stdout: &str, stderr: &str) -> Self {
+        Self {
+            exit_code: Some(code),
+            stdout: stdout.to_owned(),
+            stderr: stderr.to_owned(),
+        }
+    }
+
+    pub fn success(&self) -> bool {
+        self.exit_code == Some(0)
+    }
 }
 
 /// What the usage endpoint answered. The core reads it; the port only carries it.
@@ -135,5 +181,9 @@ impl Environment for SystemEnvironment {
 
     fn file_links_allowed(&self) -> bool {
         crate::system::file_links_allowed()
+    }
+
+    fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
+        crate::claude_cli::run(invocation)
     }
 }
