@@ -165,7 +165,6 @@ export type Problem =
   | { kind: 'link_chain'; target: string }
   | { kind: 'not_a_link' }
   | { kind: 'whole_folder_link'; target: string | null }
-  | { kind: 'duplicate_hooks' }
   | { kind: 'missing_launcher' }
   | { kind: 'stale_launcher'; found: string | null }
   /** A Global config key of `.claude.json` differs: the primary's value and this instance's (null when unset). */
@@ -185,7 +184,6 @@ export type Repair =
   /** `source` is null when mccboard can't tell how to add the marketplace. */
   | { action: 'add_marketplace'; marketplace: string; source: string | null }
   | { action: 'install_plugin'; plugin: string }
-  | { action: 'nothing' }
 
 export interface DriftItem {
   /** Stable across runs: `<family>:<subject>`, e.g. `link:settings.json`. */
@@ -194,7 +192,6 @@ export interface DriftItem {
   path: string
   problem: Problem
   repair: Repair
-  informational: boolean
   /** The core's English wording, used when the UI has no translation for the kind. */
   explanation: string
   repair_explanation: string

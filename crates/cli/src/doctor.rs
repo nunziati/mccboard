@@ -196,8 +196,7 @@ fn print_instance(instance: &InstanceDrift) {
     };
     println!("{} ({kind}): {state}", instance.config_dir.display());
     for item in &instance.items {
-        let mark = if item.informational { "i" } else { "-" };
-        println!("  {mark} [{}] {}", item.id, item.explanation);
+        println!("  - [{}] {}", item.id, item.explanation);
         println!("      Repair: {}", item.repair_explanation);
     }
 }
