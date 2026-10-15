@@ -297,7 +297,7 @@ fn print_launchers(status: &LauncherStatus) {
             );
         }
         LauncherPlace::BinFolder { path, on_user_path } => println!(
-            "Launchers: scripts in {}, {}.",
+            "Launchers: programs in {}, {}.",
             path.display(),
             if *on_user_path {
                 "which is on your user PATH"

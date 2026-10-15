@@ -22,7 +22,7 @@ pub trait Environment: Send + Sync {
     fn call_usage_endpoint(&self, token: &AccessToken) -> EndpointReply;
 
     /// The operating system of the local machine. It decides, among other things, what a
-    /// launcher is: a shell alias on Linux, scripts on the user PATH on Windows.
+    /// launcher is: a shell alias on Linux, a program on the user PATH on Windows.
     fn os(&self) -> OsKind;
 
     /// The user's login shell (`$SHELL`), which picks the rc file launchers go in on Linux.
@@ -35,6 +35,11 @@ pub trait Environment: Send + Sync {
     /// Appends `dir` to the user PATH that new terminals get, and tells running programs that
     /// it changed. Terminals already open keep their PATH.
     fn add_to_user_path(&self, dir: &Path) -> io::Result<()>;
+
+    /// The shim mccboard ships, the program a Windows launcher is a copy of (`claude-b.exe`):
+    /// its bytes. It ships next to mccboard's own programs, the CLI and the app. Errors when
+    /// it isn't there or can't be read; the message names where it was looked for.
+    fn launcher_shim(&self) -> io::Result<Vec<u8>>;
 
     /// Every running Claude Code process on this machine, each with the config directory it
     /// uses. The core matches them to instances (the session guard).
@@ -218,6 +223,10 @@ impl Environment for SystemEnvironment {
             io::ErrorKind::Unsupported,
             "the user PATH is managed on Windows only",
         ))
+    }
+
+    fn launcher_shim(&self) -> io::Result<Vec<u8>> {
+        crate::system::launcher_shim()
     }
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {

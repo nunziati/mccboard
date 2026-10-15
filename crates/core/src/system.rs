@@ -1,7 +1,8 @@
-//! What [`crate::SystemEnvironment`] asks the operating system: running Claude Code processes
-//! and, on Windows, whether Developer Mode is on.
+//! What [`crate::SystemEnvironment`] asks the operating system: running Claude Code processes,
+//! where the launcher shim is and, on Windows, whether Developer Mode is on.
 
 use std::ffi::OsStr;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use sysinfo::{Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -9,6 +10,18 @@ use sysinfo::{Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind
 use crate::session_guard::{ClaudeProcess, ProcessConfigDir};
 
 const CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
+
+/// The launcher shim's bytes, from next to the running program: `cargo build` puts every
+/// workspace program in one folder, and the app's installer puts the shim next to the app.
+pub(crate) fn launcher_shim() -> io::Result<Vec<u8>> {
+    let file = format!(
+        "{}{}",
+        mccboard_shim::PROGRAM_NAME,
+        std::env::consts::EXE_SUFFIX
+    );
+    let path = std::env::current_exe()?.with_file_name(file);
+    std::fs::read(&path).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
 
 /// Every running Claude Code process of this machine that mccboard can see, mccboard's own
 /// process left out.

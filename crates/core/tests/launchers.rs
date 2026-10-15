@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{TempHome, UUID_A, UUID_B, UUID_C};
-use mccboard_core::testing::FakeEnvironment;
+use mccboard_core::testing::{FAKE_LAUNCHER_SHIM, FakeEnvironment};
 use mccboard_core::{
     AccountUpdate, AccountUuid, ClaudeProcess, Core, DriftItem, Error, Launcher, LauncherPlace,
     LauncherState, OsKind, Problem, ProcessConfigDir, Repair, RepairOutcome, UserPathChange,
@@ -688,26 +688,65 @@ fn the_alias_passes_every_argument_through_in_bash() {
     );
 }
 
-// --- Windows: .cmd and .ps1 scripts in mccboard's bin folder, on the user PATH ---
+// --- Windows: a copy of the shim and its sidecar in mccboard's bin folder, on the user PATH ---
+
+/// The sidecar mccboard writes for `config_dir`, as the shim reads it.
+fn sidecar_line(config_dir: &Path) -> String {
+    format!("CLAUDE_CONFIG_DIR={}", config_dir.display())
+}
+
+/// The files in the bin folder, sorted.
+fn bin_files(home: &TempHome) -> Vec<String> {
+    let mut files: Vec<_> = fs::read_dir(bin(home))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    files
+}
+
+/// The `.cmd` and `.ps1` scripts an earlier version of mccboard wrote for `config_dir`.
+fn write_legacy_scripts(home: &TempHome, name: &str, config_dir: &Path) {
+    let dir = config_dir.display().to_string();
+    fs::write(
+        bin(home).join(format!("{name}.cmd")),
+        format!(
+            "@echo off\r\nrem Managed by mccboard: starts Claude Code in the instance below. \
+             Changes here are overwritten.\r\nsetlocal\r\nset \"CLAUDE_CONFIG_DIR={}\"\r\n\
+             claude %*\r\n",
+            dir.replace('%', "%%")
+        ),
+    )
+    .unwrap();
+    fs::write(
+        bin(home).join(format!("{name}.ps1")),
+        format!(
+            "\u{feff}# Managed by mccboard: starts Claude Code in the instance below. Changes \
+             here are overwritten.\r\n$previous = $env:CLAUDE_CONFIG_DIR\r\n\
+             $env:CLAUDE_CONFIG_DIR = '{}'\r\ntry {{\r\n    & claude @args\r\n}} finally {{\r\n\
+             \x20   $env:CLAUDE_CONFIG_DIR = $previous\r\n}}\r\nexit $LASTEXITCODE\r\n",
+            dir.replace('\'', "''")
+        ),
+    )
+    .unwrap();
+}
 
 #[test]
-fn on_windows_a_linked_instance_gets_cmd_and_ps1_scripts_in_the_bin_folder() {
+fn on_windows_a_linked_instance_gets_a_copy_of_the_shim_and_its_sidecar() {
     let (home, core, env) = home_with_b(OsKind::Windows);
     let b = home.path().join(".claude-b");
 
-    let cmd = read(&bin(&home).join("claude-b.cmd"));
-    let ps1 = read(&bin(&home).join("claude-b.ps1"));
-
-    assert!(
-        cmd.contains(&format!("set \"CLAUDE_CONFIG_DIR={}\"", b.display())),
-        "{cmd}"
+    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+    assert_eq!(
+        fs::read(bin(&home).join("claude-b.exe")).unwrap(),
+        FAKE_LAUNCHER_SHIM
     );
-    assert!(cmd.contains("claude %*"), "{cmd}");
+    let sidecar = read(&bin(&home).join("claude-b.shim"));
+    assert!(sidecar.contains("Managed by mccboard"), "{sidecar}");
     assert!(
-        ps1.contains(&format!("$env:CLAUDE_CONFIG_DIR = '{}'", b.display())),
-        "{ps1}"
+        sidecar.lines().any(|line| line == sidecar_line(&b)),
+        "{sidecar}"
     );
-    assert!(ps1.contains("& claude @args"), "{ps1}");
     assert!(!bashrc(&home).exists());
     assert_eq!(env.user_path(), vec![bin(&home)]);
 
@@ -737,10 +776,11 @@ fn on_windows_the_bin_folder_is_added_to_the_user_path_once() {
 }
 
 #[test]
-fn on_windows_renaming_and_removing_replace_the_scripts() {
+fn on_windows_renaming_and_removing_replace_the_launchers_and_leave_other_files() {
     let (home, core, _env) = home_with_b(OsKind::Windows);
     fs::write(bin(&home).join("notes.txt"), "mine").unwrap();
     fs::write(bin(&home).join("other.cmd"), "@echo not mccboard's").unwrap();
+    fs::write(bin(&home).join("tool.exe"), "MZ not mccboard's").unwrap();
 
     core.update_account(
         &uuid(UUID_B),
@@ -750,42 +790,254 @@ fn on_windows_renaming_and_removing_replace_the_scripts() {
         },
     )
     .unwrap();
-    assert!(bin(&home).join("cb.cmd").is_file());
-    assert!(bin(&home).join("cb.ps1").is_file());
-    assert!(!bin(&home).join("claude-b.cmd").exists());
-    assert!(!bin(&home).join("claude-b.ps1").exists());
+    assert_eq!(
+        bin_files(&home),
+        vec!["cb.exe", "cb.shim", "notes.txt", "other.cmd", "tool.exe"]
+    );
 
     core.unregister(&home.path().join(".claude-b")).unwrap();
-    let mut left: Vec<_> = fs::read_dir(bin(&home))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    left.sort();
-    assert_eq!(left, vec!["notes.txt", "other.cmd"]);
+    assert_eq!(bin_files(&home), vec!["notes.txt", "other.cmd", "tool.exe"]);
 }
 
 #[test]
-fn on_windows_a_missing_script_is_stale_and_sync_rewrites_it() {
+fn on_windows_a_missing_program_or_sidecar_is_stale_and_sync_rewrites_it() {
     let (home, core, _env) = home_with_b(OsKind::Windows);
-    fs::remove_file(bin(&home).join("claude-b.ps1")).unwrap();
+    let b = home.path().join(".claude-b");
 
-    let status = core.launchers().unwrap();
-    assert_eq!(
-        status.instances[0].state,
-        LauncherState::Stale {
-            found: Some(home.path().join(".claude-b"))
-        }
-    );
+    for file in ["claude-b.exe", "claude-b.shim"] {
+        fs::remove_file(bin(&home).join(file)).unwrap();
+        let status = core.launchers().unwrap();
+        assert_eq!(
+            status.instances[0].state,
+            LauncherState::Stale { found: None },
+            "{file}"
+        );
+        assert_eq!(status.drift_count(), 1);
+        let sync = core.sync_launchers().unwrap();
+        assert_eq!(sync.updated.len(), 1);
+        assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+        assert_eq!(core.launchers().unwrap().drift_count(), 0);
+    }
 
-    core.sync_launchers().unwrap();
-    assert!(bin(&home).join("claude-b.ps1").is_file());
-
-    fs::remove_file(bin(&home).join("claude-b.ps1")).unwrap();
-    fs::remove_file(bin(&home).join("claude-b.cmd")).unwrap();
+    fs::remove_file(bin(&home).join("claude-b.exe")).unwrap();
+    fs::remove_file(bin(&home).join("claude-b.shim")).unwrap();
     assert_eq!(
         core.launchers().unwrap().instances[0].state,
         LauncherState::Missing
     );
+    assert_eq!(core.sync_launchers().unwrap().created.len(), 1);
+    assert!(
+        read(&bin(&home).join("claude-b.shim"))
+            .lines()
+            .any(|line| line == sidecar_line(&b))
+    );
+}
+
+#[test]
+fn on_windows_a_sidecar_pointing_elsewhere_is_stale_and_says_where_it_points() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    let b = home.path().join(".claude-b");
+    let x = home.path().join(".claude-x");
+    let sidecar = bin(&home).join("claude-b.shim");
+    fs::write(
+        &sidecar,
+        read(&sidecar).replace(&sidecar_line(&b), &sidecar_line(&x)),
+    )
+    .unwrap();
+
+    assert_eq!(
+        core.launchers().unwrap().instances[0].state,
+        LauncherState::Stale { found: Some(x) }
+    );
+    core.sync_launchers().unwrap();
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+    assert!(read(&sidecar).lines().any(|line| line == sidecar_line(&b)));
+}
+
+/// After an upgrade, mccboard ships another shim: every launcher's copy is out of date until a
+/// sync replaces it.
+#[test]
+fn on_windows_a_program_other_than_the_shipped_shim_is_stale_and_sync_replaces_it() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    let sidecar_before = read(&bin(&home).join("claude-b.shim"));
+    env.set_launcher_shim(Some(b"MZ fake mccboard-shim.exe, version 2"));
+
+    let status = core.launchers().unwrap();
+    assert_eq!(
+        status.instances[0].state,
+        LauncherState::Stale { found: None }
+    );
+    let doctor = launcher_drift(&home, &core);
+    assert_eq!(doctor.len(), 1);
+    assert_eq!(doctor[0].problem, Problem::StaleLauncher { found: None });
+
+    core.sync_launchers().unwrap();
+    assert_eq!(
+        fs::read(bin(&home).join("claude-b.exe")).unwrap(),
+        b"MZ fake mccboard-shim.exe, version 2"
+    );
+    assert_eq!(read(&bin(&home).join("claude-b.shim")), sidecar_before);
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+}
+
+/// Launchers written as `.cmd` and `.ps1` scripts by an earlier version: stale for the doctor
+/// until a sync (or a repair) replaces them with the program.
+#[test]
+fn on_windows_the_scripts_of_an_earlier_version_are_stale_and_sync_migrates_them() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    let b = home.path().join(".claude-b");
+    let c = home.linked(".claude-c");
+    c.logged_in_as(UUID_C, "c@example.com");
+    core.register(&c.dir).unwrap();
+    // As an earlier version left the folder: scripts only, one pointing elsewhere, one for an
+    // instance gone since. And a script of the user's own.
+    for file in bin_files(&home) {
+        fs::remove_file(bin(&home).join(file)).unwrap();
+    }
+    write_legacy_scripts(&home, "claude-b", &b);
+    write_legacy_scripts(&home, "claude-c", &home.path().join("it's 100% x"));
+    write_legacy_scripts(&home, "claude-old", &home.path().join(".claude-old"));
+    fs::write(bin(&home).join("mine.cmd"), "@echo mine\r\n").unwrap();
+
+    let status = core.launchers().unwrap();
+    let states: Vec<_> = status.instances.iter().map(|i| i.state.clone()).collect();
+    assert_eq!(
+        states,
+        vec![
+            LauncherState::Stale { found: None },
+            LauncherState::Stale {
+                found: Some(home.path().join("it's 100% x"))
+            },
+        ]
+    );
+    assert_eq!(
+        status.orphans,
+        vec![Launcher {
+            name: "claude-old".into(),
+            config_dir: Some(home.path().join(".claude-old")),
+        }]
+    );
+    assert_eq!(status.drift_count(), 3);
+    let doctor = launcher_drift(&home, &core);
+    assert_eq!(doctor.len(), 1);
+    assert_eq!(doctor[0].id, "launcher:claude-b");
+    assert_eq!(doctor[0].problem, Problem::StaleLauncher { found: None });
+    assert!(doctor[0].explanation.contains("earlier version"));
+
+    let sync = core.sync_launchers().unwrap();
+
+    assert_eq!(sync.updated.len(), 2);
+    assert_eq!(sync.removed.len(), 1);
+    assert_eq!(
+        bin_files(&home),
+        vec![
+            "claude-b.exe",
+            "claude-b.shim",
+            "claude-c.exe",
+            "claude-c.shim",
+            "mine.cmd"
+        ]
+    );
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+}
+
+/// PowerShell picks `claude-b.ps1` over `claude-b.exe` in the same folder: an earlier
+/// version's script left next to the program still makes the launcher stale.
+#[test]
+fn on_windows_a_script_of_an_earlier_version_next_to_the_program_is_stale() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    write_legacy_scripts(&home, "claude-b", &home.path().join(".claude-b"));
+    fs::remove_file(bin(&home).join("claude-b.cmd")).unwrap();
+
+    assert_eq!(
+        core.launchers().unwrap().instances[0].state,
+        LauncherState::Stale { found: None }
+    );
+    core.sync_launchers().unwrap();
+    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+}
+
+#[test]
+fn on_windows_repair_migrates_the_scripts_of_an_earlier_version() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    let b = home.path().join(".claude-b");
+    for file in bin_files(&home) {
+        fs::remove_file(bin(&home).join(file)).unwrap();
+    }
+    write_legacy_scripts(&home, "claude-b", &b);
+
+    let report = core.repair(&b, Some("launcher:claude-b")).unwrap();
+
+    assert_eq!(
+        report.items[0].outcome,
+        RepairOutcome::Done { backup: None }
+    );
+    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+    assert!(launcher_drift(&home, &core).is_empty());
+}
+
+/// A user's own scripts with a launcher's name are theirs: never removed, and no reason to call
+/// the launcher stale.
+#[test]
+fn on_windows_scripts_mccboard_didnt_write_are_left_alone() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    fs::write(bin(&home).join("claude-b.cmd"), "@echo mine\r\n").unwrap();
+
+    assert_eq!(
+        core.launchers().unwrap().instances[0].state,
+        LauncherState::Ok
+    );
+    core.sync_launchers().unwrap();
+    assert_eq!(
+        bin_files(&home),
+        vec!["claude-b.cmd", "claude-b.exe", "claude-b.shim"]
+    );
+}
+
+#[test]
+fn on_windows_a_missing_shim_is_a_clear_error_and_the_status_still_reads() {
+    let home = TempHome::new();
+    home.linked(".claude-b")
+        .logged_in_as(UUID_B, "b@example.com");
+    let (core, env) = home.core();
+    env.set_os(OsKind::Windows);
+    env.set_launcher_shim(None);
+
+    let error = core
+        .register(&home.path().join(".claude-b"))
+        .expect_err("no launcher can be written");
+
+    assert_eq!(error.code(), "launcher_shim_missing");
+    assert!(error.to_string().contains("mccboard-shim"), "{error}");
+    // The registration itself was saved; only the launcher is missing.
+    assert_eq!(core.registry().unwrap().instances.len(), 1);
+    let status = core.launchers().unwrap();
+    assert_eq!(status.instances[0].state, LauncherState::Missing);
+    assert_eq!(launcher_drift(&home, &core).len(), 1);
+
+    // Launchers written before keep working, and their sidecars can still be fixed.
+    env.set_launcher_shim(Some(FAKE_LAUNCHER_SHIM));
+    core.sync_launchers().unwrap();
+    env.set_launcher_shim(None);
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+    fs::remove_file(bin(&home).join("claude-b.shim")).unwrap();
+    core.sync_launchers().unwrap();
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+}
+
+/// A launcher program that was running when it had to be replaced is moved aside
+/// (`claude-b.exe.old`); a later sync deletes what is left aside.
+#[test]
+fn on_windows_programs_moved_aside_are_deleted_by_a_later_sync() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    fs::write(bin(&home).join("claude-b.exe.old"), "MZ").unwrap();
+    fs::write(bin(&home).join("claude-c.exe.old-2"), "MZ").unwrap();
+
+    core.sync_launchers().unwrap();
+
+    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
 }
 
 #[test]
@@ -816,62 +1068,22 @@ fn on_windows_a_user_path_that_cant_be_changed_is_reported_not_fatal() {
     assert_eq!(status.drift_count(), 1);
 }
 
-/// Arguments pass through unchanged in cmd.exe and PowerShell, against a stand-in `claude`.
-#[cfg(windows)]
-#[test]
-fn the_scripts_pass_every_argument_through_on_windows() {
-    use std::process::Command;
-
-    let (home, core, _env) = home_with_b(OsKind::Windows);
-    let b = home.path().join(".claude-b");
-    let fake_bin = home.path().join("fake-bin");
-    fs::create_dir(&fake_bin).unwrap();
-    fs::write(
-        fake_bin.join("claude.cmd"),
-        "@echo off\r\necho dir=%CLAUDE_CONFIG_DIR%\r\necho args=%*\r\n",
-    )
-    .unwrap();
-    let path = format!(
-        "{};{};{}",
-        fake_bin.display(),
-        bin(&home).display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    assert_eq!(
-        core.launchers().unwrap().instances[0].state,
-        LauncherState::Ok
-    );
-
-    let out = Command::new("cmd")
-        .args(["/C", "claude-b", "--bg", "--name", "x"])
-        .env("PATH", &path)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains(&format!("dir={}", b.display())), "{stdout}");
-    assert!(stdout.contains("args=--bg --name x"), "{stdout}");
-
-    let out = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(bin(&home).join("claude-b.ps1"))
-        .args(["agents", "--bg"])
-        .env("PATH", &path)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains(&format!("dir={}", b.display())), "{stdout}");
-    assert!(stdout.contains("args=agents --bg"), "{stdout}");
-}
-
 #[test]
 fn no_token_reaches_a_launcher() {
-    let (home, core, _env) = home_with_b(OsKind::Linux);
-    home.primary()
-        .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
-    core.sync_launchers().unwrap();
-    assert!(!read(&bashrc(&home)).contains("FIXTURE"));
-    let json = serde_json::to_string(&core.launchers().unwrap()).unwrap();
-    assert!(!json.contains("FIXTURE"));
+    for os in [OsKind::Linux, OsKind::Windows] {
+        let (home, core, _env) = home_with_b(os);
+        home.primary()
+            .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
+        core.sync_launchers().unwrap();
+        let rc = fs::read_to_string(bashrc(&home)).unwrap_or_default();
+        assert!(!rc.contains("FIXTURE"));
+        if let Ok(entries) = fs::read_dir(bin(&home)) {
+            for entry in entries {
+                let bytes = fs::read(entry.unwrap().path()).unwrap();
+                assert!(!String::from_utf8_lossy(&bytes).contains("FIXTURE"));
+            }
+        }
+        let json = serde_json::to_string(&core.launchers().unwrap()).unwrap();
+        assert!(!json.contains("FIXTURE"));
+    }
 }

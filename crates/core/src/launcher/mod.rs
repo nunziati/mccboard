@@ -5,13 +5,13 @@
 //! linked instance, named by its account ([`crate::Account::launcher_name`]) or, without a
 //! known account, after its folder. Where they live depends on the OS:
 //! - Linux: alias lines in a marked block of the user's shell rc file ([`rc_file`]);
-//! - Windows: `.cmd` and `.ps1` scripts in `~/.mccboard/bin`, a folder on the user PATH
-//!   ([`scripts`]).
+//! - Windows: a copy of mccboard's shim program, `claude-b.exe`, with a sidecar file naming the
+//!   instance, in `~/.mccboard/bin`, a folder on the user PATH ([`bin_folder`]).
 //!
 //! [`status`] compares what is there with what should be (for the doctor); [`sync`] makes it so.
 
+mod bin_folder;
 mod rc_file;
-mod scripts;
 mod shell;
 
 use std::collections::HashSet;
@@ -60,7 +60,8 @@ pub enum LauncherState {
     /// There is no launcher with its name.
     Missing,
     /// A launcher with its name exists but isn't what mccboard writes: it points to another
-    /// folder (`found`, when readable), was edited by hand, or is incomplete.
+    /// folder (`found`, when it does and that can be read), was edited by hand, is incomplete,
+    /// or was written by an earlier version (on Windows, scripts or an older shim).
     Stale {
         found: Option<PathBuf>,
     },
@@ -147,13 +148,16 @@ struct Found {
 /// Where launchers live on this machine.
 enum Store {
     RcFile(rc_file::RcFile),
-    BinFolder(scripts::BinFolder),
+    BinFolder(bin_folder::BinFolder),
 }
 
 impl Store {
     fn of(home: &Path, paths: &Paths, env: &dyn Environment) -> Self {
         match env.os() {
-            OsKind::Windows => Store::BinFolder(scripts::BinFolder::new(paths.bin_dir())),
+            OsKind::Windows => Store::BinFolder(bin_folder::BinFolder::new(
+                paths.bin_dir(),
+                env.launcher_shim(),
+            )),
             OsKind::Linux => Store::RcFile(rc_file::RcFile::of(home, env.login_shell())),
         }
     }
@@ -169,7 +173,7 @@ impl Store {
     fn render(&self, name: &str, config_dir: &Path) -> String {
         match self {
             Store::RcFile(_) => rc_file::alias_line(name, config_dir),
-            Store::BinFolder(_) => scripts::content(config_dir),
+            Store::BinFolder(_) => bin_folder::content(config_dir),
         }
     }
 }
@@ -202,6 +206,7 @@ pub(crate) fn sync(
     match &store {
         Store::RcFile(rc) => rc.write(&wanted)?,
         Store::BinFolder(bin) => {
+            bin.sweep();
             for (want, status) in wanted.iter().zip(&comparison.instances) {
                 if status.state != LauncherState::Ok {
                     bin.write(&want.name, &want.config_dir)?;
@@ -287,7 +292,10 @@ fn compare(store: &Store, wanted: &[Wanted], found: Vec<Found>) -> Comparison {
                     LauncherState::Ok
                 }
                 Some(f) => LauncherState::Stale {
-                    found: f.config_dir.clone(),
+                    found: f
+                        .config_dir
+                        .clone()
+                        .filter(|found| !paths::same(found, &want.config_dir)),
                 },
             };
             InstanceLauncher {

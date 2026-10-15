@@ -254,7 +254,8 @@ fn the_front_end_chooses_where_the_login_opens() {
         terminals,
         vec![LoginTerminal::NewWindow, LoginTerminal::CurrentTerminal]
     );
-    assert!(f.path(".mccboard/bin/claude-b.cmd").is_file());
+    assert!(f.path(".mccboard/bin/claude-b.exe").is_file());
+    assert!(f.path(".mccboard/bin/claude-b.shim").is_file());
 }
 
 #[test]

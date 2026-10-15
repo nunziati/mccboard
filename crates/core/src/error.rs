@@ -88,6 +88,17 @@ pub enum Error {
         path.display()
     )]
     LauncherBlockCorrupt { path: PathBuf },
+
+    /// The launcher shim (`mccboard-shim.exe`) isn't next to mccboard's programs, so no
+    /// Windows launcher can be written.
+    #[error(
+        "cannot write the launchers: mccboard's launcher program is missing ({source}); \
+         reinstall mccboard, or from a source checkout run `cargo build -p mccboard-shim`"
+    )]
+    LauncherShimMissing {
+        #[source]
+        source: std::io::Error,
+    },
     #[error(
         "{} is in use by Claude Code ({}); close those sessions and try again. Nothing was \
          changed",
@@ -230,6 +241,7 @@ impl Error {
             Error::LauncherUnreadable { .. } => "launcher_unreadable",
             Error::LauncherUnwritable { .. } => "launcher_unwritable",
             Error::LauncherBlockCorrupt { .. } => "launcher_block_corrupt",
+            Error::LauncherShimMissing { .. } => "launcher_shim_missing",
             Error::InstanceInUse { .. } => "instance_in_use",
             Error::DeveloperModeOff => "developer_mode_off",
             Error::DesktopAppFolder { .. } => "desktop_app_folder",
