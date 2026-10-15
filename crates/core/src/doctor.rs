@@ -4,8 +4,9 @@
 //! Drift is a list of [`DriftItem`]s. Each has a stable `id` naming the item it is about,
 //! `<family>:<subject>` (`link:settings.json`, `link:skills/review`, `migrate:skills`), which
 //! stays the same whatever is wrong with the item, so a repair can target it. Its [`Problem`]
-//! says what is wrong and its [`Repair`] what a repair would do. Later checks add their own
-//! families (launchers, Global config keys, plugins) with their own problem and repair kinds.
+//! says what is wrong and its [`Repair`] what a repair would do. Launchers have their own
+//! family (`launcher:claude-b`); later checks add theirs (Global config keys, plugins) with
+//! their own problem and repair kinds.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,6 +16,7 @@ use serde::Serialize;
 
 use crate::config::ConfigFile;
 use crate::instance::InstanceKind;
+use crate::launcher::{LauncherPlace, LauncherState, LauncherStatus};
 use crate::links::{self, Entry};
 use crate::sharing::{self, Sharing, SharingAnswer, SharingQuestion};
 use crate::{Error, paths};
@@ -66,9 +68,11 @@ pub struct DriftItem {
     /// Stable identifier of the item, `<family>:<subject>`: the same across runs whatever is
     /// wrong with the item. Repairs target it.
     pub id: String,
-    /// The item, relative to the config directory, with `/` separators (`skills/review`).
+    /// The item, relative to the config directory, with `/` separators (`skills/review`); for
+    /// a launcher, its command name (`claude-b`).
     pub item: String,
-    /// The item's full path in the instance.
+    /// The item's full path in the instance; for a launcher, where launchers live (the shell
+    /// rc file, or mccboard's bin folder).
     pub path: PathBuf,
     pub problem: Problem,
     /// What a repair would do.
@@ -102,6 +106,11 @@ pub enum Problem {
     /// The primary's `settings.json` has hooks, which may run twice in a linked instance
     /// (anthropics/claude-code#80791). Informational.
     DuplicateHooks,
+    /// The instance has no launcher (`claude-b`) to start Claude Code in it.
+    MissingLauncher,
+    /// The instance's launcher isn't what mccboard writes: it starts Claude Code in another
+    /// folder (`found`, when readable), was edited by hand, or is incomplete.
+    StaleLauncher { found: Option<PathBuf> },
 }
 
 /// What a repair of an item would do. Link repairs make the item a single-hop link to
@@ -122,18 +131,26 @@ pub enum Repair {
     /// Replace the whole-folder `plugins/` link with the instance's own folder; its plugins
     /// are then reinstalled with Claude Code's own commands.
     MigratePlugins,
+    /// Make the launchers match the registered linked instances ([`crate::Core::sync_launchers`]).
+    SyncLaunchers,
     /// Nothing to repair.
     Nothing,
 }
 
-pub(crate) fn doctor(home: &Path, config_file: &Path) -> Result<Doctor, Error> {
+/// `launchers` is the launchers' status, or `None` when it couldn't be read: the doctor then
+/// reports link drift only, and the launchers' own status says what is wrong.
+pub(crate) fn doctor(
+    home: &Path,
+    config_file: &Path,
+    launchers: Option<&LauncherStatus>,
+) -> Result<Doctor, Error> {
     let config = ConfigFile::load(config_file)?.config;
     let answers = &config.sharing;
 
     let mut instances: Vec<InstanceDrift> = config
         .instances
         .iter()
-        .map(|entry| drift(home, &entry.config_dir, answers))
+        .map(|entry| drift(home, &entry.config_dir, answers, launchers))
         .collect();
     instances.sort_by(|a, b| {
         (a.kind != InstanceKind::Primary, paths::key(&a.config_dir))
@@ -153,15 +170,17 @@ pub(crate) fn primary_dir(home: &Path) -> PathBuf {
     home.join(".claude")
 }
 
-/// The drift of the instance in `config_dir`, against the primary instance in `home`.
+/// The drift of the instance in `config_dir`, against the primary instance in `home`, then
+/// its launcher's, when `launchers` has one for it.
 pub(crate) fn drift(
     home: &Path,
     config_dir: &Path,
     answers: &BTreeMap<String, SharingAnswer>,
+    launchers: Option<&LauncherStatus>,
 ) -> InstanceDrift {
     let kind = InstanceKind::of(home, config_dir);
     let primary = primary_dir(home);
-    let items = if kind == InstanceKind::Primary || !config_dir.is_dir() || !primary.is_dir() {
+    let mut items = if kind == InstanceKind::Primary || !config_dir.is_dir() || !primary.is_dir() {
         // The primary holds the real items; a missing folder has nothing to compare.
         Vec::new()
     } else {
@@ -169,7 +188,31 @@ pub(crate) fn drift(
         items.extend(duplicate_hooks(&primary, config_dir));
         items
     };
+    items.extend(launchers.and_then(|status| launcher_drift(status, config_dir)));
     InstanceDrift::new(config_dir.to_path_buf(), kind, items)
+}
+
+/// The launcher of the instance in `config_dir`, when it is missing or stale. Only registered
+/// linked instances have one.
+fn launcher_drift(status: &LauncherStatus, config_dir: &Path) -> Option<DriftItem> {
+    let launcher = status.instance(config_dir)?;
+    let problem = match &launcher.state {
+        LauncherState::Ok => return None,
+        LauncherState::Missing => Problem::MissingLauncher,
+        LauncherState::Stale { found } => Problem::StaleLauncher {
+            found: found.clone(),
+        },
+    };
+    let place = match &status.place {
+        LauncherPlace::RcFile { path } | LauncherPlace::BinFolder { path, .. } => path,
+    };
+    Some(DriftItem::new(
+        format!("launcher:{}", launcher.name),
+        &launcher.name,
+        place,
+        problem,
+        Repair::SyncLaunchers,
+    ))
 }
 
 /// Linked items, then each personal skill, then whole-folder links of `skills/` and
@@ -387,6 +430,17 @@ fn explain(item: &str, problem: &Problem) -> String {
              as project settings, so those hooks may run twice \
              (anthropics/claude-code#80791)."
             .to_owned(),
+        Problem::MissingLauncher => format!(
+            "The launcher {item} is missing, so no command starts Claude Code in this instance."
+        ),
+        Problem::StaleLauncher { found: Some(found) } => format!(
+            "The launcher {item} starts Claude Code in {} instead of this instance.",
+            found.display()
+        ),
+        Problem::StaleLauncher { found: None } => format!(
+            "The launcher {item} isn't the one mccboard writes: it was edited by hand or is \
+             incomplete."
+        ),
     }
 }
 
@@ -414,6 +468,9 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
         Repair::MigratePlugins => "Give this instance its own plugins folder; its plugins are \
              then reinstalled with Claude Code's own `claude plugin` commands."
             .to_owned(),
+        Repair::SyncLaunchers => {
+            "Fix the launchers (mccboard launcher sync), then open a new terminal.".to_owned()
+        }
         Repair::Nothing => "Nothing to repair: this is for your information.".to_owned(),
     }
 }

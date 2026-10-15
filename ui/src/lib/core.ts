@@ -164,6 +164,8 @@ export type Problem =
   | { kind: 'not_a_link' }
   | { kind: 'whole_folder_link'; target: string | null }
   | { kind: 'duplicate_hooks' }
+  | { kind: 'missing_launcher' }
+  | { kind: 'stale_launcher'; found: string | null }
 
 /** What a repair would do. */
 export type Repair =
@@ -172,6 +174,7 @@ export type Repair =
   | { action: 'backup_and_link'; target: string }
   | { action: 'migrate_skills'; skills: string[] }
   | { action: 'migrate_plugins' }
+  | { action: 'sync_launchers' }
   | { action: 'nothing' }
 
 export interface DriftItem {

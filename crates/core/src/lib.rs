@@ -133,7 +133,7 @@ impl Core {
 
     /// The launchers as they are, against what the registered linked instances need: one per
     /// instance (ok, missing or stale), plus launchers mccboard made that nothing needs any
-    /// more. Reads only. The doctor reports anything but ok as drift.
+    /// more. Reads only. The doctor reports a missing or stale launcher as drift.
     pub fn launchers(&self) -> Result<LauncherStatus, Error> {
         launcher::status(&self.home, &self.paths(), self.env.as_ref())
     }
@@ -160,8 +160,13 @@ impl Core {
     /// The drift of every registered instance against the sharing table (ADR 0005), each
     /// item explained with the repair that would fix it, plus the unknown items of the
     /// primary instance waiting for an answer. Reads only; changes nothing.
+    ///
+    /// A registered linked instance whose launcher is missing or stale has a `launcher:<name>`
+    /// item, repaired by [`Core::sync_launchers`]. If the launchers can't be read, the report
+    /// leaves them out and [`Core::launchers`] says why.
     pub fn doctor(&self) -> Result<Doctor, Error> {
-        doctor::doctor(&self.home, &self.paths().config_file())
+        let launchers = self.launchers().ok();
+        doctor::doctor(&self.home, &self.paths().config_file(), launchers.as_ref())
     }
 
     /// The drift of the instance in `config_dir` (absolute, or starting with `~`), registered
@@ -171,7 +176,13 @@ impl Core {
         let answers = config::ConfigFile::load(&self.paths().config_file())?
             .config
             .sharing;
-        Ok(doctor::drift(&self.home, &config_dir, &answers))
+        let launchers = self.launchers().ok();
+        Ok(doctor::drift(
+            &self.home,
+            &config_dir,
+            &answers,
+            launchers.as_ref(),
+        ))
     }
 
     /// Unknown top-level items of the primary instance the user hasn't answered about yet:

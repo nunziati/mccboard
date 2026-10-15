@@ -17,15 +17,18 @@
         return problem.target === null ? 'drift.problem.broken_link_unreadable' : 'drift.problem.broken_link'
       case 'whole_folder_link':
         return `drift.problem.whole_folder_link.${item.item}`
+      case 'stale_launcher':
+        return problem.found === null ? 'drift.problem.stale_launcher' : 'drift.problem.stale_launcher_found'
       default:
         return `drift.problem.${problem.kind}`
     }
   }
 
   function problemText(item: DriftItem): string {
-    const problem = item.problem as Problem & { target?: string | null; skill?: string }
+    const problem = item.problem as Problem & { target?: string | null; skill?: string; found?: string | null }
     const vars: Record<string, string> = { item: item.item }
     if (problem.target) vars.target = problem.target
+    if (problem.found) vars.found = problem.found
     if (problem.skill) vars.skill = problem.skill
     return translated(problemKey(item, problem), vars, item.explanation)
   }

@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use common::{TempHome, UUID_A, UUID_B, UUID_C};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
-    AccountUpdate, AccountUuid, Core, Launcher, LauncherPlace, LauncherState, OsKind,
-    UserPathChange,
+    AccountUpdate, AccountUuid, Core, DriftItem, Launcher, LauncherPlace, LauncherState, OsKind,
+    Problem, Repair, UserPathChange,
 };
 
 const BEGIN: &str = "# >>> mccboard launchers >>>";
@@ -352,6 +352,77 @@ fn an_alias_pointing_elsewhere_is_stale_and_says_where_it_points() {
     let sync = core.sync_launchers().unwrap();
     assert_eq!(sync.updated.len(), 1);
     assert_eq!(core.launchers().unwrap().drift_count(), 0);
+}
+
+/// The doctor's launcher items of `.claude-b`.
+fn launcher_drift(home: &TempHome, core: &Core) -> Vec<DriftItem> {
+    let doctor = core.doctor().unwrap();
+    let b = doctor
+        .instances
+        .iter()
+        .find(|i| i.config_dir == home.path().join(".claude-b"))
+        .expect("the linked instance in the doctor's report");
+    b.items
+        .iter()
+        .filter(|item| item.id.starts_with("launcher:"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
+    let (home, core, _env) = home_with_b(OsKind::Linux);
+    assert!(launcher_drift(&home, &core).is_empty());
+
+    fs::write(bashrc(&home), "# cleaned up by hand\n").unwrap();
+    let missing = launcher_drift(&home, &core);
+    assert_eq!(missing.len(), 1);
+    let item = &missing[0];
+    assert_eq!(item.id, "launcher:claude-b");
+    assert_eq!(item.item, "claude-b");
+    assert_eq!(item.path, bashrc(&home));
+    assert_eq!(item.problem, Problem::MissingLauncher);
+    assert_eq!(item.repair, Repair::SyncLaunchers);
+    assert!(!item.informational);
+    assert!(item.explanation.contains("claude-b"));
+    assert!(item.repair_explanation.contains("mccboard launcher sync"));
+    assert!(core.doctor().unwrap().has_drift());
+    // The same item when asking about the one instance.
+    let drift = core.drift(&home.path().join(".claude-b")).unwrap();
+    assert!(drift.items.contains(item));
+
+    core.sync_launchers().unwrap();
+    let text = read(&bashrc(&home)).replace(".claude-b claude", ".claude-x claude");
+    fs::write(bashrc(&home), text).unwrap();
+    let stale = launcher_drift(&home, &core);
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].id, "launcher:claude-b");
+    assert_eq!(
+        stale[0].problem,
+        Problem::StaleLauncher {
+            found: Some(home.path().join(".claude-x"))
+        }
+    );
+    assert!(stale[0].explanation.contains(".claude-x"));
+
+    core.sync_launchers().unwrap();
+    assert!(launcher_drift(&home, &core).is_empty());
+}
+
+#[test]
+fn launchers_that_cant_be_read_leave_the_doctor_working() {
+    let (home, core, _env) = home_with_b(OsKind::Linux);
+    fs::write(bashrc(&home), format!("{BEGIN}\nalias claude-b='x'\n")).unwrap();
+
+    assert!(core.launchers().is_err());
+    let doctor = core.doctor().unwrap();
+    assert!(
+        doctor
+            .instances
+            .iter()
+            .flat_map(|i| &i.items)
+            .all(|item| !item.id.starts_with("launcher:"))
+    );
 }
 
 #[test]
