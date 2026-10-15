@@ -11,12 +11,15 @@
 mod account;
 mod claude_files;
 mod config;
+mod doctor;
 mod environment;
 mod error;
 mod instance;
+mod links;
 mod paths;
 mod registry;
 mod scan;
+mod sharing;
 #[cfg(feature = "testing")]
 pub mod testing;
 
@@ -24,12 +27,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
+pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{Environment, SystemEnvironment};
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
 pub use scan::Candidate;
+pub use sharing::{SharingAnswer, SharingQuestion};
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
 #[derive(Clone)]
@@ -110,5 +115,44 @@ impl Core {
     /// Whether `config_dir` is the primary instance's (Claude Code's default) or a linked one.
     pub fn kind_of(&self, config_dir: &Path) -> InstanceKind {
         InstanceKind::of(&self.home, config_dir)
+    }
+
+    /// The drift of every registered instance against the sharing table (ADR 0005), each
+    /// item explained with the repair that would fix it, plus the unknown items of the
+    /// primary instance waiting for an answer. Reads only; changes nothing.
+    pub fn doctor(&self) -> Result<Doctor, Error> {
+        doctor::doctor(&self.home, &self.paths().config_file())
+    }
+
+    /// The drift of the instance in `config_dir` (absolute, or starting with `~`), registered
+    /// or not. Reads only; changes nothing.
+    pub fn drift(&self, config_dir: &Path) -> Result<InstanceDrift, Error> {
+        let config_dir = paths::resolve(&self.home, config_dir)?;
+        let answers = config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .sharing;
+        Ok(doctor::drift(&self.home, &config_dir, &answers))
+    }
+
+    /// Unknown top-level items of the primary instance the user hasn't answered about yet:
+    /// "share `gsd-core`?". Each is asked once: see [`Core::answer_sharing`].
+    pub fn sharing_questions(&self) -> Result<Vec<SharingQuestion>, Error> {
+        let answers = config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .sharing;
+        Ok(sharing::questions(
+            &doctor::primary_dir(&self.home),
+            &answers,
+        ))
+    }
+
+    /// Remembers in `config.toml` whether the unknown item `item` (a name in the primary
+    /// instance's folder) is linked or kept private, for every instance. Answering again
+    /// changes the answer. Items in the sharing table take no answer.
+    pub fn answer_sharing(&self, item: &str, answer: SharingAnswer) -> Result<(), Error> {
+        sharing::validate_item(item)?;
+        let mut file = config::ConfigFile::load(&self.paths().config_file())?;
+        file.set_sharing(item, answer);
+        file.save()
     }
 }

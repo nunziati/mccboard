@@ -18,6 +18,9 @@
 //! [[instances]]
 //! path = "/home/me/.claude-b"   # absolute config directory
 //! account = "<account uuid>"    # the account it was registered with; absent when not logged in
+//!
+//! [sharing.items]               # answers about unknown items of the primary instance
+//! gsd-core = "link"             # "link" from the primary, or keep "private" to each instance
 //! ```
 
 use std::collections::BTreeMap;
@@ -29,6 +32,7 @@ use serde::Deserialize;
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::account::{self, Account, AccountUuid, Color};
+use crate::sharing::{self, SharingAnswer};
 use crate::{Error, paths};
 
 /// An instance as registered.
@@ -43,6 +47,8 @@ pub(crate) struct InstanceEntry {
 pub(crate) struct Config {
     pub accounts: Vec<Account>,
     pub instances: Vec<InstanceEntry>,
+    /// Answers about unknown items, by item name.
+    pub sharing: BTreeMap<String, SharingAnswer>,
 }
 
 impl Config {
@@ -219,6 +225,32 @@ impl ConfigFile {
         }
     }
 
+    /// Records the answer about an unknown item, keeping the comment after an existing one.
+    pub fn set_sharing(&mut self, item: &str, answer: SharingAnswer) {
+        let implicit_table = || {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(true);
+            Item::Table(table)
+        };
+        let sharing = self.doc.entry("sharing").or_insert_with(implicit_table);
+        let inline = sharing.is_inline_table();
+        let items = sharing
+            .as_table_like_mut()
+            .expect("validated: sharing is a table")
+            .entry("items")
+            .or_insert_with(|| {
+                if inline {
+                    Item::Value(Value::InlineTable(Default::default()))
+                } else {
+                    Item::Table(toml_edit::Table::new())
+                }
+            })
+            .as_table_like_mut()
+            .expect("validated: sharing.items is a table");
+        set_str(items, item, Some(answer.as_str()));
+        self.config.sharing.insert(item.to_owned(), answer);
+    }
+
     /// Forgets an instance; `false` if it wasn't registered.
     pub fn remove_instance(&mut self, config_dir: &Path) -> bool {
         let before = self.config.instances.len();
@@ -284,6 +316,14 @@ struct RawConfig {
     accounts: BTreeMap<String, RawAccount>,
     #[serde(default)]
     instances: Vec<RawInstance>,
+    #[serde(default)]
+    sharing: RawSharing,
+}
+
+#[derive(Deserialize, Default)]
+struct RawSharing {
+    #[serde(default)]
+    items: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -341,9 +381,20 @@ impl RawConfig {
                     .map(AccountUuid::new),
             });
         }
+        let mut sharing = BTreeMap::new();
+        for (item, answer) in self.sharing.items {
+            let at = format!("sharing.items.{item}");
+            sharing::check_item(&item).map_err(|e| format!("{at}: {e}"))?;
+            let answer = answer
+                .parse::<SharingAnswer>()
+                .map_err(|e| format!("{at}: {e}"))?;
+            sharing.insert(item, answer);
+        }
+
         Ok(Config {
             accounts,
             instances,
+            sharing,
         })
     }
 }

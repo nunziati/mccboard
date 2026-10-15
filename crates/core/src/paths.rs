@@ -46,6 +46,11 @@ pub(crate) fn resolve(home: &Path, path: &Path) -> Result<PathBuf, crate::Error>
     Ok(lexical(&expanded))
 }
 
+/// `path` with `.` and `..` resolved lexically and, on Windows, the `\\?\` prefix removed.
+pub(crate) fn normalize(path: &Path) -> PathBuf {
+    lexical(path)
+}
+
 fn lexical(path: &Path) -> PathBuf {
     use std::path::{Component, Prefix};
 

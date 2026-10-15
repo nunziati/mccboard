@@ -1,5 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
+mod doctor;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -58,6 +60,13 @@ enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
+    /// Show each instance's drift against the sharing table, explained, with what a repair
+    /// would do. Asks once about unknown items of the primary instance when run in a
+    /// terminal. Exits with 2 when there is drift.
+    Doctor(doctor::DoctorArgs),
+    /// Answer whether an unknown item of the primary instance is linked in every linked
+    /// instance or kept private. Remembered in config.toml.
+    Share(doctor::ShareArgs),
 }
 
 #[derive(Subcommand)]
@@ -87,6 +96,7 @@ enum AccountCommand {
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.is::<doctor::DriftFound>() => ExitCode::from(doctor::DRIFT_EXIT_CODE),
         Err(error) => {
             eprintln!("mccboard: error: {error:#}");
             ExitCode::FAILURE
@@ -96,12 +106,16 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let home = match cli.home {
-        Some(home) => home,
+        // Absolute, so the primary instance is recognised by its path.
+        Some(home) => std::path::absolute(&home)
+            .with_context(|| format!("cannot resolve {}", home.display()))?,
         None => std::env::home_dir().context("cannot find your home directory")?,
     };
     let core = Core::new(home, SystemEnvironment);
 
     match cli.command {
+        Command::Doctor(args) => doctor::doctor(&core, args)?,
+        Command::Share(args) => doctor::share(&core, args)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {

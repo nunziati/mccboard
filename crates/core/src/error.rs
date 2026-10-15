@@ -59,6 +59,12 @@ pub enum Error {
          and not \"claude\""
     )]
     InvalidLauncher { name: String },
+
+    #[error(
+        "{item:?} takes no sharing answer: give the name of an unknown item in the primary \
+         instance's folder, not one in the sharing table"
+    )]
+    InvalidSharingItem { item: String },
 }
 
 impl Error {
@@ -77,6 +83,7 @@ impl Error {
             Error::LabelTaken { .. } => "label_taken",
             Error::InvalidColor { .. } => "invalid_color",
             Error::InvalidLauncher { .. } => "invalid_launcher",
+            Error::InvalidSharingItem { .. } => "invalid_sharing_item",
         }
     }
 
