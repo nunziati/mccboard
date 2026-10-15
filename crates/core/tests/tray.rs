@@ -306,8 +306,15 @@ fn with_no_registered_instance_the_tray_says_so_and_offers_instances() {
 
 #[test]
 fn accounts_left_without_instances_still_mean_no_instances() {
-    let (home, core, _env) = home_with_a();
-    core.unregister(&home.primary().dir).unwrap();
+    // The primary instance is never removed, so the account is left by a linked one.
+    let home = TempHome::new();
+    let b = home.linked(".claude-b");
+    b.logged_in_as(UUID_A, "a@example.com")
+        .credentials_with_token(TOKEN_A, now() + hours(5));
+    let (core, _env) = home.core();
+    core.register(&b.dir).unwrap();
+    core.unregister(&b.dir).unwrap();
+    assert_eq!(core.registry().unwrap().accounts.len(), 1);
 
     let view = english(&core, &core.usage().unwrap());
 
