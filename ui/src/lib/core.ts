@@ -106,3 +106,67 @@ export function updateAccount(uuid: string, update: AccountUpdate): Promise<Acco
 export function onConfigChanged(onChange: () => void): Promise<UnlistenFn> {
   return listen('config-changed', onChange)
 }
+
+// The doctor: drift of each instance against the sharing table, and unknown items to answer.
+
+/** What is wrong with an item. Later checks add kinds; unknown ones show the core's text. */
+export type Problem =
+  | { kind: 'missing_link' }
+  | { kind: 'unlinked_skill'; skill: string }
+  | { kind: 'broken_link'; target: string | null }
+  | { kind: 'wrong_target'; target: string }
+  | { kind: 'link_chain'; target: string }
+  | { kind: 'not_a_link' }
+  | { kind: 'whole_folder_link'; target: string | null }
+  | { kind: 'duplicate_hooks' }
+
+/** What a repair would do. */
+export type Repair =
+  | { action: 'create_link'; target: string }
+  | { action: 'replace_link'; target: string }
+  | { action: 'backup_and_link'; target: string }
+  | { action: 'migrate_skills'; skills: string[] }
+  | { action: 'migrate_plugins' }
+  | { action: 'nothing' }
+
+export interface DriftItem {
+  /** Stable across runs: `<family>:<subject>`, e.g. `link:settings.json`. */
+  id: string
+  item: string
+  path: string
+  problem: Problem
+  repair: Repair
+  informational: boolean
+  /** The core's English wording, used when the UI has no translation for the kind. */
+  explanation: string
+  repair_explanation: string
+}
+
+export interface InstanceDrift {
+  config_dir: string
+  kind: InstanceKind
+  items: DriftItem[]
+  drift_count: number
+}
+
+export interface SharingQuestion {
+  item: string
+  path: string
+  is_dir: boolean
+}
+
+export interface Doctor {
+  instances: InstanceDrift[]
+  questions: SharingQuestion[]
+  drift_count: number
+}
+
+export type SharingAnswer = 'link' | 'private'
+
+export function doctor(): Promise<Doctor> {
+  return invoke<Doctor>('doctor')
+}
+
+export function answerSharing(item: string, answer: SharingAnswer): Promise<void> {
+  return invoke<void>('answer_sharing', { item, answer })
+}

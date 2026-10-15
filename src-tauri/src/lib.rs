@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mccboard_core::{
-    Account, AccountUpdate, AccountUuid, Candidate, Color, Core, Registration, Registry,
-    SystemEnvironment,
+    Account, AccountUpdate, AccountUuid, Candidate, Color, Core, Doctor, Registration, Registry,
+    SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -72,6 +72,20 @@ fn update_account(
     Ok(core.update_account(&AccountUuid::new(uuid), update)?)
 }
 
+#[tauri::command]
+fn doctor(core: tauri::State<'_, Core>) -> Result<Doctor, CommandError> {
+    Ok(core.doctor()?)
+}
+
+#[tauri::command]
+fn answer_sharing(
+    core: tauri::State<'_, Core>,
+    item: String,
+    answer: SharingAnswer,
+) -> Result<(), CommandError> {
+    Ok(core.answer_sharing(&item, answer)?)
+}
+
 /// Watches `~/.mccboard/` (the folder, since editors and the core save by renaming) and tells
 /// the windows when `config.toml` changes.
 fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error::Error>> {
@@ -111,7 +125,9 @@ pub fn run() {
             registry,
             register,
             unregister,
-            update_account
+            update_account,
+            doctor,
+            answer_sharing
         ])
         .setup(move |app| {
             // Without the watcher the window still works; it just won't see outside edits

@@ -1,8 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import AccountHeader from './lib/AccountHeader.svelte'
+  import DriftCount from './lib/DriftCount.svelte'
+  import DriftList from './lib/DriftList.svelte'
   import Login from './lib/Login.svelte'
+  import SharingQuestions from './lib/SharingQuestions.svelte'
   import {
+    answerSharing,
+    doctor as loadDoctor,
+    type Doctor,
+    type SharingAnswer,
     isCoreError,
     onConfigChanged,
     register,
@@ -34,6 +41,20 @@
   let notice = $state<string | null>(null)
   let busy = $state(false)
   let pathToRegister = $state('')
+  let doctor = $state<Doctor | null>(null)
+  /** Instances whose explained drift list is open, by config directory. */
+  let openDrift = $state<Record<string, boolean>>({})
+
+  function driftOf(instance: InstanceStatus) {
+    return doctor?.instances.find((d) => d.config_dir === instance.config_dir)
+  }
+
+  function answer(item: string, sharing: SharingAnswer) {
+    return act(async () => {
+      await answerSharing(item, sharing)
+      return t(sharing === 'link' ? 'notice.shared_link' : 'notice.shared_private', { item })
+    })
+  }
 
   let groups = $derived(registry ? groupByAccount(registry) : [])
   let proposals = $derived(candidates?.filter((c) => !c.registered) ?? [])
@@ -70,9 +91,14 @@
 
   async function reload() {
     try {
-      const [nextRegistry, nextCandidates] = await Promise.all([loadRegistry(), scan()])
+      const [nextRegistry, nextCandidates, nextDoctor] = await Promise.all([
+        loadRegistry(),
+        scan(),
+        loadDoctor(),
+      ])
       registry = nextRegistry
       candidates = nextCandidates
+      doctor = nextDoctor
       loadError = null
     } catch (e) {
       loadError = asCoreError(e)
@@ -173,6 +199,8 @@
       <p class="notice" role="status">{notice}</p>
     {/if}
 
+    <SharingQuestions questions={doctor?.questions ?? []} {busy} onanswer={answer} />
+
     <section>
       <h2>{t('section.registered')}</h2>
       {#if registry && groups.length === 0}
@@ -198,11 +226,13 @@
                   <th>{t('instances.column.path')}</th>
                   <th>{t('instances.column.kind')}</th>
                   <th>{t('instances.column.login')}</th>
+                  <th>{t('instances.column.drift')}</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {#each group.instances as instance (instance.config_dir)}
+                  {@const drift = driftOf(instance)}
                   <tr>
                     <td><code>{instance.config_dir}</code></td>
                     <td>{instance.kind === 'primary' ? t('kind.primary') : t('kind.linked')}</td>
@@ -220,6 +250,14 @@
                           {t('status.unrecorded', { account: observedName(instance) })}
                         </div>
                       {/if}
+                    </td>
+                    <td>
+                      <DriftCount
+                        {drift}
+                        open={!!openDrift[instance.config_dir]}
+                        ontoggle={() =>
+                          (openDrift[instance.config_dir] = !openDrift[instance.config_dir])}
+                      />
                     </td>
                     <td class="row-actions">
                       {#if instance.account_status.status === 'changed'}
@@ -240,6 +278,11 @@
                       </button>
                     </td>
                   </tr>
+                  {#if drift && openDrift[instance.config_dir] && drift.items.length > 0}
+                    <tr>
+                      <td colspan="5"><DriftList items={drift.items} /></td>
+                    </tr>
+                  {/if}
                 {/each}
               </tbody>
             </table>
