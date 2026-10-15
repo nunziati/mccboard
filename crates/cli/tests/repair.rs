@@ -101,6 +101,16 @@ fn an_unknown_item_or_a_missing_path_fails_with_1() {
     assert_eq!(no_path.status.code(), Some(1), "{}", text(&no_path));
 }
 
+/// Copies the executable `from` to `to` in a child `cp`, never in this process. While this
+/// process holds `to` open for writing, a test on another thread that spawns a process forks
+/// a copy of that descriptor, which lives until the child execs; running `to` in that window
+/// fails with ETXTBSY ("Text file busy"). `cp`'s descriptor never enters this process.
+#[cfg(target_os = "linux")]
+fn copy_executable(from: &Path, to: &Path) {
+    let status = Command::new("cp").arg(from).arg(to).status().unwrap();
+    assert!(status.success(), "cp {} {}", from.display(), to.display());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn repair_refuses_while_claude_code_runs_in_the_instance() {
@@ -108,7 +118,7 @@ fn repair_refuses_while_claude_code_runs_in_the_instance() {
     let b = home.path().join(".claude-b");
     let bin = home.path().join("bin").join("claude");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    fs::copy("/bin/sleep", &bin).unwrap();
+    copy_executable(Path::new("/bin/sleep"), &bin);
     let mut claude = Command::new(&bin)
         .arg("30")
         .env("CLAUDE_CONFIG_DIR", &b)

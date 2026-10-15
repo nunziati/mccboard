@@ -9,6 +9,15 @@ use std::process::{Child, Command};
 
 use mccboard_core::{Core, Environment, ProcessConfigDir, SystemEnvironment};
 
+/// Copies the executable `from` to `to` in a child `cp`, never in this process. While this
+/// process holds `to` open for writing, a test on another thread that spawns a process forks
+/// a copy of that descriptor, which lives until the child execs; running `to` in that window
+/// fails with ETXTBSY ("Text file busy"). `cp`'s descriptor never enters this process.
+fn copy_executable(from: &Path, to: &Path) {
+    let status = Command::new("cp").arg(from).arg(to).status().unwrap();
+    assert!(status.success(), "cp {} {}", from.display(), to.display());
+}
+
 /// A stand-in Claude Code process: `sleep` copied to a file named `claude`.
 struct FakeClaude(Child);
 
@@ -47,7 +56,7 @@ fn claude_code_processes_are_listed_with_their_config_directory() {
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join("bin").join("claude");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    fs::copy("/bin/sleep", &bin).unwrap();
+    copy_executable(Path::new("/bin/sleep"), &bin);
     let b = home.path().join(".claude-b");
     fs::create_dir_all(&b).unwrap();
     fs::create_dir_all(home.path().join(".claude")).unwrap();

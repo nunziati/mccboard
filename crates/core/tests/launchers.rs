@@ -588,11 +588,21 @@ fn the_alias_passes_every_argument_through_in_bash() {
     let fake_bin = home.path().join("fake-bin");
     fs::create_dir(&fake_bin).unwrap();
     let claude = fake_bin.join("claude");
+    // Written under another name and copied by a child `cp`: a descriptor this process held
+    // open on `claude` itself could leak into a child forked by a test on another thread, and
+    // bash would then fail to run `claude` with ETXTBSY ("Text file busy").
+    let source = home.path().join("claude.sh");
     fs::write(
-        &claude,
+        &source,
         "#!/bin/sh\nprintf 'dir=%s\\n' \"$CLAUDE_CONFIG_DIR\"\nfor a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n",
     )
     .unwrap();
+    let copied = Command::new("cp")
+        .arg(&source)
+        .arg(&claude)
+        .status()
+        .unwrap();
+    assert!(copied.success());
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
     let name = &core.launchers().unwrap().instances[0].name;
 
