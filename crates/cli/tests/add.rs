@@ -113,3 +113,37 @@ fn without_a_terminal_add_sets_up_and_says_how_to_log_in() {
         text(&login)
     );
 }
+
+/// An expired token is no logout: adding again opens no login, and says Claude Code renews it.
+#[test]
+fn adding_again_over_an_expired_token_says_claude_code_renews_it() {
+    let home = fixture_home();
+    let out = mccboard(home.path(), &["add", "B", "--no-login"]);
+    assert!(out.status.success(), "{}", text(&out));
+    // Logged in as some account, with a token past its expiry.
+    let config = home.path().join(".claude-b/.claude.json");
+    let mut global: serde_json::Value = fs::read(&config)
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or_else(|_| serde_json::json!({}));
+    global["oauthAccount"] = serde_json::json!({
+        "accountUuid": "22222222-2222-4222-8222-222222222222",
+        "emailAddress": "b@example.com",
+    });
+    fs::write(&config, global.to_string()).unwrap();
+    fs::write(
+        home.path().join(".claude-b/.credentials.json"),
+        r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-FIXTURE-cli","expiresAt":1000}}"#,
+    )
+    .unwrap();
+
+    let again = mccboard(home.path(), &["add", "B"]);
+
+    assert!(again.status.success(), "{}", text(&again));
+    assert!(text(&again).contains("token expired"), "{}", text(&again));
+    assert!(
+        text(&again).contains("Claude Code renews it"),
+        "{}",
+        text(&again)
+    );
+    assert!(!text(&again).contains("FIXTURE"), "{}", text(&again));
+}
