@@ -3,7 +3,8 @@
 //! The child gets the instance's `CLAUDE_CONFIG_DIR` and loses the variables that would
 //! override the instance's own login. It runs in the config directory, so no project's
 //! settings get in the way, with no input: a command that would ask something fails instead
-//! of waiting. Its output is kept in memory only.
+//! of waiting. Its output is kept in memory only, and on Windows it opens no console window
+//! ([`crate::background`]).
 //!
 //! The login is the exception: it is interactive, so it runs in a terminal the user sees (the
 //! CLI's own, or a new window), and mccboard reads nothing it prints.
@@ -30,7 +31,7 @@ const LOGIN_OVERRIDES: &[&str] = &[
 const TIMEOUT: Duration = Duration::from_secs(600);
 
 pub(crate) fn run(invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
-    let mut command = Command::new("claude");
+    let mut command = crate::background::command("claude");
     command
         .args(&invocation.args)
         .env("CLAUDE_CONFIG_DIR", &invocation.config_dir)
@@ -233,8 +234,8 @@ const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 #[cfg(windows)]
 fn new_window(claude: &Path, _window: Console) -> Command {
     use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
 
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let mut command = Command::new(claude);
     command.args(LOGIN_ARGS).creation_flags(CREATE_NEW_CONSOLE);
     command

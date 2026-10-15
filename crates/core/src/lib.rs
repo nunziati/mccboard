@@ -11,6 +11,7 @@
 mod account;
 mod add;
 mod alignment;
+mod background;
 mod backup;
 mod claude_cli;
 mod claude_files;
