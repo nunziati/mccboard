@@ -22,6 +22,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p mccboard-cli -- scan          # or: scan --json
+cargo run -p mccboard-cli -- register ~/.claude   # then: list, unregister, account set
 
 # UI (Svelte + TypeScript)
 cd ui
