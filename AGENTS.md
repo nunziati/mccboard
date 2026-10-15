@@ -8,19 +8,21 @@
 
 Personal project of Giacomo.
 
-**Before any architectural change, or when a decision's "why" is unclear**, read the management repo `nunziati/claude-account-switcher-project` (written in Italian):
-- `CONTEXT.md`: decisions D005 onward;
-- `docs/2026-10-14-centro-di-controllo.md`: architecture and phases;
-- `research/`: existing usage widgets, claude-swap, multi-claude, Claude Code internals.
+- **Vocabulary:** `CONTEXT.md` is the glossary. Use its terms in code, issues and UI (account, instance, primary/linked instance, drift, usage reading…).
+- **Why things are as they are:** `docs/adr/`. Read the relevant ADR before changing architecture, data sources, credential handling or how instances share files.
+- **Project history and plans** live in the management repo `nunziati/claude-account-switcher-project` (Italian): useful for background, never needed to build.
 
 ## Architecture
-- **One app, on the main machine** (today Windows). Everything mccboard runs lives in that app.
-- **Remote machines are optional.** The app reaches them through the system `ssh`, running small scripts it carries along, so a remote holds only what guided setup created.
-- **Multi-account is optional.** Domain model:
-  - *account*: usage belongs to the account, across machines;
-  - *instance*: account + config directory + machine;
-  - *desktop profile*: a Claude desktop app instance with its own `--user-data-dir`.
-- **Usage data**: session data first (statusline captured per instance), else `GET https://api.anthropic.com/api/oauth/usage`, once per account.
+- **One app on the main machine**; remote machines optional, over agentless SSH (ADR 0001).
+- **Cargo workspace** (ADR 0004):
+  - `crates/core`: domain, data sources, setup operations, token rules. No Tauri dependency.
+  - `crates/cli`: command-line front end over the core.
+  - `src-tauri`: thin binding of the core to Tauri commands, tray and windows.
+  - `ui/`: Svelte.
+  
+  New behavior goes in the core first, then gets a CLI command and a UI.
+- **Usage**: sessions first, endpoint second, once per account (ADR 0003).
+- **Sharing between instances**: linked, aligned and private items (ADR 0005); Developer Mode for file links on Windows (ADR 0006).
 
 ## Token rules: hard guardrails
 Credentials are **read-only** to mccboard. Claude Code owns them.
@@ -36,13 +38,16 @@ Credentials are **read-only** to mccboard. Claude Code owns them.
 6. mccboard's own files live in `~/.mccboard/`. `~/.claude` belongs to Claude Code.
 
 ## Stack
-- **Tauri v2.** Core in Rust. OS-specific code (taskbar docking, Windows taskbar IDs, icons) lives in per-OS modules.
+- **Tauri v2.** Core in Rust. OS-specific code (taskbar docking, Windows taskbar IDs, icons, launchers) lives in per-OS modules.
 - **UI:** Svelte + TypeScript.
+- **Platforms:** Windows is the target. Core, CLI and app also build and pass tests on Linux. macOS is out of scope for now.
 
 ## Conventions
 - **Repo language:** English for code, comments, README and docs.
 - **App language:** configurable, Italian and English. Every UI string goes through i18n.
-- **Settings:** persisted in `~/.mccboard/`. They survive closing the dashboard and restarting the app.
+- **Settings:** `~/.mccboard/config.toml` (hand-editable: machines, accounts, instances, desktop profiles, preferences). Data mccboard writes on its own goes under `~/.mccboard/state/`. Instances exist for mccboard only once registered; scanning only proposes them.
+- **Tests:** test-first on the core. File operations are tested on real temporary directories, not mocks.
+- **Workflow:** one issue, one branch, one PR. CI (Ubuntu + Windows) must be green, then Giacomo merges.
 
 ## Agent skills
 
