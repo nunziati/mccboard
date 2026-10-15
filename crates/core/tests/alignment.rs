@@ -286,7 +286,6 @@ fn a_global_config_key_that_differs_is_drift_with_both_values() {
             value: json!("auto"),
         }
     );
-    assert!(!diff_tool.informational);
     assert!(
         diff_tool.explanation.contains("\"auto\""),
         "{}",

@@ -177,7 +177,6 @@ fn missing_links_and_unlinked_skills_are_drift_with_a_link_to_create() {
             target: p.join("settings.json")
         }
     );
-    assert!(!settings.informational);
     assert!(settings.explanation.contains("settings.json"));
     assert!(settings.repair_explanation.contains("link"));
 
@@ -439,7 +438,8 @@ fn private_items_are_never_drift() {
 }
 
 #[test]
-fn duplicate_hooks_are_reported_for_information_only() {
+fn hooks_in_the_primary_settings_are_not_drift() {
+    // Claude Code doesn't run them twice in a linked instance (field test, 2026-10).
     let home = TempHome::new();
     let p = full_primary(&home);
     write(
@@ -452,19 +452,9 @@ fn duplicate_hooks_are_reported_for_information_only() {
     core.register(&b).unwrap();
 
     let doctor = core.doctor().unwrap();
-    let drift = doctor.instances.iter().find(|i| i.config_dir == b).unwrap();
 
-    assert_eq!(ids(drift), vec!["hooks:duplicates"]);
-    let hooks = item(drift, "hooks:duplicates");
-    assert_eq!(hooks.problem, Problem::DuplicateHooks);
-    assert_eq!(hooks.repair, Repair::Nothing);
-    assert!(hooks.informational);
-    assert!(hooks.explanation.contains("80791"));
-    assert_eq!(drift.drift_count, 0);
+    assert!(doctor.instances.iter().all(|i| i.items.is_empty()));
     assert!(!doctor.has_drift());
-    // The primary instance itself isn't affected.
-    let primary = doctor.instances.iter().find(|i| i.config_dir == p).unwrap();
-    assert_eq!(primary.items, vec![]);
 }
 
 #[test]
