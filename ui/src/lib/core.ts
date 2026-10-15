@@ -168,6 +168,10 @@ export type Problem =
   | { kind: 'duplicate_hooks' }
   | { kind: 'missing_launcher' }
   | { kind: 'stale_launcher'; found: string | null }
+  /** A Global config key of `.claude.json` differs: the primary's value and this instance's (null when unset). */
+  | { kind: 'misaligned_key'; key: string; primary: unknown; instance: unknown | null }
+  | { kind: 'missing_marketplace'; marketplace: string }
+  | { kind: 'missing_plugin'; plugin: string }
 
 /** What a repair would do. */
 export type Repair =
@@ -177,6 +181,10 @@ export type Repair =
   | { action: 'migrate_skills'; skills: string[] }
   | { action: 'migrate_plugins' }
   | { action: 'sync_launchers' }
+  | { action: 'align_key'; key: string; value: unknown }
+  /** `source` is null when mccboard can't tell how to add the marketplace. */
+  | { action: 'add_marketplace'; marketplace: string; source: string | null }
+  | { action: 'install_plugin'; plugin: string }
   | { action: 'nothing' }
 
 export interface DriftItem {
