@@ -244,7 +244,8 @@ fn is_aligned(repair: &Repair) -> bool {
     )
 }
 
-fn needs_file_link(repair: &Repair) -> bool {
+/// Whether a repair makes a file link (Developer Mode on Windows, ADR 0006).
+pub(crate) fn needs_file_link(repair: &Repair) -> bool {
     match repair {
         Repair::CreateLink { target }
         | Repair::ReplaceLink { target }

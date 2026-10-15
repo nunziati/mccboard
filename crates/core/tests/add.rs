@@ -513,6 +513,22 @@ fn without_developer_mode_nothing_is_made_and_a_rerun_completes() {
 }
 
 #[test]
+fn developer_mode_is_needed_only_while_a_file_link_is_missing() {
+    let f = fixture();
+    f.env.login_as(UUID_B, "b@example.com");
+    f.core.add(&add("B")).unwrap();
+    f.env.set_developer_mode(false);
+
+    // Every file link is in place: adding again needs none.
+    f.core.add(&add("B")).unwrap();
+
+    // One is missing again: it needs Developer Mode.
+    fs::remove_file(f.path(".claude-b/settings.json")).unwrap();
+    let error = f.core.add(&add("B")).unwrap_err();
+    assert!(matches!(error, Error::DeveloperModeOff), "{error}");
+}
+
+#[test]
 fn a_running_session_in_an_existing_folder_stops_the_add_before_anything_changes() {
     let f = fixture();
     let dir = f.path(".claude-b");

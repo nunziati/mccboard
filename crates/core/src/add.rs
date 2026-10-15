@@ -4,8 +4,9 @@
 //! 1. checks, before anything changes: the folder isn't the primary instance's (or a link to
 //!    it), a file, a protected folder ([`crate::folder_guard`]: one holding the home, the
 //!    primary or mccboard's files, one inside them, or a link) or in the Claude desktop app's
-//!    data folder; file links can be made (Developer Mode on
-//!    Windows) when the primary has files to link; no Claude Code session uses the folder;
+//!    data folder; it doesn't belong to an account with another label; file links can be
+//!    made (Developer Mode on Windows) when one is missing (the doctor's link drift); no
+//!    Claude Code session uses the folder;
 //! 2. creates the folder (`~/.claude-<label>` by default);
 //! 3. registers it, without an account until it is logged in: this creates its launcher;
 //! 4. repairs its drift: the sharing table's links and the aligned items (Global config
@@ -32,11 +33,9 @@ use crate::account::{self, Account, AccountUuid};
 use crate::claude_files;
 use crate::config::ConfigFile;
 use crate::instance::InstanceKind;
-use crate::links::{self, Entry};
-use crate::sharing::{self, Sharing};
 use crate::{
     Core, Error, InstanceStatus, LoginInvocation, LoginState, LoginTerminal, OsKind, RepairReport,
-    SharingQuestion, desktop_app, doctor, folder_guard, paths, session_guard,
+    SharingQuestion, desktop_app, doctor, folder_guard, paths, repair, session_guard,
 };
 
 /// What to add: a linked instance for the account the user calls `label`.
@@ -277,7 +276,7 @@ impl Core {
                 path: config_dir.to_path_buf(),
             });
         }
-        if !self.env.file_links_allowed() && self.primary_has_files_to_link()? {
+        if !self.env.file_links_allowed() && self.needs_file_links(config_dir)? {
             return Err(Error::DeveloperModeOff);
         }
         if config_dir.is_dir() {
@@ -286,23 +285,17 @@ impl Core {
         Ok(())
     }
 
-    /// Whether linking the primary's items needs a file link: a linked item of the sharing
-    /// table, or an unknown item answered "link", that is a file.
-    fn primary_has_files_to_link(&self) -> Result<bool, Error> {
+    /// Whether linking the instance in `config_dir` needs a file link: one of the doctor's
+    /// link drift items whose repair makes a file link. Before the folder exists every linked
+    /// item of the primary is missing there, so every file among them counts.
+    fn needs_file_links(&self, config_dir: &Path) -> Result<bool, Error> {
         let answers = ConfigFile::load(&self.paths().config_file())?
             .config
             .sharing;
         let primary = doctor::primary_dir(&self.home);
-        let answered = answers
-            .keys()
-            .filter(|name| sharing::classify(name, &answers) == Sharing::Linked);
-        Ok(sharing::LINKED_ITEMS
+        Ok(doctor::link_drift(&primary, config_dir, &answers)
             .iter()
-            .map(|name| (*name).to_owned())
-            .chain(answered.cloned())
-            .map(|name| primary.join(name))
-            .filter(|item| links::inspect(item) != Entry::Missing)
-            .any(|item| links::is_file_link(&links::real_item(&item))))
+            .any(|item| repair::needs_file_link(&item.repair)))
     }
 
     /// Opens the login through the port: a new window on Windows, the current terminal

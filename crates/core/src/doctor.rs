@@ -245,8 +245,8 @@ fn launcher_drift(status: &LauncherStatus, config_dir: &Path) -> Option<DriftIte
 }
 
 /// Linked items, then each personal skill, then whole-folder links of `skills/` and
-/// `plugins/`.
-fn link_drift(
+/// `plugins/`. A `linked` folder that doesn't exist yet misses every link.
+pub(crate) fn link_drift(
     primary: &Path,
     linked: &Path,
     answers: &BTreeMap<String, SharingAnswer>,
