@@ -51,7 +51,7 @@ pub(crate) enum TokenRead {
         token: AccessToken,
         expires_at: Timestamp,
     },
-    /// A token past its `expiresAt`: "login expired", and no call is made with it.
+    /// A token past its `expiresAt`: "token expired", and no call is made with it.
     Expired,
     /// No credentials file, no claude.ai login in it, or an emptied token (logged out).
     Missing,

@@ -16,10 +16,6 @@
     onrepair?: (id: string) => void
   } = $props()
 
-  function repairable(item: DriftItem): boolean {
-    return !item.informational && item.repair.action !== 'nothing'
-  }
-
   function translated(key: string, vars: Record<string, string>, fallback: string): string {
     return key in en ? t(key as Key, vars) : fallback
   }
@@ -109,15 +105,12 @@
 
 <ul class="drift">
   {#each items as item (item.id)}
-    <li class:info={item.informational}>
-      <div>
-        {#if item.informational}<span class="tag">{t('drift.informational')}</span>{/if}
-        {problemText(item)}
-      </div>
+    <li>
+      <div>{problemText(item)}</div>
       <div class="muted small">{t('drift.repair', { repair: repairText(item) })}</div>
       <div class="muted small">
         <code>{item.id}</code>
-        {#if onrepair && repairable(item)}
+        {#if onrepair}
           <button class="small" disabled={busy} onclick={() => onrepair(item.id)}>
             {t('action.repair_item')}
           </button>
@@ -136,18 +129,8 @@
     margin: 0.35rem 0;
     color: var(--warn);
   }
-  li.info {
-    color: inherit;
-  }
   li > div:first-child {
     color: inherit;
-  }
-  .tag {
-    font-size: 0.8em;
-    padding: 0 0.35rem;
-    margin-right: 0.3rem;
-    border: 1px solid var(--border);
-    border-radius: 0.3rem;
   }
   .muted {
     color: var(--muted);

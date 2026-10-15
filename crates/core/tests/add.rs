@@ -430,8 +430,19 @@ fn adding_again_opens_the_login_when_the_credentials_say_it_is_needed() {
     f.env.login_as(UUID_B, "b@example.com");
     f.core.add(&add("B")).unwrap();
 
-    // The token expired, perhaps for good: like the app's "Log in", adding again logs in.
+    // An expired token is no logout: Claude Code renews it the next time it runs, so, like
+    // the app's "Log in", adding again doesn't open the login.
     f.env.advance(jiff::SignedDuration::from_hours(9));
+    let again = f.core.add(&add("B")).unwrap();
+    assert_eq!(again.login.run, LoginRun::AlreadyLoggedIn);
+    assert_eq!(f.env.login_invocations().len(), 1);
+
+    // Tokens Claude Code emptied after a dead refresh token are a logout.
+    fs::write(
+        f.path(".claude-b/.credentials.json"),
+        r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#,
+    )
+    .unwrap();
     let again = f.core.add(&add("B")).unwrap();
     assert_eq!(again.login.run, LoginRun::Ran { exit_code: Some(0) });
 

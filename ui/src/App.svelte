@@ -127,9 +127,12 @@
     })
   }
 
-  /** "Log in" is offered where the login is missing, expired or can't be told. */
+  /**
+   * "Log in" is offered where the login is missing or can't be told. Not for an expired
+   * token: the credentials are still there, and Claude Code renews it when it runs.
+   */
   function needsLogin(instance: InstanceStatus): boolean {
-    return instance.login.state !== 'logged_in'
+    return instance.login.state === 'not_logged_in' || instance.login.state === 'unknown'
   }
 
   function repairInstance(path: string, item?: string) {

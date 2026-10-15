@@ -171,10 +171,6 @@ fn run(
             })?]
         }
     };
-    let selected: Vec<&DriftItem> = selected
-        .into_iter()
-        .filter(|i| !i.informational && i.repair != Repair::Nothing)
-        .collect();
     if selected.is_empty() || drift.kind == InstanceKind::Primary {
         return Ok(RepairReport {
             config_dir,
@@ -256,8 +252,7 @@ pub(crate) fn needs_file_link(repair: &Repair) -> bool {
         | Repair::SyncLaunchers
         | Repair::AlignKey { .. }
         | Repair::AddMarketplace { .. }
-        | Repair::InstallPlugin { .. }
-        | Repair::Nothing => false,
+        | Repair::InstallPlugin { .. } => false,
     }
 }
 
@@ -334,7 +329,6 @@ fn apply(
             plugins.install(plugin)?;
             Ok(None)
         }
-        Repair::Nothing => Ok(None),
     }
 }
 

@@ -177,7 +177,6 @@ fn missing_links_and_unlinked_skills_are_drift_with_a_link_to_create() {
             target: p.join("settings.json")
         }
     );
-    assert!(!settings.informational);
     assert!(settings.explanation.contains("settings.json"));
     assert!(settings.repair_explanation.contains("link"));
 
@@ -439,7 +438,8 @@ fn private_items_are_never_drift() {
 }
 
 #[test]
-fn duplicate_hooks_are_reported_for_information_only() {
+fn hooks_in_the_primary_settings_are_not_drift() {
+    // Claude Code doesn't run them twice in a linked instance (field test, 2026-10).
     let home = TempHome::new();
     let p = full_primary(&home);
     write(
@@ -452,19 +452,9 @@ fn duplicate_hooks_are_reported_for_information_only() {
     core.register(&b).unwrap();
 
     let doctor = core.doctor().unwrap();
-    let drift = doctor.instances.iter().find(|i| i.config_dir == b).unwrap();
 
-    assert_eq!(ids(drift), vec!["hooks:duplicates"]);
-    let hooks = item(drift, "hooks:duplicates");
-    assert_eq!(hooks.problem, Problem::DuplicateHooks);
-    assert_eq!(hooks.repair, Repair::Nothing);
-    assert!(hooks.informational);
-    assert!(hooks.explanation.contains("80791"));
-    assert_eq!(drift.drift_count, 0);
+    assert!(doctor.instances.iter().all(|i| i.items.is_empty()));
     assert!(!doctor.has_drift());
-    // The primary instance itself isn't affected.
-    let primary = doctor.instances.iter().find(|i| i.config_dir == p).unwrap();
-    assert_eq!(primary.items, vec![]);
 }
 
 #[test]
@@ -530,6 +520,170 @@ fn unknown_items_in_the_primary_are_asked_about() {
     assert_eq!(core.doctor().unwrap().questions, questions);
     // Asking writes nothing.
     assert_eq!(home.config_text(), None);
+}
+
+#[test]
+fn claude_codes_runtime_items_are_never_asked_about() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    // Folders and files Claude Code keeps per config directory (#17), and the daemon's
+    // auth state.
+    for name in [
+        "agent-memory-local",
+        "agent-memory-project",
+        "api-dumps",
+        "bridge-spawn",
+        "downloads",
+        "file-transfers",
+        "local-settings",
+        "mcp-skill-archives",
+        "project-settings",
+        "remote",
+        "scratch",
+        "storage-v2",
+        "systemd",
+    ] {
+        mkdir(p.join(name));
+    }
+    for name in [
+        "active-time.json",
+        "antproto.json",
+        "computer-use.lock",
+        "server-sessions.json",
+        "server.lock",
+        "daemon-auth-cooldown",
+        "daemon-auth-status.json",
+        "daemon-auth-foo",
+    ] {
+        write(p.join(name), "{}");
+    }
+    // The prompt `/loop` reads: written by the user, so still asked about. So are the
+    // user's own files that merely start like the daemon's.
+    write(p.join("loop.md"), "Check the deploy.\n");
+    write(p.join("daemon-start.sh"), "echo start\n");
+    mkdir(p.join("daemon-tools"));
+    write(p.join("daemonic"), "x");
+    let b = safe_linked(&home, ".claude-b", &p);
+    let (core, _env) = home.core();
+    core.register(&b).unwrap();
+
+    let asked: Vec<_> = core
+        .sharing_questions()
+        .unwrap()
+        .into_iter()
+        .map(|q| q.item)
+        .collect();
+
+    assert_eq!(
+        asked,
+        vec!["daemon-start.sh", "daemon-tools", "daemonic", "loop.md"]
+    );
+    assert_eq!(drift_of(&core, &b).items, vec![]);
+}
+
+/// Answers field configs hold from before #17, when Claude Code's runtime items were still
+/// asked about: a Windows laptop's and a Linux mini PC's.
+const FIELD_ANSWERS: &str = "\
+[sharing.items]
+daemon-auth-cooldown = \"private\"
+\"daemon-auth-status.json\" = \"private\"
+downloads = \"private\"
+remote = \"private\"
+\"statusline-command.ps1\" = \"link\"
+\"statusline-command.sh\" = \"link\"
+";
+
+#[test]
+fn stored_answers_for_items_now_known_private_are_ignored() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    for name in [
+        "daemon-auth-cooldown",
+        "daemon-auth-status.json",
+        "statusline-command.ps1",
+        "statusline-command.sh",
+    ] {
+        write(p.join(name), "x");
+    }
+    for name in ["downloads", "remote", "scratch"] {
+        mkdir(p.join(name));
+    }
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(
+        p.join("statusline-command.ps1"),
+        b.join("statusline-command.ps1"),
+    );
+    link(
+        p.join("statusline-command.sh"),
+        b.join("statusline-command.sh"),
+    );
+    mkdir(b.join("downloads"));
+    // A stored "link" for a name now known private is ignored too: the table wins.
+    let text = format!("{FIELD_ANSWERS}scratch = \"link\"\n");
+    home.write_config(&text);
+    let (core, _env) = home.core();
+    core.register(&b).unwrap();
+
+    let doctor = core.doctor().unwrap();
+
+    assert_eq!(doctor.questions, vec![]);
+    assert_eq!(doctor.instances.len(), 1);
+    assert_eq!(doctor.instances[0].items, vec![]);
+    // The answers still in force keep working: an unlinked statusline script is drift.
+    fs::remove_file(b.join("statusline-command.sh")).unwrap();
+    assert_eq!(
+        ids(&drift_of(&core, &b)),
+        vec!["link:statusline-command.sh"]
+    );
+    // Names now in the table take no new answer, and the stored lines stay as written.
+    assert!(
+        core.answer_sharing("downloads", SharingAnswer::Link)
+            .is_err()
+    );
+    core.answer_sharing("gsd-core", SharingAnswer::Private)
+        .unwrap();
+    let saved = home.config_text().unwrap();
+    assert!(saved.starts_with(&text), "{saved}");
+}
+
+#[test]
+fn a_stored_answer_for_a_linked_item_is_still_reported() {
+    let home = TempHome::new();
+    full_primary(&home);
+    home.write_config("[sharing.items]\n\"settings.json\" = \"private\"\n");
+    let (core, _env) = home.core();
+
+    let error = core.doctor().unwrap_err();
+
+    assert!(matches!(error, Error::ConfigCorrupt { .. }), "{error}");
+    assert!(error.detail().unwrap().contains("settings.json"));
+}
+
+#[test]
+fn a_stored_answer_for_an_item_now_known_private_must_still_be_well_formed() {
+    // A bad answer, and keys that match a private pattern but are no plain name.
+    for (text, culprit) in [
+        ("[sharing.items]\ndownloads = \"maybe\"\n", "downloads"),
+        ("[sharing.items]\n\"x/y.lock\" = \"private\"\n", "x/y.lock"),
+        (
+            "[sharing.items]\n\"daemon-auth-/../a\" = \"private\"\n",
+            "daemon-auth-/../a",
+        ),
+    ] {
+        let home = TempHome::new();
+        full_primary(&home);
+        home.write_config(text);
+        let (core, _env) = home.core();
+
+        let error = core.doctor().unwrap_err();
+
+        assert!(
+            matches!(error, Error::ConfigCorrupt { .. }),
+            "{text}: {error}"
+        );
+        assert!(error.detail().unwrap().contains(culprit), "{text}: {error}");
+        assert_eq!(home.config_text().unwrap(), text);
+    }
 }
 
 #[test]

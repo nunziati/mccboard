@@ -437,7 +437,6 @@ fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
     assert_eq!(item.path, bashrc(&home));
     assert_eq!(item.problem, Problem::MissingLauncher);
     assert_eq!(item.repair, Repair::SyncLaunchers);
-    assert!(!item.informational);
     assert!(item.explanation.contains("claude-b"));
     assert!(item.repair_explanation.contains("mccboard launcher sync"));
     assert!(core.doctor().unwrap().has_drift());

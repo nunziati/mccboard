@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use clap::Args;
 use mccboard_core::{
-    AddReport, AddRequest, Core, LoginReport, LoginRun, LoginTerminal, LoginWarning, RepairOutcome,
+    AddReport, AddRequest, Core, LoginReport, LoginRun, LoginState, LoginTerminal, LoginWarning,
+    RepairOutcome,
 };
 
 #[derive(Args)]
@@ -147,7 +148,13 @@ fn print_login(report: &LoginReport) {
     let dir = report.config_dir.display();
     match report.run {
         LoginRun::Ran { .. } => {}
-        LoginRun::AlreadyLoggedIn => println!("{dir} is logged in already."),
+        LoginRun::AlreadyLoggedIn => match report.instance.observation.login {
+            LoginState::Expired { .. } => println!(
+                "{dir} is logged in already, token expired (Claude Code renews it the next \
+                 time it runs)."
+            ),
+            _ => println!("{dir} is logged in already."),
+        },
         LoginRun::NotRequested => {
             println!("Set up and registered. Log in with `mccboard login {dir}`.")
         }

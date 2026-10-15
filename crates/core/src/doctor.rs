@@ -10,7 +10,6 @@
 //! see [`crate::alignment`].
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -29,12 +28,12 @@ pub struct Doctor {
     pub instances: Vec<InstanceDrift>,
     /// Unknown items of the primary instance waiting for an answer ("share `gsd-core`?").
     pub questions: Vec<SharingQuestion>,
-    /// Drift items across every instance, informational ones left out.
+    /// Drift items across every instance.
     pub drift_count: usize,
 }
 
 impl Doctor {
-    /// Whether any instance has drift (informational items don't count).
+    /// Whether any instance has drift.
     pub fn has_drift(&self) -> bool {
         self.drift_count > 0
     }
@@ -45,15 +44,15 @@ impl Doctor {
 pub struct InstanceDrift {
     pub config_dir: PathBuf,
     pub kind: InstanceKind,
-    /// Every drift item, informational ones included, in a stable order.
+    /// Every drift item, in a stable order.
     pub items: Vec<DriftItem>,
-    /// Items that are drift, informational ones left out.
+    /// How many drift items there are.
     pub drift_count: usize,
 }
 
 impl InstanceDrift {
     fn new(config_dir: PathBuf, kind: InstanceKind, items: Vec<DriftItem>) -> Self {
-        let drift_count = items.iter().filter(|i| !i.informational).count();
+        let drift_count = items.len();
         Self {
             config_dir,
             kind,
@@ -78,8 +77,6 @@ pub struct DriftItem {
     pub problem: Problem,
     /// What a repair would do.
     pub repair: Repair,
-    /// Reported for information only: not counted as drift, nothing to repair.
-    pub informational: bool,
     /// The problem in plain words (English; the app translates from `problem`).
     pub explanation: String,
     /// The repair in plain words (English; the app translates from `repair`).
@@ -104,9 +101,6 @@ pub enum Problem {
     NotALink,
     /// `skills/` or `plugins/` linked as a whole folder: needs migrating to the safe layout.
     WholeFolderLink { target: Option<PathBuf> },
-    /// The primary's `settings.json` has hooks, which may run twice in a linked instance
-    /// (anthropics/claude-code#80791). Informational.
-    DuplicateHooks,
     /// The instance has no launcher (`claude-b`) to start Claude Code in it.
     MissingLauncher,
     /// The instance's launcher isn't what mccboard writes: it starts Claude Code in another
@@ -162,8 +156,6 @@ pub enum Repair {
     /// Run `claude plugin install <plugin> --scope user` in this instance, adding its
     /// marketplace first when missing.
     InstallPlugin { plugin: String },
-    /// Nothing to repair.
-    Nothing,
 }
 
 /// `launchers` is the launchers' status, or `None` when it couldn't be read: the doctor then
@@ -214,7 +206,6 @@ pub(crate) fn drift(
         Vec::new()
     } else {
         let mut items = link_drift(&primary, config_dir, answers);
-        items.extend(duplicate_hooks(&primary, config_dir));
         items.extend(alignment::drift(home, &primary, config_dir));
         items
     };
@@ -369,27 +360,6 @@ fn whole_folder(item: &str, at: &Path, target: Option<PathBuf>, repair: Repair) 
     DriftItem::new(format!("migrate:{item}"), item, at, problem, repair)
 }
 
-/// The primary's `settings.json` with hooks also loads as project settings when Claude Code
-/// runs from the home folder (anthropics/claude-code#80791), so in a linked instance sharing
-/// it those hooks may run twice.
-fn duplicate_hooks(primary: &Path, linked: &Path) -> Option<DriftItem> {
-    let settings = primary.join("settings.json");
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(settings).ok()?).ok()?;
-    let has_hooks = value
-        .get("hooks")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|hooks| !hooks.is_empty());
-    has_hooks.then(|| {
-        DriftItem::new(
-            "hooks:duplicates".to_owned(),
-            "settings.json",
-            &linked.join("settings.json"),
-            Problem::DuplicateHooks,
-            Repair::Nothing,
-        )
-    })
-}
-
 impl DriftItem {
     pub(crate) fn new(
         id: String,
@@ -398,7 +368,6 @@ impl DriftItem {
         problem: Problem,
         repair: Repair,
     ) -> Self {
-        let informational = matches!(problem, Problem::DuplicateHooks);
         Self {
             explanation: explain(item, &problem),
             repair_explanation: explain_repair(item, &repair),
@@ -407,7 +376,6 @@ impl DriftItem {
             path: path.to_path_buf(),
             problem,
             repair,
-            informational,
         }
     }
 }
@@ -461,11 +429,6 @@ fn explain(item: &str, problem: &Problem) -> String {
                 )
             }
         }
-        Problem::DuplicateHooks => "The primary instance's settings.json defines hooks. When \
-             Claude Code runs in this instance from your home folder, it also loads that file \
-             as project settings, so those hooks may run twice \
-             (anthropics/claude-code#80791)."
-            .to_owned(),
         Problem::MissingLauncher => format!(
             "The launcher {item} is missing, so no command starts Claude Code in this instance."
         ),
@@ -546,7 +509,6 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
             "Install it with `claude plugin install {plugin}`, run in this instance (adding its \
              marketplace first if needed)."
         ),
-        Repair::Nothing => "Nothing to repair: this is for your information.".to_owned(),
     }
 }
 
