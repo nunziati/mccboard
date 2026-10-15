@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mccboard_core::{
-    Account, AccountUpdate, AccountUuid, Candidate, ClaudeProcess, Color, Core, Doctor,
-    LauncherStatus, LauncherSync, Registration, Registry, Removal, RemoveLevel, RepairReport,
-    SharingAnswer, SystemEnvironment,
+    Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
+    Core, Doctor, LauncherStatus, LauncherSync, LoginReport, Registration, Registry, Removal,
+    RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -145,6 +145,46 @@ fn repair(
     Ok(core.repair(&path, item.as_deref())?)
 }
 
+/// The folder a linked instance for `label` gets by default (`~/.claude-<label>`).
+#[tauri::command]
+fn add_folder(core: tauri::State<'_, Core>, label: String) -> Result<PathBuf, CommandError> {
+    Ok(core.add_folder(&label)?)
+}
+
+/// Adds a linked instance for the account labelled `label`, in `path` or the default folder,
+/// then opens Claude Code's login in a new terminal window and waits for it. It blocks until
+/// the user is done, so it runs off the main thread.
+#[tauri::command]
+async fn add_instance(
+    core: tauri::State<'_, Core>,
+    label: String,
+    path: Option<PathBuf>,
+) -> Result<AddReport, CommandError> {
+    let core = core.inner().clone();
+    let request = AddRequest {
+        config_dir: path,
+        ..AddRequest::new(label)
+    };
+    tauri::async_runtime::spawn_blocking(move || core.add(&request))
+        .await
+        .map_err(|_| CommandError::unknown())?
+        .map_err(CommandError::from)
+}
+
+/// Opens Claude Code's login in the registered instance in `path` and waits for it, off the
+/// main thread; then records the account it logged in with.
+#[tauri::command]
+async fn login_instance(
+    core: tauri::State<'_, Core>,
+    path: PathBuf,
+) -> Result<LoginReport, CommandError> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.login(&path))
+        .await
+        .map_err(|_| CommandError::unknown())?
+        .map_err(CommandError::from)
+}
+
 /// Watches `~/.mccboard/` (the folder, since editors and the core save by renaming) and tells
 /// the windows when `config.toml` changes.
 fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error::Error>> {
@@ -194,6 +234,9 @@ pub fn run() {
             launchers,
             sync_launchers,
             repair,
+            add_folder,
+            add_instance,
+            login_instance,
             settings::language,
             settings::set_language
         ])

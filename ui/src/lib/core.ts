@@ -278,3 +278,57 @@ export interface Removal {
 export function removeInstance(path: string, deleteFolder: boolean): Promise<Removal> {
   return invoke<Removal>('remove_instance', { path, deleteFolder })
 }
+
+// Adding a linked instance, with login, and logging an instance in on its own.
+
+/** Whether the login ran: only the account observed afterwards says whether it worked. */
+export type LoginRun =
+  | { run: 'ran'; exit_code: number | null }
+  | { run: 'already_logged_in' }
+  | { run: 'not_requested' }
+
+export type LoginWarning = {
+  kind: 'account_has_other_instances'
+  account: string
+  label: string | null
+  instances: string[]
+}
+
+export interface LoginReport {
+  config_dir: string
+  run: LoginRun
+  /** The instance as registered now. */
+  instance: InstanceStatus
+  /** The account it is logged in with; null when none can be observed. */
+  account: Account | null
+  new_account: boolean
+  warnings: LoginWarning[]
+}
+
+export interface AddReport {
+  config_dir: string
+  created: boolean
+  /** The links and alignment made, as a repair of the new instance. */
+  setup: RepairReport
+  /** Unknown items of the primary instance still unanswered: not linked. */
+  sharing_questions: SharingQuestion[]
+  login: LoginReport
+}
+
+/** The folder a linked instance for `label` gets by default (`~/.claude-<label>`). */
+export function addFolder(label: string): Promise<string> {
+  return invoke<string>('add_folder', { label })
+}
+
+/**
+ * Adds a linked instance for the account labelled `label`, in `path` or the default folder,
+ * and opens Claude Code's login. Resolves once the login has ended.
+ */
+export function addInstance(label: string, path: string | null): Promise<AddReport> {
+  return invoke<AddReport>('add_instance', { label, path })
+}
+
+/** Opens Claude Code's login in the registered instance in `path`; resolves once it ended. */
+export function loginInstance(path: string): Promise<LoginReport> {
+  return invoke<LoginReport>('login_instance', { path })
+}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import AccountHeader from './lib/AccountHeader.svelte'
+  import AddInstance from './lib/AddInstance.svelte'
   import DriftCount from './lib/DriftCount.svelte'
   import DriftList from './lib/DriftList.svelte'
   import LauncherCell from './lib/LauncherCell.svelte'
@@ -10,7 +11,10 @@
   import RepairResult from './lib/RepairResult.svelte'
   import SharingQuestions from './lib/SharingQuestions.svelte'
   import {
+    addInstance,
     answerSharing,
+    loginInstance,
+    type LoginReport,
     doctor as loadDoctor,
     type Doctor,
     type SharingAnswer,
@@ -67,6 +71,66 @@
   let openDrift = $state<Record<string, boolean>>({})
   /** What the last repair did, until dismissed. */
   let repairReport = $state<RepairReport | null>(null)
+  /** Shown while Claude Code's login is open, until it ends. */
+  let waiting = $state<string | null>(null)
+
+  /** What a login did, in words: the account it registered the instance under, and warnings. */
+  function loginNotice(report: LoginReport): string {
+    const path = report.config_dir
+    const notices: string[] = []
+    if (report.account) {
+      const key = report.new_account ? 'notice.logged_in_new' : 'notice.logged_in'
+      notices.push(t(key, { path, label: report.account.label }))
+    } else if (report.run.run === 'not_requested') {
+      notices.push(t('notice.not_requested', { path }))
+    } else {
+      notices.push(t('notice.not_logged_in', { path }))
+    }
+    for (const warning of report.warnings) {
+      notices.push(
+        t('warning.account_has_other_instances', {
+          label: warning.label ?? warning.account,
+          paths: warning.instances.join(', '),
+        }),
+      )
+    }
+    return notices.join(' ')
+  }
+
+  async function add(label: string, path: string | null): Promise<boolean> {
+    repairReport = null
+    waiting = t('login.waiting')
+    let added = false
+    await act(async () => {
+      try {
+        const report = await addInstance(label, path)
+        added = true
+        if (report.setup.items.some((i) => i.outcome.outcome === 'failed')) repairReport = report.setup
+        const notices = [t('notice.added', { path: report.config_dir }), loginNotice(report.login)]
+        if (report.sharing_questions.length > 0) notices.push(t('notice.add_questions'))
+        return notices.join(' ')
+      } finally {
+        waiting = null
+      }
+    })
+    return added
+  }
+
+  function logIn(path: string) {
+    waiting = t('login.waiting')
+    return act(async () => {
+      try {
+        return loginNotice(await loginInstance(path))
+      } finally {
+        waiting = null
+      }
+    })
+  }
+
+  /** "Log in" is offered where the login is missing, expired or can't be told. */
+  function needsLogin(instance: InstanceStatus): boolean {
+    return instance.login.state !== 'logged_in'
+  }
 
   function repairInstance(path: string, item?: string) {
     repairReport = null
@@ -291,6 +355,9 @@
     {#if actionError}
       {@render failure(actionError, () => (actionError = null))}
     {/if}
+    {#if waiting}
+      <p class="waiting" role="status">{waiting}</p>
+    {/if}
     {#if notice}
       <p class="notice" role="status">{notice}</p>
     {/if}
@@ -361,6 +428,15 @@
                     </td>
                     <td><LauncherCell kind={instance.kind} launcher={launcherOf(instance)} /></td>
                     <td class="row-actions">
+                      {#if needsLogin(instance)}
+                        <button
+                          disabled={busy}
+                          title={t('action.login_hint')}
+                          onclick={() => logIn(instance.config_dir)}
+                        >
+                          {t('action.login')}
+                        </button>
+                      {/if}
                       {#if instance.kind === 'linked' && drift && drift.drift_count > 0}
                         <button
                           disabled={busy}
@@ -415,6 +491,8 @@
       {:else if launcherStatus}
         <Launchers status={launcherStatus} {busy} onsync={fixLaunchers} />
       {/if}
+
+      <AddInstance {busy} onadd={add} />
 
       <form class="register-path" onsubmit={registerTyped}>
         <label for="register-path">{t('register_path.label')}</label>
@@ -562,6 +640,10 @@
   }
   .notice {
     color: var(--ok);
+    margin-bottom: 0.75rem;
+  }
+  .waiting {
+    color: var(--muted);
     margin-bottom: 0.75rem;
   }
   .error {
