@@ -70,11 +70,24 @@ jobs:
           key: bundle
       - run: npm ci
         working-directory: ui
-      # The Tauri CLI only searches downwards for src-tauri, so point it there from ui/.
-      - run: npm run tauri build
+      # The Tauri CLI only searches downwards for src-tauri, so point it there from ui/. The extra
+      # config builds the launcher shim and ships it next to the app (ADR 0007).
+      - run: npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json
         working-directory: ui
         env:
           TAURI_APP_PATH: ${{ github.workspace }}/src-tauri
+      - name: Check that the installer puts the launcher shim next to the app
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
+          $out = Join-Path $env:RUNNER_TEMP 'msi-content'
+          $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$out`"")
+          if ($install.ExitCode -ne 0) { throw "msiexec /a failed with $($install.ExitCode)" }
+          Get-ChildItem -Recurse -File $out | ForEach-Object { $_.FullName }
+          $shim = Get-ChildItem -Recurse -File $out -Filter 'mccboard-shim.exe' | Select-Object -First 1
+          if (-not $shim) { throw 'mccboard-shim.exe is not in the installer' }
+          $app = Get-ChildItem -Path $shim.DirectoryName -File -Filter '*.exe' | Where-Object Name -ne 'mccboard-shim.exe'
+          if (-not $app) { throw "no app program next to $($shim.FullName)" }
       - uses: actions/upload-artifact@v7
         with:
           name: mccboard-windows
