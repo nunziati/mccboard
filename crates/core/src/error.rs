@@ -144,6 +144,31 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("{label:?} gives no folder name; choose the instance's folder yourself")]
+    NoDefaultFolder { label: String },
+
+    #[error("cannot create {}: {source}", path.display())]
+    FolderNotCreated {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "Claude Code (claude) isn't installed or isn't on the PATH; install it, then try again"
+    )]
+    ClaudeNotInstalled,
+
+    #[error(
+        "logging in to {} needs a terminal: run `mccboard login {}` in one",
+        path.display(),
+        path.display()
+    )]
+    LoginNeedsTerminal { path: PathBuf },
+
+    #[error("cannot open Claude Code's login for {}: {reason}", path.display())]
+    LoginNotOpened { path: PathBuf, reason: String },
 }
 
 fn describe_processes(processes: &[ClaudeProcess]) -> String {
@@ -185,6 +210,11 @@ impl Error {
             Error::PrimaryInstance { .. } => "primary_instance",
             Error::FolderNotDeletable { .. } => "folder_not_deletable",
             Error::FolderNotDeleted { .. } => "folder_not_deleted",
+            Error::NoDefaultFolder { .. } => "no_default_folder",
+            Error::FolderNotCreated { .. } => "folder_not_created",
+            Error::ClaudeNotInstalled => "claude_not_installed",
+            Error::LoginNeedsTerminal { .. } => "login_needs_terminal",
+            Error::LoginNotOpened { .. } => "login_not_opened",
         }
     }
 
@@ -206,7 +236,10 @@ impl Error {
             | Error::DriftItemNotFound { path, .. }
             | Error::PrimaryInstance { path }
             | Error::FolderNotDeletable { path }
-            | Error::FolderNotDeleted { path, .. } => Some(path),
+            | Error::FolderNotDeleted { path, .. }
+            | Error::FolderNotCreated { path, .. }
+            | Error::LoginNeedsTerminal { path }
+            | Error::LoginNotOpened { path, .. } => Some(path),
             _ => None,
         }
     }
@@ -221,10 +254,12 @@ impl Error {
     }
 
     /// Where `config.toml` is wrong (line and reason, from mccboard's own settings), for
-    /// [`Error::ConfigCorrupt`].
+    /// [`Error::ConfigCorrupt`]; why the login couldn't open (an OS error), for
+    /// [`Error::LoginNotOpened`].
     pub fn detail(&self) -> Option<&str> {
         match self {
             Error::ConfigCorrupt { detail, .. } => Some(detail),
+            Error::LoginNotOpened { reason, .. } => Some(reason),
             _ => None,
         }
     }

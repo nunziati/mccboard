@@ -9,6 +9,7 @@
 //! anything this crate returns, prints or persists.
 
 mod account;
+mod add;
 mod alignment;
 mod backup;
 mod claude_cli;
@@ -41,10 +42,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
+pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
-    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, OsKind, SystemEnvironment,
+    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
+    LoginTerminal, OsKind, SystemEnvironment,
 };
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};

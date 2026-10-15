@@ -7,9 +7,16 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use jiff::{SignedDuration, Timestamp};
 
+use serde_json::{Map, Value, json};
+
 use crate::{
-    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment, OsKind,
+    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment,
+    InstanceKind, LoginExit, LoginInvocation, OsKind,
 };
+
+/// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
+/// mccboard produces may contain it.
+pub const FAKE_LOGIN_TOKEN: &str = "sk-ant-oat01-FAKE-LOGIN-TOKEN-never-shown-by-mccboard";
 
 /// A scriptable [`Environment`] for tests. Clones share state, so a test can keep a handle
 /// after giving one to [`crate::Core::new`] and keep steering it.
@@ -36,6 +43,8 @@ struct State {
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
     claude_handler: ClaudeHandler,
+    login_invocations: Vec<LoginInvocation>,
+    login_handler: LoginHandler,
 }
 
 type HandlerFn = dyn Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Sync;
@@ -43,6 +52,18 @@ type HandlerFn = dyn Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Syn
 /// What a fake `claude` command does; by default it succeeds and prints nothing.
 #[derive(Clone)]
 struct ClaudeHandler(Arc<HandlerFn>);
+
+type LoginFn = dyn Fn(&LoginInvocation) -> io::Result<LoginExit> + Send + Sync;
+
+/// What a fake login does; by default the user closes it without logging in.
+#[derive(Clone)]
+struct LoginHandler(Arc<LoginFn>);
+
+impl std::fmt::Debug for LoginHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LoginHandler")
+    }
+}
 
 impl std::fmt::Debug for ClaudeHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,6 +89,8 @@ impl FakeEnvironment {
                 developer_mode: true,
                 claude_invocations: Vec::new(),
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
+                login_invocations: Vec::new(),
+                login_handler: LoginHandler(Arc::new(|_| Ok(LoginExit { exit_code: Some(1) }))),
             })),
         }
     }
@@ -161,6 +184,69 @@ impl FakeEnvironment {
         self.state().claude_invocations.clone()
     }
 
+    /// Scripts what the login does: `handler` gets each login and returns how it ended, or an
+    /// error as when it can't be opened. It may write files, playing Claude Code. Without
+    /// it, the user closes the login without logging in (exit code 1, nothing written).
+    pub fn on_login(
+        &self,
+        handler: impl Fn(&LoginInvocation) -> io::Result<LoginExit> + Send + Sync + 'static,
+    ) {
+        self.state().login_handler = LoginHandler(Arc::new(handler));
+    }
+
+    /// Makes every login succeed as the account `uuid`, as Claude Code's does: it adds
+    /// `oauthAccount` to the instance's `.claude.json`, keeping every other key, and writes
+    /// `.credentials.json` with [`FAKE_LOGIN_TOKEN`], valid for 8 hours from the fake clock.
+    pub fn login_as(&self, uuid: &str, email: &str) {
+        let (uuid, email) = (uuid.to_owned(), email.to_owned());
+        // Weak, so the fake's state doesn't own itself through the handler.
+        let state = Arc::downgrade(&self.state);
+        self.on_login(move |login| {
+            let global_config = match login.kind {
+                InstanceKind::Linked => login.config_dir.join(".claude.json"),
+                InstanceKind::Primary => login
+                    .config_dir
+                    .parent()
+                    .unwrap_or(&login.config_dir)
+                    .join(".claude.json"),
+            };
+            let mut config = std::fs::read_to_string(&global_config)
+                .ok()
+                .and_then(|text| serde_json::from_str::<Map<String, Value>>(&text).ok())
+                .unwrap_or_default();
+            config.insert(
+                "oauthAccount".to_owned(),
+                json!({
+                    "accountUuid": uuid,
+                    "emailAddress": email,
+                    "organizationUuid": "00000000-0000-4000-8000-0000000000aa",
+                }),
+            );
+            std::fs::write(&global_config, Value::Object(config).to_string())?;
+            let now = state
+                .upgrade()
+                .map(|state| FakeEnvironment { state }.now())
+                .unwrap_or_else(Timestamp::now);
+            let expires_at = now + SignedDuration::from_hours(8);
+            let credentials = json!({"claudeAiOauth": {
+                "accessToken": FAKE_LOGIN_TOKEN,
+                "refreshToken": FAKE_LOGIN_TOKEN,
+                "expiresAt": expires_at.as_millisecond(),
+                "scopes": ["user:inference", "user:profile"],
+            }});
+            std::fs::write(
+                login.config_dir.join(".credentials.json"),
+                credentials.to_string(),
+            )?;
+            Ok(LoginExit { exit_code: Some(0) })
+        });
+    }
+
+    /// Every login opened so far, in order.
+    pub fn login_invocations(&self) -> Vec<LoginInvocation> {
+        self.state().login_invocations.clone()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
@@ -235,5 +321,14 @@ impl Environment for FakeEnvironment {
         };
         // Not under the lock: the handler may steer the fake itself.
         (handler.0)(invocation)
+    }
+
+    fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit> {
+        let handler = {
+            let mut state = self.state();
+            state.login_invocations.push(login.clone());
+            state.login_handler.clone()
+        };
+        (handler.0)(login)
     }
 }

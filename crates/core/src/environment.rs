@@ -5,6 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::AccessToken;
+use crate::instance::InstanceKind;
 use crate::session_guard::ClaudeProcess;
 
 /// The port through which the core reaches everything outside the filesystem.
@@ -50,6 +51,43 @@ pub trait Environment: Send + Sync {
     /// lives outside its folder. Errors when `claude` can't be started (`NotFound` when it
     /// isn't installed) or doesn't finish in time.
     fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun>;
+
+    /// Opens Claude Code's official login (`claude auth login`) in the instance
+    /// `login.config_dir`, in the terminal `login.terminal` names, and waits for it to end.
+    /// The user logs in in the browser; Claude Code writes the credentials and `.claude.json`
+    /// itself, and mccboard never sees them. For a linked instance `CLAUDE_CONFIG_DIR` is set
+    /// to its folder; for the primary instance it is unset and the home is the folder's
+    /// parent. The variables that would override the instance's own login are removed.
+    /// Errors when `claude` can't be started (`NotFound` when it isn't installed), and with
+    /// `Unsupported` when there is no such terminal (the current one, from an app).
+    fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
+}
+
+/// Claude Code's login, to open in an instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LoginInvocation {
+    /// The instance's config directory.
+    pub config_dir: PathBuf,
+    /// Primary (Claude Code's default folder, no `CLAUDE_CONFIG_DIR`) or linked.
+    pub kind: InstanceKind,
+    pub terminal: LoginTerminal,
+}
+
+/// Where the login runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginTerminal {
+    /// A new terminal window (Windows), which closes when the login ends.
+    NewWindow,
+    /// The terminal mccboard's CLI runs in (Linux).
+    CurrentTerminal,
+}
+
+/// How the login ended. The core doesn't trust it: it observes the instance afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct LoginExit {
+    /// The exit code; `None` when it was ended by a signal or can't be known.
+    pub exit_code: Option<i32>,
 }
 
 /// A `claude` command to run in an instance.
@@ -185,5 +223,9 @@ impl Environment for SystemEnvironment {
 
     fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
         crate::claude_cli::run(invocation)
+    }
+
+    fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit> {
+        crate::claude_cli::login(login)
     }
 }
