@@ -65,6 +65,9 @@ pub enum Error {
          instance's folder, not one in the sharing table"
     )]
     InvalidSharingItem { item: String },
+
+    #[error("{language:?} is not a language mccboard speaks: use \"en\" or \"it\"")]
+    InvalidLanguage { language: String },
 }
 
 impl Error {
@@ -84,6 +87,7 @@ impl Error {
             Error::InvalidColor { .. } => "invalid_color",
             Error::InvalidLauncher { .. } => "invalid_launcher",
             Error::InvalidSharingItem { .. } => "invalid_sharing_item",
+            Error::InvalidLanguage { .. } => "invalid_language",
         }
     }
 

@@ -15,6 +15,7 @@ mod doctor;
 mod environment;
 mod error;
 mod instance;
+mod language;
 mod links;
 mod paths;
 mod registry;
@@ -22,6 +23,7 @@ mod scan;
 mod sharing;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod tray;
 mod usage;
 
 use std::path::{Path, PathBuf};
@@ -32,10 +34,15 @@ pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{EndpointReply, Environment, SystemEnvironment};
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
+pub use language::Language;
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
 pub use scan::Candidate;
 pub use sharing::{SharingAnswer, SharingQuestion};
+pub use tray::{
+    LanguageChoice, TOOLTIP_MAX_UTF16, TrayAccount, TrayIcon, TrayMenu, TrayView, TrayWindow,
+    WindowName,
+};
 pub use usage::{
     AccessToken, AccountUsage, ModelWindow, UsageFailure, UsageReading, UsageReport, UsageSource,
     UsageStatus, UsageWarning, UsageWindow,
@@ -188,5 +195,41 @@ impl Core {
             &self.usage_lock,
             true,
         )
+    }
+
+    /// The app's language as chosen in `config.toml`; `None` when the user hasn't chosen one
+    /// (front ends then follow the system: see [`Language::from_locale`]).
+    pub fn language(&self) -> Result<Option<Language>, Error> {
+        Ok(config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .language)
+    }
+
+    /// Saves the app's language in `config.toml`, keeping everything else in the file.
+    pub fn set_language(&self, language: Language) -> Result<(), Error> {
+        let mut file = config::ConfigFile::load(&self.paths().config_file())?;
+        file.set_language(language);
+        file.save()
+    }
+
+    /// What the tray shows for `report` (from [`Core::usage`] or [`Core::refresh_usage`]),
+    /// as of now: the worst account's percentage and color for the icon, a tooltip that fits
+    /// the Windows tray, every account's windows as menu lines, and "no instances" when none
+    /// is registered. Texts are in `language`, with reset times shown in `tz`. Windows whose
+    /// reset passed since the report read as zero. Reads `config.toml`; calls nothing.
+    pub fn tray_view(
+        &self,
+        report: &UsageReport,
+        language: Language,
+        tz: &jiff::tz::TimeZone,
+    ) -> Result<TrayView, Error> {
+        let config = config::ConfigFile::load(&self.paths().config_file())?.config;
+        Ok(tray::view(
+            report,
+            config.instances.is_empty(),
+            language,
+            tz,
+            self.env.now(),
+        ))
     }
 }
