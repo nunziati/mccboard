@@ -104,7 +104,8 @@ pub enum Problem {
     /// The instance has no launcher (`claude-b`) to start Claude Code in it.
     MissingLauncher,
     /// The instance's launcher isn't what mccboard writes: it starts Claude Code in another
-    /// folder (`found`, when readable), was edited by hand, or is incomplete.
+    /// folder (`found`, when readable), was edited by hand, is incomplete, or comes from an
+    /// earlier version.
     StaleLauncher { found: Option<PathBuf> },
     /// A Global config key of `.claude.json` differs from the primary's: `primary` is the
     /// primary's value, `instance` this instance's (`None` when it doesn't set it).
@@ -436,8 +437,8 @@ fn explain(item: &str, problem: &Problem) -> String {
             found.display()
         ),
         Problem::StaleLauncher { found: None } => format!(
-            "The launcher {item} isn't the one mccboard writes: it was edited by hand or is \
-             incomplete."
+            "The launcher {item} isn't the one mccboard writes: it was edited by hand, is \
+             incomplete or comes from an earlier version."
         ),
         Problem::MisalignedKey {
             key,

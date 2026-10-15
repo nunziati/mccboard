@@ -17,6 +17,7 @@ Personal project of Giacomo.
 - **Cargo workspace** (ADR 0004):
   - `crates/core`: domain, data sources, setup operations, token rules. No Tauri dependency.
   - `crates/cli`: command-line front end over the core.
+  - `crates/shim`: the small program a Windows launcher is a copy of (ADR 0007). std only, plus the Windows console API.
   - `src-tauri`: thin binding of the core to Tauri commands, tray and windows.
   - `ui/`: Svelte.
   

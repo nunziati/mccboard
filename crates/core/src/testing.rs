@@ -18,11 +18,14 @@ use crate::{
 /// mccboard produces may contain it.
 pub const FAKE_LOGIN_TOKEN: &str = "sk-ant-oat01-FAKE-LOGIN-TOKEN-never-shown-by-mccboard";
 
+/// The launcher shim [`FakeEnvironment`] ships unless told otherwise.
+pub const FAKE_LAUNCHER_SHIM: &[u8] = b"MZ fake mccboard-shim.exe, version 1";
+
 /// A scriptable [`Environment`] for tests. Clones share state, so a test can keep a handle
 /// after giving one to [`crate::Core::new`] and keep steering it.
 ///
 /// It starts as a Linux machine with no login shell and an empty user PATH, whatever OS the
-/// tests run on.
+/// tests run on, shipping [`FAKE_LAUNCHER_SHIM`] as the launcher shim.
 #[derive(Debug, Clone)]
 pub struct FakeEnvironment {
     state: Arc<Mutex<State>>,
@@ -39,6 +42,7 @@ struct State {
     user_path: Vec<PathBuf>,
     user_path_additions: usize,
     user_path_fails: bool,
+    launcher_shim: Option<Vec<u8>>,
     processes: Vec<ClaudeProcess>,
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
@@ -85,6 +89,7 @@ impl FakeEnvironment {
                 user_path: Vec::new(),
                 user_path_additions: 0,
                 user_path_fails: false,
+                launcher_shim: Some(FAKE_LAUNCHER_SHIM.to_vec()),
                 processes: Vec::new(),
                 developer_mode: true,
                 claude_invocations: Vec::new(),
@@ -161,6 +166,12 @@ impl FakeEnvironment {
     /// Starts one more Claude Code process.
     pub fn add_process(&self, process: ClaudeProcess) {
         self.state().processes.push(process);
+    }
+
+    /// Sets the launcher shim mccboard ships: other bytes, as after an upgrade of mccboard, or
+    /// `None` when it isn't there.
+    pub fn set_launcher_shim(&self, shim: Option<&[u8]>) {
+        self.state().launcher_shim = shim.map(<[u8]>::to_vec);
     }
 
     /// Turns Windows Developer Mode on or off: off, file links can't be created.
@@ -303,6 +314,15 @@ impl Environment for FakeEnvironment {
         state.user_path.push(dir.to_path_buf());
         state.user_path_additions += 1;
         Ok(())
+    }
+
+    fn launcher_shim(&self) -> io::Result<Vec<u8>> {
+        self.state().launcher_shim.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "fake: mccboard-shim.exe isn't there",
+            )
+        })
     }
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {

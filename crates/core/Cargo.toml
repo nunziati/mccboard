@@ -12,6 +12,8 @@ testing = []
 
 [dependencies]
 jiff.workspace = true
+# The launcher sidecar's format, shared with the shim that reads it (Windows launchers).
+mccboard-shim.workspace = true
 serde.workspace = true
 # `preserve_order`: aligning keys of `.claude.json` keeps every other key where it was.
 serde_json = { workspace = true, features = ["preserve_order"] }

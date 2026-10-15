@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/cli", "src-tauri"]
+members = ["crates/core", "crates/cli", "crates/shim", "src-tauri"]
 resolver = "3"
 
 [workspace.package]
@@ -10,6 +10,7 @@ repository = "https://github.com/nunziati/mccboard"
 
 [workspace.dependencies]
 mccboard-core = { path = "crates/core" }
+mccboard-shim = { path = "crates/shim" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 jiff = { version = "0.2", features = ["serde"] }
