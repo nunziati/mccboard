@@ -55,8 +55,28 @@ fn block_aliases(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The alias line mccboard writes, quoted by its documented rule: the directory goes in
+/// single quotes unless it is made only of letters, digits and `_@%+=:,./-`, then the whole
+/// value does. Temporary folders can need quoting (`C:\Users\RUNNER~1\…` on Windows CI).
 fn alias(name: &str, dir: &Path) -> String {
-    format!("alias {name}='CLAUDE_CONFIG_DIR={} claude'", dir.display())
+    let dir = dir.display().to_string();
+    let plain = dir
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    let dir = if plain { dir } else { shell_quote(&dir) };
+    format!(
+        "alias {name}={}",
+        shell_quote(&format!("CLAUDE_CONFIG_DIR={dir} claude"))
+    )
+}
+
+/// Points the alias of `.claude-b` at `.claude-x` by hand, however its path is quoted.
+fn point_the_alias_elsewhere(home: &TempHome) {
+    let b = home.path().join(".claude-b").display().to_string();
+    let x = home.path().join(".claude-x").display().to_string();
+    let text = read(&bashrc(home));
+    assert!(text.contains(&b), "{text}");
+    fs::write(bashrc(home), text.replace(&b, &x)).unwrap();
 }
 
 fn uuid(s: &str) -> AccountUuid {
@@ -279,6 +299,41 @@ fn a_path_with_spaces_and_quotes_is_quoted_for_the_shell() {
     );
 }
 
+/// A quoted path reads back as written, and an alias pointing at another quoted path is
+/// stale and says where it points: the reader undoes exactly the writer's quoting.
+#[test]
+fn a_quoted_path_round_trips_and_a_different_one_is_stale() {
+    let home = TempHome::new();
+    // `~` as in Windows short names (`RUNNER~1`); a backslash too where a name can hold one.
+    let name = if cfg!(unix) { r"b~1\x" } else { "b~1" };
+    let odd = home.linked(name);
+    let (core, _env) = home.core();
+    core.register(&odd.dir).unwrap();
+    assert_eq!(
+        core.launchers().unwrap().instances[0].state,
+        LauncherState::Ok
+    );
+
+    let elsewhere = home.path().join("x~2 y");
+    let text = read(&bashrc(&home));
+    let written = odd.dir.display().to_string();
+    assert!(text.contains(&format!("'\\''{written}'\\''")), "{text}");
+    fs::write(
+        bashrc(&home),
+        text.replace(&written, &elsewhere.display().to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        core.launchers().unwrap().instances[0].state,
+        LauncherState::Stale {
+            found: Some(elsewhere)
+        }
+    );
+    core.sync_launchers().unwrap();
+    assert_eq!(core.launchers().unwrap().drift_count(), 0);
+}
+
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -338,8 +393,7 @@ fn a_deleted_block_reads_as_missing_and_sync_restores_it() {
 #[test]
 fn an_alias_pointing_elsewhere_is_stale_and_says_where_it_points() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    let text = read(&bashrc(&home)).replace(".claude-b claude", ".claude-x claude");
-    fs::write(bashrc(&home), text).unwrap();
+    point_the_alias_elsewhere(&home);
 
     let status = core.launchers().unwrap();
 
@@ -392,8 +446,7 @@ fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
     assert!(drift.items.contains(item));
 
     core.sync_launchers().unwrap();
-    let text = read(&bashrc(&home)).replace(".claude-b claude", ".claude-x claude");
-    fs::write(bashrc(&home), text).unwrap();
+    point_the_alias_elsewhere(&home);
     let stale = launcher_drift(&home, &core);
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].id, "launcher:claude-b");
@@ -469,8 +522,7 @@ fn repair_fixes_a_launcher_item_by_syncing_the_launchers() {
 fn repairing_every_item_of_an_instance_fixes_its_stale_launcher_too() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
     let b = home.path().join(".claude-b");
-    let text = read(&bashrc(&home)).replace(".claude-b claude", ".claude-x claude");
-    fs::write(bashrc(&home), text).unwrap();
+    point_the_alias_elsewhere(&home);
 
     let report = core.repair(&b, None).unwrap();
 
