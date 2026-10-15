@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mccboard_core::{
-    Account, AccountUpdate, AccountUuid, Candidate, Color, Core, Doctor, Registration, Registry,
-    SharingAnswer, SystemEnvironment,
+    Account, AccountUpdate, AccountUuid, Candidate, ClaudeProcess, Color, Core, Doctor,
+    Registration, Registry, RepairReport, SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -23,6 +23,8 @@ struct CommandError {
     code: &'static str,
     path: Option<PathBuf>,
     detail: Option<String>,
+    /// For `instance_in_use`: the Claude Code processes using the instance.
+    processes: Option<Vec<ClaudeProcess>>,
 }
 
 impl From<mccboard_core::Error> for CommandError {
@@ -31,6 +33,7 @@ impl From<mccboard_core::Error> for CommandError {
             code: error.code(),
             path: error.path().map(PathBuf::from),
             detail: error.detail().map(str::to_owned),
+            processes: error.processes().map(<[ClaudeProcess]>::to_vec),
         }
     }
 }
@@ -86,6 +89,16 @@ fn answer_sharing(
     Ok(core.answer_sharing(&item, answer)?)
 }
 
+/// Repairs an instance's drift: every item, or only `item` (a drift item id).
+#[tauri::command]
+fn repair(
+    core: tauri::State<'_, Core>,
+    path: PathBuf,
+    item: Option<String>,
+) -> Result<RepairReport, CommandError> {
+    Ok(core.repair(&path, item.as_deref())?)
+}
+
 /// Watches `~/.mccboard/` (the folder, since editors and the core save by renaming) and tells
 /// the windows when `config.toml` changes.
 fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error::Error>> {
@@ -127,7 +140,8 @@ pub fn run() {
             unregister,
             update_account,
             doctor,
-            answer_sharing
+            answer_sharing,
+            repair
         ])
         .setup(move |app| {
             // Without the watcher the window still works; it just won't see outside edits

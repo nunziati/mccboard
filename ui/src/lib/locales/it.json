@@ -100,5 +100,21 @@
   "action.share_private": "Tieni privato",
   "notice.shared_link": "{item} verrà collegato dall'istanza principale in ogni istanza collegata.",
   "notice.shared_private": "{item} resta privato in ogni istanza.",
-  "error.invalid_sharing_item": "Solo gli elementi sconosciuti dell'istanza principale accettano una risposta."
+  "error.invalid_sharing_item": "Solo gli elementi sconosciuti dell'istanza principale accettano una risposta.",
+  "action.repair": "Ripara",
+  "action.repair_hint": "Corregge il drift di questa istanza. Le copie sostituite da link vengono prima salvate in ~/.mccboard/state/backups/.",
+  "action.repair_item": "Ripara questo",
+  "repair.nothing": "Niente da riparare in {path}.",
+  "repair.done_one": "Riparato 1 elemento in {path}.",
+  "repair.done": "Riparati {count} elementi in {path}.",
+  "repair.left": "Elementi di drift rimasti: {count}.",
+  "repair.item_done": "fatto",
+  "repair.item_backup": "fatto; la copia che c'era è in {backup}",
+  "repair.item_failed": "non riparato: {reason}",
+  "error.instance_in_use": "Claude Code è in esecuzione in questa istanza, quindi mccboard non la modifica. Chiudi queste sessioni e riprova. Non è stato cambiato nulla.",
+  "error.process": "{name}, processo {pid}",
+  "error.process_in": "{name}, processo {pid}, in {cwd}",
+  "error.developer_mode_off": "Su Windows i link ai file richiedono la Modalità sviluppatore, che è disattivata. Attivala in Impostazioni › Sistema › Per sviluppatori, poi ripara di nuovo. Non è stato cambiato nulla.",
+  "error.desktop_app_folder": "Questa cartella è dentro la cartella dati dell'app desktop di Claude, dove mccboard non crea mai link. Non è stato cambiato nulla.",
+  "error.drift_item_not_found": "Quell'elemento di drift non c'è più: forse è già stato riparato."
 }
