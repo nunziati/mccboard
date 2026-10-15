@@ -1,14 +1,14 @@
 //! Claude Code's files inside a config directory, read with the narrowest possible view.
 //!
-//! The credentials file is parsed into a struct that holds `expiresAt` only: token values are
-//! skipped by the parser and never stored, and parse errors are discarded rather than shown,
-//! because a serde message can quote the value it choked on.
+//! The credentials file is parsed into a struct that holds only `expiresAt` and whether there
+//! is an access token: token values are never stored, and parse errors are discarded rather
+//! than shown, because a serde message can quote the value it choked on.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::InstanceKind;
 
@@ -76,9 +76,17 @@ pub(crate) struct CredentialsExpiry {
 
 #[derive(Deserialize)]
 pub(crate) struct OAuthExpiry {
+    /// Whether `accessToken` holds a token. Claude Code empties it on logout (a dead refresh
+    /// token); the value itself is dropped as soon as it is parsed.
+    #[serde(rename = "accessToken", default, deserialize_with = "non_empty")]
+    pub has_access_token: bool,
     /// Epoch milliseconds.
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<i64>,
+}
+
+fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.is_some_and(|value| !value.is_empty()))
 }
 
 pub(crate) fn read_credentials_expiry(config_dir: &Path) -> Read<CredentialsExpiry> {

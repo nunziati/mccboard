@@ -10,7 +10,7 @@
       case 'logged_in':
         return t('login.logged_in')
       case 'expired':
-        return t('login.expired')
+        return t('login.token_expired')
       case 'not_logged_in':
         return t('login.not_logged_in')
       case 'unknown':
@@ -18,22 +18,26 @@
     }
   }
 
-  function detail(login: LoginState): string | null {
+  // An expired access token isn't a logout: Claude Code renews it whenever it runs.
+  function details(login: LoginState): string[] {
     switch (login.state) {
       case 'logged_in':
-        return t('login.logged_in_until', { time: formatTime(login.expires_at) })
+        return [
+          t('login.logged_in_until', { time: formatTime(login.expires_at) }),
+          t('login.renews_hint'),
+        ]
       case 'expired':
-        return t('login.expired_hint')
+        return [t('login.token_expired_hint')]
       default:
-        return null
+        return []
     }
   }
 </script>
 
 <span class="login {observation.login.state}">{label(observation.login)}</span>
-{#if detail(observation.login)}
-  <div class="muted small">{detail(observation.login)}</div>
-{/if}
+{#each details(observation.login) as detail (detail)}
+  <div class="muted small">{detail}</div>
+{/each}
 {#each observation.warnings as warning (warning)}
   <div class="warning small">{t(`warning.${warning}`)}</div>
 {/each}
@@ -42,7 +46,6 @@
   .login.logged_in {
     color: var(--ok);
   }
-  .login.expired,
   .warning {
     color: var(--warn);
   }

@@ -20,8 +20,12 @@ _Avoid_: host, server, node
 The machine running mccboard. Today a Windows laptop.
 
 **Instance**:
-A Claude Code config directory on a machine. Its account is observed, not owned: it can be logged out, expired, or switch to another account, and it stays the same instance.
+A Claude Code config directory on a machine. Its account is observed, not owned: it can be logged out, have an expired token, or switch to another account, and it stays the same instance.
 _Avoid_: install, setup, environment
+
+**Expired token**:
+An instance whose OAuth access token is past its expiry while its credentials are still there. Claude Code renews it the next time it runs in that instance; mccboard never does. It is still logged in: not logged in means no credentials, or ones Claude Code emptied on logout.
+_Avoid_: login expired, logged out
 
 **Primary instance**:
 The instance in Claude Code's default config directory on a machine (`~/.claude`). It holds the real copies of everything shared.

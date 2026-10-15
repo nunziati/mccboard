@@ -88,7 +88,7 @@ fn placeholder() -> TrayIcon {
         color: "#6b7280".parse().expect("a valid color"),
         account: None,
         stale: false,
-        login_expired: false,
+        token_expired: false,
     }
 }
 

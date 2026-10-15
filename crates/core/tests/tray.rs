@@ -1,5 +1,5 @@
 //! The tray view model (spec stories 60–64; ticket #8): the icon's worst account and
-//! percentage, the tooltip, the status lines of the menu, "no instances" and "login expired".
+//! percentage, the tooltip, the status lines of the menu, "no instances" and "token expired".
 //!
 //! Every test runs on a temporary home with the fake environment port, and gets its usage
 //! report the way the app does: `refresh_usage` or `usage`, then `tray_view`.
@@ -216,7 +216,7 @@ fn a_stale_worst_reading_marks_the_icon_tooltip_and_menu() {
 }
 
 #[test]
-fn an_expired_login_shows_login_expired_with_the_last_values() {
+fn an_expired_token_shows_token_expired_with_the_last_values() {
     let (home, core, env) = home_with_a_and_b();
     env.push_usage_reply(ok(35.0, 14.0, &[]));
     env.push_usage_reply(ok(60.0, 20.0, &[]));
@@ -230,19 +230,19 @@ fn an_expired_login_shows_login_expired_with_the_last_values() {
     let view = english(&core, &core.refresh_usage().unwrap());
 
     let b = &view.accounts[1];
-    assert!(b.login_expired);
+    assert!(b.token_expired);
     assert!(b.stale);
     assert_eq!(b.percent, Some(60));
-    assert!(b.title.contains("login expired"), "{}", b.title);
-    assert!(view.tooltip.contains("login expired"), "{}", view.tooltip);
+    assert!(b.title.contains("token expired"), "{}", b.title);
+    assert!(view.tooltip.contains("token expired"), "{}", view.tooltip);
     // Its last known reading still counts for the icon, marked stale.
     assert_eq!(view.icon.account, Some(AccountUuid::new(UUID_B)));
     assert!(view.icon.stale);
-    assert!(view.icon.login_expired);
+    assert!(view.icon.token_expired);
 }
 
 #[test]
-fn an_expired_login_with_no_reading_says_so() {
+fn an_expired_token_with_no_reading_says_so() {
     let home = TempHome::new();
     let primary = home.primary();
     primary
@@ -254,9 +254,15 @@ fn an_expired_login_with_no_reading_says_so() {
     let view = english(&core, &core.refresh_usage().unwrap());
 
     assert_eq!(view.icon.percent, None);
-    assert!(view.icon.login_expired);
-    assert!(view.accounts[0].login_expired);
-    assert!(view.tooltip.contains("Login expired"), "{}", view.tooltip);
+    assert!(view.icon.token_expired);
+    assert!(view.accounts[0].token_expired);
+    assert!(view.tooltip.contains("Token expired"), "{}", view.tooltip);
+    assert_eq!(view.accounts[0].title, "A · token expired");
+
+    let italian = core
+        .tray_view(&core.usage().unwrap(), Language::Italian, &TimeZone::UTC)
+        .unwrap();
+    assert_eq!(italian.accounts[0].title, "A · token scaduto");
 }
 
 #[test]

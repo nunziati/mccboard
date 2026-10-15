@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 
 use common::{FIXTURE_REFRESH, FIXTURE_TOKEN, TempHome, now};
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use mccboard_core::{AccountUuid, Error, InstanceKind, LoginState, ObservedAccount, Warning};
 
 const UUID_A: &str = "11111111-1111-4111-8111-111111111111";
@@ -195,8 +195,9 @@ fn login_state_follows_the_clock() {
 }
 
 #[test]
-fn a_token_cleared_by_claude_code_reads_as_expired() {
-    // After a dead refresh token Claude Code writes empty tokens and `expiresAt: 0`.
+fn a_token_cleared_by_claude_code_reads_as_not_logged_in() {
+    // After a dead refresh token Claude Code writes empty tokens and `expiresAt: 0`: that is a
+    // logout, not an expired token Claude Code will renew.
     let home = TempHome::new();
     home.primary()
         .raw_credentials(r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#);
@@ -204,10 +205,42 @@ fn a_token_cleared_by_claude_code_reads_as_expired() {
 
     assert_eq!(
         core.scan().unwrap()[0].observation.login,
-        LoginState::Expired {
-            expired_at: Timestamp::UNIX_EPOCH
-        }
+        LoginState::NotLoggedIn
     );
+}
+
+#[test]
+fn credentials_without_an_access_token_read_as_not_logged_in() {
+    // Only a token, valid or expired, is a login: an expiry alone says nothing.
+    let expires_at = (now() + hours(5)).as_millisecond();
+    for credentials in [
+        format!(r#"{{"claudeAiOauth":{{"expiresAt":{expires_at}}}}}"#),
+        format!(r#"{{"claudeAiOauth":{{"accessToken":null,"expiresAt":{expires_at}}}}}"#),
+    ] {
+        let home = TempHome::new();
+        home.primary().raw_credentials(&credentials);
+        let (core, _env) = home.core();
+
+        let observation = &core.scan().unwrap()[0].observation;
+
+        assert_eq!(observation.login, LoginState::NotLoggedIn, "{credentials}");
+        assert!(observation.warnings.is_empty(), "{credentials}");
+    }
+}
+
+#[test]
+fn an_access_token_that_is_not_a_string_is_unreadable() {
+    let expires_at = (now() + hours(5)).as_millisecond();
+    let home = TempHome::new();
+    home.primary().raw_credentials(&format!(
+        r#"{{"claudeAiOauth":{{"accessToken":42,"expiresAt":{expires_at}}}}}"#
+    ));
+    let (core, _env) = home.core();
+
+    let observation = &core.scan().unwrap()[0].observation;
+
+    assert_eq!(observation.login, LoginState::Unknown);
+    assert_eq!(observation.warnings, vec![Warning::CredentialsUnreadable]);
 }
 
 #[test]
@@ -307,6 +340,13 @@ fn no_token_appears_in_anything_scan_produces() {
     home.linked(".claude-d").raw_credentials(&format!(
         r#"{{"claudeAiOauth":{{"expiresAt":"{FIXTURE_TOKEN}"}}}}"#
     ));
+    // An access token of the wrong type, and an emptied one next to a refresh token.
+    home.linked(".claude-e").raw_credentials(&format!(
+        r#"{{"claudeAiOauth":{{"accessToken":["{FIXTURE_TOKEN}"],"expiresAt":0}}}}"#
+    ));
+    home.linked(".claude-f").raw_credentials(&format!(
+        r#"{{"claudeAiOauth":{{"accessToken":"","refreshToken":"{FIXTURE_REFRESH}","expiresAt":0}}}}"#
+    ));
     let (core, _env) = home.core();
 
     let candidates = core.scan().unwrap();
@@ -322,6 +362,8 @@ fn no_token_appears_in_anything_scan_produces() {
     }
     assert_eq!(candidates[2].observation.login, LoginState::Unknown);
     assert_eq!(candidates[3].observation.login, LoginState::Unknown);
+    assert_eq!(candidates[4].observation.login, LoginState::Unknown);
+    assert_eq!(candidates[5].observation.login, LoginState::NotLoggedIn);
 }
 
 #[test]

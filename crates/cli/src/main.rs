@@ -549,7 +549,9 @@ fn login(observation: &Observation) -> String {
         LoginState::LoggedIn { expires_at } => {
             format!("logged in (token valid until {})", local(*expires_at))
         }
-        LoginState::Expired { .. } => "login expired".to_owned(),
+        LoginState::Expired { .. } => {
+            "token expired (Claude Code renews it the next time it runs)".to_owned()
+        }
         LoginState::NotLoggedIn => "not logged in".to_owned(),
         LoginState::Unknown => "login unknown".to_owned(),
     };

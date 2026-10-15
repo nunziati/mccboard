@@ -34,7 +34,7 @@ export type UsageFailure =
 export type UsageStatus =
   | { status: 'ok' }
   | { status: 'never_read' }
-  | { status: 'login_expired' }
+  | { status: 'token_expired' }
   | { status: 'not_logged_in' }
   | { status: 'credentials_unreadable' }
   | { status: 'failed'; failure: UsageFailure }

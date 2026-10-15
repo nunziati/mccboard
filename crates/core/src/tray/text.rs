@@ -13,7 +13,7 @@ pub(super) enum Status {
     /// A current reading: nothing to say.
     Current,
     Stale,
-    LoginExpired,
+    TokenExpired,
     NeverRead,
     NotLoggedIn,
     CredentialsUnreadable,
@@ -90,7 +90,7 @@ impl Texts {
         Some(match status {
             Status::Current => return None,
             Status::Stale => self.pick("stale", "non aggiornato"),
-            Status::LoginExpired => self.pick("login expired", "accesso scaduto"),
+            Status::TokenExpired => self.pick("token expired", "token scaduto"),
             Status::NeverRead => self.pick(
                 "waiting for a first reading",
                 "in attesa della prima lettura",
