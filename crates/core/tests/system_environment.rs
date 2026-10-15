@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
+use std::path::Path;
 use std::process::{Child, Command};
 
 use mccboard_core::{Core, Environment, ProcessConfigDir, SystemEnvironment};
@@ -12,9 +13,12 @@ use mccboard_core::{Core, Environment, ProcessConfigDir, SystemEnvironment};
 struct FakeClaude(Child);
 
 impl FakeClaude {
-    fn start(bin: &std::path::Path, config_dir: Option<&std::path::Path>) -> Self {
+    fn start(bin: &Path, home: &Path, config_dir: Option<&Path>) -> Self {
         let mut command = Command::new(bin);
-        command.arg("30").env_remove("CLAUDE_CONFIG_DIR");
+        command
+            .arg("30")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("HOME", home);
         if let Some(dir) = config_dir {
             command.env("CLAUDE_CONFIG_DIR", dir);
         }
@@ -48,8 +52,11 @@ fn claude_code_processes_are_listed_with_their_config_directory() {
     fs::create_dir_all(&b).unwrap();
     fs::create_dir_all(home.path().join(".claude")).unwrap();
 
-    let linked = FakeClaude::start(&bin, Some(&b));
-    let default = FakeClaude::start(&bin, None);
+    let linked = FakeClaude::start(&bin, home.path(), Some(&b));
+    let default = FakeClaude::start(&bin, home.path(), None);
+    // Its own home, elsewhere: its default folder is not this home's primary instance.
+    let other_home = tempfile::tempdir().unwrap();
+    let elsewhere = FakeClaude::start(&bin, other_home.path(), None);
 
     let processes = SystemEnvironment.claude_processes();
     let of = |pid: u32| processes.iter().find(|p| p.pid == pid);
@@ -60,7 +67,9 @@ fn claude_code_processes_are_listed_with_their_config_directory() {
     );
     assert_eq!(
         of(default.0.id()).map(|p| &p.config_dir),
-        Some(&ProcessConfigDir::Default)
+        Some(&ProcessConfigDir::Dir {
+            path: home.path().join(".claude")
+        })
     );
     assert_eq!(of(linked.0.id()).unwrap().name, "claude");
     // mccboard itself is never listed.
@@ -74,6 +83,14 @@ fn claude_code_processes_are_listed_with_their_config_directory() {
         .map(|p| p.pid)
         .collect();
     assert_eq!(using, vec![linked.0.id()]);
+    let primary: Vec<u32> = core
+        .processes_using(&home.path().join(".claude"))
+        .unwrap()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
+    assert_eq!(primary, vec![default.0.id()]);
+    assert!(of(elsewhere.0.id()).is_some());
 }
 
 #[test]

@@ -66,29 +66,42 @@ fn config_dir(p: &Process) -> ProcessConfigDir {
         // Every process has some environment: an empty one is one we can't read.
         return ProcessConfigDir::Unknown;
     }
-    let value = environ.iter().find_map(|entry| config_dir_value(entry));
-    match value {
-        None => ProcessConfigDir::Default,
-        Some(value) if value.as_os_str().is_empty() => ProcessConfigDir::Default,
-        Some(value) if value.is_absolute() => ProcessConfigDir::Dir { path: value },
-        Some(value) => match p.cwd() {
-            Some(cwd) => ProcessConfigDir::Dir {
-                path: crate::paths::normalize(&cwd.join(value)),
-            },
+    let var = |name: &str| environ.iter().find_map(|entry| env_value(entry, name));
+    let absolute = |value: PathBuf| {
+        if value.is_absolute() {
+            Some(value)
+        } else {
+            p.cwd().map(|cwd| crate::paths::normalize(&cwd.join(value)))
+        }
+    };
+    match var(CONFIG_DIR_VAR).filter(|v| !v.as_os_str().is_empty()) {
+        Some(value) => match absolute(value) {
+            Some(path) => ProcessConfigDir::Dir { path },
             None => ProcessConfigDir::Unknown,
+        },
+        // Claude Code's default is `.claude` in the process's own home, which may differ
+        // from the home mccboard works in.
+        None => match var(HOME_VAR).filter(|v| v.is_absolute()) {
+            Some(home) => ProcessConfigDir::Dir {
+                path: home.join(".claude"),
+            },
+            None => ProcessConfigDir::Default,
         },
     }
 }
 
-/// The value of `CLAUDE_CONFIG_DIR` in one `NAME=value` entry (the name is case-insensitive
-/// on Windows).
-fn config_dir_value(entry: &OsStr) -> Option<PathBuf> {
+/// The variable holding the home directory Claude Code uses (Node's `os.homedir()`).
+const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+
+/// The value of variable `name` in one `NAME=value` entry (names are case-insensitive on
+/// Windows).
+fn env_value(entry: &OsStr, name: &str) -> Option<PathBuf> {
     let entry = entry.to_string_lossy();
-    let (name, value) = entry.split_once('=')?;
+    let (key, value) = entry.split_once('=')?;
     let matches = if cfg!(windows) {
-        name.eq_ignore_ascii_case(CONFIG_DIR_VAR)
+        key.eq_ignore_ascii_case(name)
     } else {
-        name == CONFIG_DIR_VAR
+        key == name
     };
     matches.then(|| PathBuf::from(value))
 }

@@ -30,9 +30,10 @@ pub struct ClaudeProcess {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProcessConfigDir {
-    /// No `CLAUDE_CONFIG_DIR`: Claude Code's default, the primary instance's `~/.claude`.
+    /// No `CLAUDE_CONFIG_DIR` and the process's home unknown: Claude Code's default, taken
+    /// as the primary instance's `~/.claude`.
     Default,
-    /// `CLAUDE_CONFIG_DIR` set to `path` (absolute).
+    /// The folder it uses, absolute: its `CLAUDE_CONFIG_DIR`, or `.claude` in its own home.
     Dir { path: PathBuf },
     /// The process's environment can't be read.
     Unknown,
