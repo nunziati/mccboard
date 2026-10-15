@@ -17,4 +17,4 @@ Why not link `skills/` and `plugins/` whole, as a first manual setup did:
 ## Consequences
 
 - A `settings.json` link must be a single hop pointing straight at the real file. Claude Code saves it atomically, resolving the link one hop (anthropics/claude-code#78162).
-- When working under the home directory, the primary's `settings.json` also loads as project settings in a linked instance (anthropics/claude-code#80791). Duplicate hooks are possible, so drift detection should watch for them.
+- When working under the home directory, the primary's `settings.json` also loads as project settings in a linked instance (anthropics/claude-code#80791), so its hooks could run twice. The 2026-10 field test did not observe this: each hook ran once per start, from the home folder and from a subfolder. The doctor doesn't watch for it.
