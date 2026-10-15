@@ -234,8 +234,8 @@ const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 #[cfg(windows)]
 fn new_window(claude: &Path, _window: Console) -> Command {
     use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
 
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let mut command = Command::new(claude);
     command.args(LOGIN_ARGS).creation_flags(CREATE_NEW_CONSOLE);
     command
