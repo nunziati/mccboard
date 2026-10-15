@@ -437,10 +437,14 @@ impl RawConfig {
         let mut sharing = BTreeMap::new();
         for (item, answer) in self.sharing.items {
             let at = format!("sharing.items.{item}");
-            sharing::check_item(&item).map_err(|e| format!("{at}: {e}"))?;
             let answer = answer
                 .parse::<SharingAnswer>()
                 .map_err(|e| format!("{at}: {e}"))?;
+            if sharing::is_private(&item) {
+                // Answered while still unknown; the table has since learned it is private.
+                continue;
+            }
+            sharing::check_item(&item).map_err(|e| format!("{at}: {e}"))?;
             sharing.insert(item, answer);
         }
 

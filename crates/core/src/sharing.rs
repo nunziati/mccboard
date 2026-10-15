@@ -60,11 +60,19 @@ const PRIVATE_ITEMS: &[&str] = &[
     "uploads",
     "shares",
     "local",
+    "agent-memory-local",
+    "agent-memory-project",
+    "scratch",
+    "storage-v2",
+    "active-time.json",
+    "server-sessions.json",
     // Instance-local settings and server-sent policy.
     "settings.local.json",
     "remote-settings.json",
     "policy-limits.json",
     "launcher-settings.json",
+    "local-settings",
+    "project-settings",
     // Caches, logs and Claude Code's bookkeeping.
     "backups",
     "cache",
@@ -85,6 +93,14 @@ const PRIVATE_ITEMS: &[&str] = &[
     "daemon.status.json",
     "daemon.scheduled.status.json",
     "remote-control",
+    "remote",
+    "bridge-spawn",
+    "systemd",
+    "downloads",
+    "file-transfers",
+    "mcp-skill-archives",
+    "antproto.json",
+    "api-dumps",
     "feedback",
     "feedback-bundles",
     "dump-prompts",
@@ -108,11 +124,12 @@ const PRIVATE_ITEMS: &[&str] = &[
 ];
 
 /// Name patterns of Claude Code's private files that vary (backups, temporary and lock
-/// files): prefixes and suffixes.
+/// files, the daemon's auth state): prefixes and suffixes.
 const PRIVATE_PREFIXES: &[&str] = &[
     ".claude.json",
     ".credentials.json",
     "security_warnings_state",
+    "daemon-",
 ];
 const PRIVATE_SUFFIXES: &[&str] = &[".lock", ".tmp", ".backup", ".bak"];
 
@@ -174,7 +191,9 @@ pub(crate) enum Sharing {
     Unknown,
 }
 
-fn is_private(name: &str) -> bool {
+/// Whether the sharing table keeps an item private: Claude Code's own state. An answer
+/// stored for it, from before the table knew it, is ignored.
+pub(crate) fn is_private(name: &str) -> bool {
     PRIVATE_ITEMS.contains(&name)
         || PRIVATE_PREFIXES.iter().any(|p| name.starts_with(p))
         || PRIVATE_SUFFIXES.iter().any(|s| name.ends_with(s))

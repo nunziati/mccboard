@@ -533,6 +533,135 @@ fn unknown_items_in_the_primary_are_asked_about() {
 }
 
 #[test]
+fn claude_codes_runtime_items_are_never_asked_about() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    // Folders and files Claude Code keeps per config directory (#17), and the daemon's
+    // auth state.
+    for name in [
+        "agent-memory-local",
+        "agent-memory-project",
+        "api-dumps",
+        "bridge-spawn",
+        "downloads",
+        "file-transfers",
+        "local-settings",
+        "mcp-skill-archives",
+        "project-settings",
+        "remote",
+        "scratch",
+        "storage-v2",
+        "systemd",
+    ] {
+        mkdir(p.join(name));
+    }
+    for name in [
+        "active-time.json",
+        "antproto.json",
+        "computer-use.lock",
+        "server-sessions.json",
+        "server.lock",
+        "daemon-auth-cooldown",
+        "daemon-auth-status.json",
+    ] {
+        write(p.join(name), "{}");
+    }
+    // The prompt `/loop` reads: written by the user, so still asked about.
+    write(p.join("loop.md"), "Check the deploy.\n");
+    let b = safe_linked(&home, ".claude-b", &p);
+    let (core, _env) = home.core();
+    core.register(&b).unwrap();
+
+    let asked: Vec<_> = core
+        .sharing_questions()
+        .unwrap()
+        .into_iter()
+        .map(|q| q.item)
+        .collect();
+
+    assert_eq!(asked, vec!["loop.md"]);
+    assert_eq!(drift_of(&core, &b).items, vec![]);
+}
+
+/// Answers field configs hold from before #17, when Claude Code's runtime items were still
+/// asked about: a Windows laptop's and a Linux mini PC's.
+const FIELD_ANSWERS: &str = "\
+[sharing.items]
+daemon-auth-cooldown = \"private\"
+\"daemon-auth-status.json\" = \"private\"
+downloads = \"private\"
+remote = \"private\"
+\"statusline-command.ps1\" = \"link\"
+\"statusline-command.sh\" = \"link\"
+";
+
+#[test]
+fn stored_answers_for_items_now_known_private_are_ignored() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    for name in [
+        "daemon-auth-cooldown",
+        "daemon-auth-status.json",
+        "statusline-command.ps1",
+        "statusline-command.sh",
+    ] {
+        write(p.join(name), "x");
+    }
+    for name in ["downloads", "remote", "scratch"] {
+        mkdir(p.join(name));
+    }
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(
+        p.join("statusline-command.ps1"),
+        b.join("statusline-command.ps1"),
+    );
+    link(
+        p.join("statusline-command.sh"),
+        b.join("statusline-command.sh"),
+    );
+    mkdir(b.join("downloads"));
+    // A stored "link" for a name now known private is ignored too: the table wins.
+    let text = format!("{FIELD_ANSWERS}scratch = \"link\"\n");
+    home.write_config(&text);
+    let (core, _env) = home.core();
+    core.register(&b).unwrap();
+
+    let doctor = core.doctor().unwrap();
+
+    assert_eq!(doctor.questions, vec![]);
+    assert_eq!(doctor.instances.len(), 1);
+    assert_eq!(doctor.instances[0].items, vec![]);
+    // The answers still in force keep working: an unlinked statusline script is drift.
+    fs::remove_file(b.join("statusline-command.sh")).unwrap();
+    assert_eq!(
+        ids(&drift_of(&core, &b)),
+        vec!["link:statusline-command.sh"]
+    );
+    // Names now in the table take no new answer, and the stored lines stay as written.
+    assert!(
+        core.answer_sharing("downloads", SharingAnswer::Link)
+            .is_err()
+    );
+    core.answer_sharing("gsd-core", SharingAnswer::Private)
+        .unwrap();
+    let saved = home.config_text().unwrap();
+    assert!(saved.starts_with(&text), "{saved}");
+}
+
+#[test]
+fn a_stored_answer_for_a_linked_item_is_still_reported() {
+    let home = TempHome::new();
+    full_primary(&home);
+    home.write_config("[sharing.items]\n\"settings.json\" = \"private\"\n");
+    let (core, _env) = home.core();
+
+    let error = core.doctor().unwrap_err();
+
+    assert!(matches!(error, Error::ConfigCorrupt { .. }), "{error}");
+    assert!(error.detail().unwrap().contains("settings.json"));
+}
+
+#[test]
 fn an_answer_is_remembered_for_every_instance_and_across_restarts() {
     let home = TempHome::new();
     let p = full_primary(&home);
