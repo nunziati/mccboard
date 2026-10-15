@@ -146,7 +146,8 @@ impl Core {
     /// primary instance or mccboard's files, one inside them, or a link
     /// ([`Error::FolderNotAddable`]), a folder in the Claude desktop app's data, when
     /// file links are needed and Windows Developer Mode is off, and while a Claude Code
-    /// process uses the folder. Idempotent and resumable: after a failure at any step,
+    /// process uses the folder, and for a folder that belongs to an account with another label
+    /// ([`Error::FolderHasAnotherAccount`]). Idempotent and resumable: after a failure at any step,
     /// adding again completes what's missing; an instance set up but not logged in is
     /// registered, and [`Core::login`] can finish it too.
     pub fn add(&self, request: &AddRequest) -> Result<AddReport, Error> {
@@ -156,6 +157,7 @@ impl Core {
             None => self.add_folder(&label)?,
         };
         self.check_addable(&config_dir)?;
+        self.check_account(&config_dir, &label)?;
 
         let created = !config_dir.exists();
         fs::create_dir_all(&config_dir).map_err(|source| Error::FolderNotCreated {
@@ -203,6 +205,33 @@ impl Core {
             .ok_or(Error::NotRegistered { path: config_dir })?;
         let run = self.open_login(&config_dir)?;
         self.after_login(&config_dir, run)
+    }
+
+    /// Refuses a folder that belongs to an account with another label than `label`: the
+    /// account it is registered with or, unregistered, the known account logged in there.
+    /// Adding it for `label` would register one account's instance under another's name. Two
+    /// labels whose default folders are the same (`"Work"`, `"work!"`) meet here too. A folder
+    /// whose account mccboard doesn't know yet is fine: the account gets the label.
+    fn check_account(&self, config_dir: &Path, label: &str) -> Result<(), Error> {
+        let config = ConfigFile::load(&self.paths().config_file())?.config;
+        let owner = config
+            .instance(config_dir)
+            .and_then(|entry| entry.account.clone())
+            .or_else(|| {
+                self.observe(config_dir)
+                    .account
+                    .map(|observed| observed.uuid)
+            });
+        match owner.as_ref().and_then(|uuid| config.account(uuid)) {
+            Some(account) if !account::same_label(&account.label, label) => {
+                Err(Error::FolderHasAnotherAccount {
+                    path: config_dir.to_path_buf(),
+                    label: account.label.clone(),
+                    requested: label.to_owned(),
+                })
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Whether an add can skip the login. The credentials decide, as they do for the app's

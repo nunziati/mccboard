@@ -767,6 +767,55 @@ fn protected_folders_are_refused_before_anything_changes() {
 }
 
 #[test]
+fn a_folder_that_belongs_to_another_account_is_refused() {
+    let f = fixture();
+    f.env.login_as(UUID_B, "b@example.com");
+    f.core.add(&add("Work")).unwrap();
+    let config = f.home.config_text();
+
+    // Another label for the same folder, chosen or derived ("work!" also gives .claude-work).
+    let chosen = AddRequest {
+        config_dir: Some(PathBuf::from("~/.claude-work")),
+        ..add("C")
+    };
+    for request in [chosen, add("work!")] {
+        let error = f.core.add(&request).unwrap_err();
+        assert!(
+            matches!(&error, Error::FolderHasAnotherAccount { label, .. } if label == "Work"),
+            "{error}"
+        );
+        assert_eq!(error.code(), "folder_has_another_account");
+        assert!(error.to_string().contains("\"Work\""), "{error}");
+        assert_eq!(error.detail(), Some("Work"));
+    }
+    assert_eq!(f.home.config_text(), config);
+    assert_eq!(f.env.login_invocations().len(), 1);
+
+    // The same label in another spelling is the same account: adding again is fine.
+    f.core.add(&add("work")).unwrap();
+}
+
+#[test]
+fn a_folder_logged_in_with_a_known_account_is_refused_for_another_label() {
+    let f = fixture();
+    f.home
+        .linked(".claude-x")
+        .logged_in_as(UUID_A, "a@example.com");
+    let request = AddRequest {
+        config_dir: Some(f.path(".claude-x")),
+        ..add("B")
+    };
+
+    let error = f.core.add(&request).unwrap_err();
+
+    assert!(
+        matches!(&error, Error::FolderHasAnotherAccount { label, .. } if label == "A"),
+        "{error}"
+    );
+    assert!(f.registered(&f.path(".claude-x")).is_none());
+}
+
+#[test]
 fn a_link_to_the_primary_folder_is_the_primary_instance_and_never_relinked() {
     let f = fixture();
     let alias = f.path(".claude-alias");

@@ -152,6 +152,20 @@ pub enum Error {
     )]
     FolderNotAddable { path: PathBuf },
 
+    #[error(
+        "{} is already the instance of account {label:?}, not {requested:?}: choose another \
+         folder for {requested:?}, or log this one in again with the right account. Nothing \
+         was changed",
+        path.display()
+    )]
+    FolderHasAnotherAccount {
+        path: PathBuf,
+        /// The label of the account the folder belongs to.
+        label: String,
+        /// The label the add asked for.
+        requested: String,
+    },
+
     #[error("{label:?} gives no folder name; choose the instance's folder yourself")]
     NoDefaultFolder { label: String },
 
@@ -218,6 +232,7 @@ impl Error {
             Error::FolderNotDeletable { .. } => "folder_not_deletable",
             Error::FolderNotDeleted { .. } => "folder_not_deleted",
             Error::FolderNotAddable { .. } => "folder_not_addable",
+            Error::FolderHasAnotherAccount { .. } => "folder_has_another_account",
             Error::NoDefaultFolder { .. } => "no_default_folder",
             Error::FolderNotCreated { .. } => "folder_not_created",
             Error::ClaudeNotInstalled => "claude_not_installed",
@@ -246,6 +261,7 @@ impl Error {
             | Error::FolderNotDeletable { path }
             | Error::FolderNotDeleted { path, .. }
             | Error::FolderNotAddable { path }
+            | Error::FolderHasAnotherAccount { path, .. }
             | Error::FolderNotCreated { path, .. }
             | Error::LoginNeedsTerminal { path }
             | Error::LoginNotOpened { path, .. } => Some(path),
@@ -264,10 +280,12 @@ impl Error {
 
     /// Where `config.toml` is wrong (line and reason, from mccboard's own settings), for
     /// [`Error::ConfigCorrupt`]; why the login couldn't open (an OS error), for
-    /// [`Error::LoginNotOpened`].
+    /// [`Error::LoginNotOpened`]; the label of the account the folder belongs to, for
+    /// [`Error::FolderHasAnotherAccount`].
     pub fn detail(&self) -> Option<&str> {
         match self {
             Error::ConfigCorrupt { detail, .. } => Some(detail),
+            Error::FolderHasAnotherAccount { label, .. } => Some(label),
             Error::LoginNotOpened { reason, .. } => Some(reason),
             _ => None,
         }

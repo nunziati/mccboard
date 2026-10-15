@@ -184,6 +184,7 @@
   "notice.add_questions": "Some items of the primary instance weren't linked: answer the questions above, then Add again.",
   "warning.account_has_other_instances": "Account “{label}” already has an instance on this machine ({paths}). Was the right account used in the browser?",
   "error.folder_not_addable": "mccboard won't make an instance in this folder: it holds your home folder, the primary instance or mccboard's own files, sits inside one of them, or is a link. Nothing was changed.",
+  "error.folder_has_another_account": "This folder already belongs to another account, whose label is shown below: choose another folder, or log it in again with the right account. Nothing was changed.",
   "error.no_default_folder": "That label gives no folder name: choose the folder yourself.",
   "error.folder_not_created": "mccboard couldn't create the folder.",
   "error.claude_not_installed": "Claude Code (claude) isn't installed or isn't on the PATH. Install it, then try again: everything else is done.",
