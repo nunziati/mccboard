@@ -1,0 +1,30 @@
+[package]
+name = "mccboard-shim"
+description = "The program behind a launcher on Windows (`claude-b.exe`): starts Claude Code in its instance."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Only std (and the Windows console API): the program is copied once per launcher, so it stays
+# small. The library holds the sidecar's format, which the core writes, and the PATH lookup.
+[lib]
+name = "mccboard_shim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mccboard-shim"
+path = "src/main.rs"
+
+# Runs the built shim against a stand-in `claude` (Windows only). Not a libtest harness: the
+# test program itself plays the stand-in when copied as `claude.exe`.
+[[test]]
+name = "shim"
+path = "tests/shim.rs"
+harness = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+tempfile.workspace = true

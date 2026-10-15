@@ -1956,6 +1956,7 @@ dependencies = [
  "jiff",
  "junction",
  "mccboard-core",
+ "mccboard-shim",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1966,6 +1967,14 @@ dependencies = [
  "ureq",
  "windows-sys 0.61.2",
  "winreg",
+]
+
+[[package]]
+name = "mccboard-shim"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
