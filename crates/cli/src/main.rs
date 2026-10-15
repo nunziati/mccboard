@@ -1,6 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod doctor;
+mod remove;
 mod repair;
 mod usage;
 
@@ -83,6 +84,10 @@ enum Command {
     /// Repair instances' drift, all of it or one item. Refuses while Claude Code runs in an
     /// instance. Real files a link replaces are backed up under ~/.mccboard/state/backups/.
     Repair(repair::RepairArgs),
+    /// Remove linked instances: from mccboard only (their launchers go too, their folders
+    /// stay), or with --delete-folder --yes their folders too. The primary instance is never
+    /// removed.
+    Remove(remove::RemoveArgs),
     /// Launchers: the `claude-b` commands that start Claude Code in linked instances.
     Launcher {
         #[command(subcommand)]
@@ -156,6 +161,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Doctor(args) => doctor::doctor(&core, args)?,
         Command::Share(args) => doctor::share(&core, args)?,
         Command::Repair(args) => repair::repair(&core, args)?,
+        Command::Remove(args) => remove::remove(&core, args)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {
