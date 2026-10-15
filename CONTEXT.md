@@ -40,8 +40,12 @@ The command that starts Claude Code in a linked instance (`claude-b`). The prima
 _Avoid_: alias, shim, wrapper
 
 **Desktop profile**:
-A Claude desktop app installation with its own data directory and its own sign-in, bound to one account by the user. It may also name the instance whose config directory its local Code sessions use.
-_Avoid_: desktop instance, app instance
+A copy of the Claude desktop app running with its own data directory and its own sign-in, bound to one account by the user; at most one per account on a machine. Its account is observed like an instance's. It may also name the instance whose config directory its local Code sessions use. Every profile but the default one has its own taskbar button and an icon in its account's color.
+_Avoid_: desktop instance, app instance, instance (an instance is a Claude Code config directory)
+
+**Default desktop profile**:
+The desktop profile in the app's own data directory, the one it uses when started normally. It keeps Claude's own icon and pairs with the primary instance.
+_Avoid_: main profile, primary profile
 
 ### Sharing between instances
 
