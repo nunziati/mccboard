@@ -9,7 +9,7 @@ A Claude subscription identity (claude.ai login), identified by its account UUID
 _Avoid_: user, login, profile
 
 **Account label**:
-The short name and color the user gives an account ("A", blue). Used for display only, never for identity.
+The short name and color the user gives an account ("A", blue). Used for display only, never for identity. The account of the default desktop profile always has Claude's own orange, matching the icon mccboard leaves alone.
 _Avoid_: alias, nickname
 
 **Machine**:
