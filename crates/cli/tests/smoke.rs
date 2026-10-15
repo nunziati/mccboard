@@ -225,3 +225,50 @@ fn launcher_status_and_sync() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("Created claude-b"));
     status("ok");
 }
+
+#[test]
+fn remove_deletes_a_folder_only_when_confirmed_and_never_the_primary() {
+    let home = fixture_home();
+    let b = home.path().join(".claude-b");
+    fs::write(b.join("history.jsonl"), "b").unwrap();
+    assert!(
+        mccboard(home.path(), &["register", "~/.claude", "~/.claude-b"])
+            .status
+            .success()
+    );
+
+    // Without --yes nothing changes.
+    let out = mccboard(home.path(), &["remove", "~/.claude-b", "--delete-folder"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--yes"));
+    assert!(b.join("history.jsonl").is_file());
+
+    // The primary instance is refused.
+    let out = mccboard(home.path(), &["remove", "~/.claude", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json[0]["error"]["code"], "primary_instance");
+
+    let out = mccboard(
+        home.path(),
+        &[
+            "remove",
+            "~/.claude-b",
+            "--delete-folder",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json[0]["removal"]["folder"], "deleted");
+    assert!(!b.exists());
+    assert!(home.path().join(".claude/.credentials.json").is_file());
+    let out = mccboard(home.path(), &["list", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["instances"].as_array().unwrap().len(), 1);
+}

@@ -22,6 +22,7 @@ mod launcher;
 mod links;
 mod paths;
 mod registry;
+mod remove;
 mod repair;
 mod scan;
 mod session_guard;
@@ -49,6 +50,7 @@ pub use launcher::{
 };
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
+pub use remove::{FolderOutcome, Removal, RemoveLevel};
 pub use repair::{RepairOutcome, RepairReport, RepairedItem};
 pub use scan::Candidate;
 pub use session_guard::{ClaudeProcess, ProcessConfigDir};
@@ -126,11 +128,34 @@ impl Core {
     }
 
     /// Forgets a registered instance and removes its launcher. Nothing else on disk changes
-    /// but `config.toml`; the account keeps its label and color.
+    /// but `config.toml`; the account keeps its label and color. The same as
+    /// [`Core::remove`] with [`RemoveLevel::FromMccboard`]: the primary instance is refused.
     pub fn unregister(&self, path: &Path) -> Result<(), Error> {
-        registry::unregister(&self.home, &self.paths().config_file(), path)?;
-        self.sync_launchers()?;
-        Ok(())
+        self.remove(path, RemoveLevel::FromMccboard).map(drop)
+    }
+
+    /// Removes the registered linked instance in `path` (absolute, or starting with `~`):
+    /// - [`RemoveLevel::FromMccboard`] forgets it and removes its launcher; its folder stays
+    ///   as it is;
+    /// - [`RemoveLevel::WithFolder`] also deletes its folder, and so the account's login on
+    ///   this machine. Front ends confirm this with the user first. It refuses while a Claude
+    ///   Code process uses the folder ([`Error::InstanceInUse`]), and for a folder that holds
+    ///   the home, the primary instance or mccboard's files, or is a link
+    ///   ([`Error::FolderNotDeletable`]). Links inside are removed, never followed, so the
+    ///   primary instance's items stay intact.
+    ///
+    /// The primary instance is never removed ([`Error::PrimaryInstance`]). The account keeps
+    /// its label and color. If the launchers can't be written, the error says so; the
+    /// instance is removed all the same.
+    pub fn remove(&self, path: &Path, level: RemoveLevel) -> Result<Removal, Error> {
+        remove::remove(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            path,
+            level,
+            &|| self.sync_launchers(),
+        )
     }
 
     /// Changes an account's label, color or launcher name override. The launchers of its

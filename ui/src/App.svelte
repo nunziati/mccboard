@@ -6,6 +6,7 @@
   import LauncherCell from './lib/LauncherCell.svelte'
   import Launchers from './lib/Launchers.svelte'
   import Login from './lib/Login.svelte'
+  import RemoveInstance from './lib/RemoveInstance.svelte'
   import RepairResult from './lib/RepairResult.svelte'
   import SharingQuestions from './lib/SharingQuestions.svelte'
   import {
@@ -18,11 +19,11 @@
     onConfigChanged,
     register,
     registry as loadRegistry,
+    removeInstance,
     repair,
     type RepairReport,
     scan,
     syncLaunchers,
-    unregister,
     type Account,
     type Candidate,
     type CoreError,
@@ -166,11 +167,26 @@
     })
   }
 
-  function unregisterPath(path: string) {
+  function remove(path: string, deleteFolder: boolean) {
     return act(async () => {
-      await unregister(path)
-      return t('notice.unregistered', { path })
+      const removal = await removeInstance(path, deleteFolder)
+      const key =
+        removal.folder === 'deleted'
+          ? 'notice.removed_deleted'
+          : removal.folder === 'already_gone'
+            ? 'notice.removed_already_gone'
+            : 'notice.removed'
+      return t(key, { path: removal.config_dir })
     })
+  }
+
+  /** Who is logged in to an instance, for confirming its deletion. */
+  function loginOf(instance: InstanceStatus): string | null {
+    const account = instance.account
+    if (!account) return null
+    const label = registry?.accounts.find((a) => a.uuid === account.uuid)?.label
+    const name = account.email ?? account.uuid
+    return label ? `${label} (${name})` : name
   }
 
   function fixLaunchers() {
@@ -363,13 +379,14 @@
                           {t('action.record_account')}
                         </button>
                       {/if}
-                      <button
-                        disabled={busy}
-                        title={t('action.unregister_hint')}
-                        onclick={() => unregisterPath(instance.config_dir)}
-                      >
-                        {t('action.unregister')}
-                      </button>
+                      {#if instance.kind === 'linked'}
+                        <RemoveInstance
+                          path={instance.config_dir}
+                          account={loginOf(instance)}
+                          {busy}
+                          onremove={(deleteFolder) => remove(instance.config_dir, deleteFolder)}
+                        />
+                      {/if}
                     </td>
                   </tr>
                   {#if drift && openDrift[instance.config_dir] && drift.items.length > 0}
