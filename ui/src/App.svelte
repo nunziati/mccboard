@@ -22,7 +22,16 @@
     type InstanceStatus,
     type Registry,
   } from './lib/core'
-  import { errorMessage, i18n, LANGUAGE_NAMES, LANGUAGES, t, type Lang } from './lib/i18n.svelte'
+  import {
+    chooseLanguage,
+    errorMessage,
+    i18n,
+    LANGUAGE_NAMES,
+    LANGUAGES,
+    loadLanguage,
+    t,
+    type Lang,
+  } from './lib/i18n.svelte'
 
   /** Instances shown under one heading: an account, an account missing from config.toml, or none. */
   interface Group {
@@ -150,8 +159,12 @@
   }
 
   onMount(() => {
+    loadLanguage()
     reload()
-    const unlisten = onConfigChanged(reload)
+    const unlisten = onConfigChanged(() => {
+      loadLanguage()
+      reload()
+    })
     return () => {
       unlisten.then((stop) => stop())
     }
@@ -178,7 +191,10 @@
         {t('language.label')}
         <select
           value={i18n.lang}
-          onchange={(e) => (i18n.lang = (e.currentTarget as HTMLSelectElement).value as Lang)}
+          onchange={(e) =>
+            chooseLanguage((e.currentTarget as HTMLSelectElement).value as Lang).catch(
+              (error: unknown) => (actionError = asCoreError(error)),
+            )}
         >
           {#each LANGUAGES as lang (lang)}
             <option value={lang}>{LANGUAGE_NAMES[lang]}</option>

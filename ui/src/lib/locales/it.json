@@ -100,5 +100,6 @@
   "action.share_private": "Tieni privato",
   "notice.shared_link": "{item} verrà collegato dall'istanza principale in ogni istanza collegata.",
   "notice.shared_private": "{item} resta privato in ogni istanza.",
-  "error.invalid_sharing_item": "Solo gli elementi sconosciuti dell'istanza principale accettano una risposta."
+  "error.invalid_sharing_item": "Solo gli elementi sconosciuti dell'istanza principale accettano una risposta.",
+  "error.invalid_language": "Lingua non disponibile: scegli italiano o inglese."
 }

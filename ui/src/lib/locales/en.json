@@ -100,5 +100,6 @@
   "action.share_private": "Keep private",
   "notice.shared_link": "{item} will be linked from the primary instance in every linked instance.",
   "notice.shared_private": "{item} stays private to each instance.",
-  "error.invalid_sharing_item": "Only unknown items of the primary instance take an answer."
+  "error.invalid_sharing_item": "Only unknown items of the primary instance take an answer.",
+  "error.invalid_language": "That isn’t a language mccboard speaks: use English or Italian."
 }

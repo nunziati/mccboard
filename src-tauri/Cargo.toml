@@ -19,7 +19,9 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+jiff.workspace = true
 mccboard-core.workspace = true
 notify-debouncer-mini.workspace = true
 serde.workspace = true
-tauri = { version = "2", features = [] }
+sys-locale = "0.3"
+tauri = { version = "2", features = ["tray-icon"] }
