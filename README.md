@@ -38,6 +38,7 @@ TAURI_APP_PATH=../src-tauri npm run tauri build -- --config ../src-tauri/tauri.b
 ```
 
 On Windows, launchers are copies of `mccboard-shim.exe`, which mccboard looks for next to its own
-program: `cargo build --workspace` puts it there for the CLI.
+program: `cargo build --workspace` puts it there for the CLI. A CLI installed on its own needs the
+shim installed next to it too: `cargo install --path crates/cli` and `cargo install --path crates/shim`.
 
 CI (`.github/workflows/ci.yml`) runs the same checks on Ubuntu and Windows and keeps the Windows installer as an artifact.

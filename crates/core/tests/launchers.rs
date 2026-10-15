@@ -1033,11 +1033,46 @@ fn on_windows_a_missing_shim_is_a_clear_error_and_the_status_still_reads() {
 fn on_windows_programs_moved_aside_are_deleted_by_a_later_sync() {
     let (home, core, _env) = home_with_b(OsKind::Windows);
     fs::write(bin(&home).join("claude-b.exe.old"), "MZ").unwrap();
-    fs::write(bin(&home).join("claude-c.exe.old-2"), "MZ").unwrap();
+    fs::write(bin(&home).join("claude-c.EXE.OLD-12"), "MZ").unwrap();
+    // Only names ending as a moved-aside program does.
+    fs::write(bin(&home).join("notes.exe.older.txt"), "mine").unwrap();
+    fs::write(bin(&home).join("keep.exe.old-x"), "mine").unwrap();
 
-    core.sync_launchers().unwrap();
+    let sync = core.sync_launchers().unwrap();
 
-    assert_eq!(bin_files(&home), vec!["claude-b.exe", "claude-b.shim"]);
+    assert!(sync.created.is_empty() && sync.updated.is_empty() && sync.removed.is_empty());
+    assert_eq!(
+        bin_files(&home),
+        vec![
+            "claude-b.exe",
+            "claude-b.shim",
+            "keep.exe.old-x",
+            "notes.exe.older.txt"
+        ]
+    );
+}
+
+/// A launcher whose name ends in `.exe.old` is a launcher, not a program moved aside: it
+/// survives every sync.
+#[test]
+fn on_windows_a_launcher_named_like_a_program_moved_aside_is_kept() {
+    let (home, core, _env) = home_with_b(OsKind::Windows);
+    core.update_account(
+        &uuid(UUID_B),
+        AccountUpdate {
+            launcher: Some(Some("cb.exe.old".into())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(bin_files(&home), vec!["cb.exe.old.exe", "cb.exe.old.shim"]);
+
+    for _ in 0..2 {
+        let sync = core.sync_launchers().unwrap();
+        assert!(sync.created.is_empty() && sync.updated.is_empty() && sync.removed.is_empty());
+        assert_eq!(bin_files(&home), vec!["cb.exe.old.exe", "cb.exe.old.shim"]);
+        assert_eq!(core.launchers().unwrap().drift_count(), 0);
+    }
 }
 
 #[test]

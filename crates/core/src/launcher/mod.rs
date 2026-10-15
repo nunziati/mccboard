@@ -200,13 +200,15 @@ pub(crate) fn sync(
 ) -> Result<LauncherSync, Error> {
     let config = ConfigFile::load(&paths.config_file())?.config;
     let store = Store::of(home, paths, env);
+    if let Store::BinFolder(bin) = &store {
+        bin.sweep();
+    }
     let wanted = wanted(home, &config);
     let comparison = compare(&store, &wanted, store.read()?);
 
     match &store {
         Store::RcFile(rc) => rc.write(&wanted)?,
         Store::BinFolder(bin) => {
-            bin.sweep();
             for (want, status) in wanted.iter().zip(&comparison.instances) {
                 if status.state != LauncherState::Ok {
                     bin.write(&want.name, &want.config_dir)?;

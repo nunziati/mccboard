@@ -11,7 +11,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 use mccboard_shim::{find_program, is_batch_file, sidecar};
@@ -20,7 +20,17 @@ use mccboard_shim::{find_program, is_batch_file, sidecar};
 const FAILED: u8 = 1;
 
 fn main() -> ExitCode {
-    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("claude-launcher"));
+    // Its own path says which sidecar to read: without it, no instance to start.
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!(
+                "mccboard launcher: cannot find its own program ({e}), so not which instance \
+                 to start Claude Code in."
+            );
+            return ExitCode::from(FAILED);
+        }
+    };
     let name = exe
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())

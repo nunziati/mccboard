@@ -80,9 +80,10 @@ pub fn find_program(
         .map(|ext| ext.trim().to_ascii_lowercase())
         .filter(|ext| RUNNABLE.contains(&ext.as_str()))
         .collect();
+    let skip = skip.map(resolved);
     std::env::split_paths(path)
         .filter(|dir| !dir.as_os_str().is_empty())
-        .filter(|dir| !skip.is_some_and(|skip| same_dir(dir, skip)))
+        .filter(|dir| skip.as_ref() != Some(&resolved(dir)))
         .find_map(|dir| {
             extensions
                 .iter()
@@ -91,13 +92,10 @@ pub fn find_program(
         })
 }
 
-/// Whether two paths are the same folder, however written (case, `.`, trailing separators,
-/// links): compared resolved when both exist.
-fn same_dir(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
+/// A folder as it really is (case, `.`, trailing separators, links resolved), so two ways of
+/// writing it compare equal; as written when it doesn't exist.
+fn resolved(dir: &Path) -> PathBuf {
+    dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
 }
 
 /// Whether `program` is a batch file, which Windows runs through cmd.exe.

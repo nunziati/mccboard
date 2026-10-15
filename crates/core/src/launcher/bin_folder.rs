@@ -5,8 +5,10 @@
 //! reach `claude` without a shell re-quoting them.
 //!
 //! Earlier versions wrote `<name>.cmd` and `<name>.ps1` scripts. Those mccboard wrote (they
-//! carry its marker) make a launcher stale, and a sync removes them. Files in the folder that
-//! mccboard didn't write are left alone.
+//! carry its marker) make a launcher stale, and a sync removes them.
+//!
+//! The bin folder is mccboard's: a program there with a launcher's name is replaced by the
+//! launcher. Other files mccboard didn't write, and scripts without its marker, are left alone.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,7 +25,8 @@ const PROGRAM: &str = "exe";
 const LEGACY: [&str; 2] = ["cmd", "ps1"];
 const LEGACY_MARKER: &str = "Managed by mccboard";
 /// A launcher program moved aside because it was running when it had to go
-/// ([`remove_program`]): `claude-b.exe.old`, `claude-b.exe.old-2`… A later sync deletes it.
+/// ([`remove_program`]): `claude-b.exe.old`, `claude-b.exe.old-2`… A later sync deletes it
+/// ([`is_aside`]).
 const ASIDE: &str = ".exe.old";
 
 pub(super) struct BinFolder {
@@ -171,11 +174,7 @@ impl BinFolder {
             return;
         };
         for entry in entries.flatten() {
-            let aside = entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.to_ascii_lowercase().contains(ASIDE));
-            if aside {
+            if entry.file_name().to_str().is_some_and(is_aside) {
                 let _ = fs::remove_file(entry.path());
             }
         }
@@ -266,6 +265,16 @@ fn same_bytes(path: &Path, bytes: &[u8]) -> io::Result<bool> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
+}
+
+/// Whether `file_name` is a program [`remove_program`] moved aside: it ends in `.exe.old` or
+/// `.exe.old-<n>`, ignoring case. A launcher named `x.exe.old` (`x.exe.old.exe`) isn't.
+fn is_aside(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.ends_with(ASIDE)
+        || name
+            .rsplit_once(&format!("{ASIDE}-"))
+            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Removes a launcher program, which may be running right now: Windows doesn't let a running
