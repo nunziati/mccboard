@@ -60,8 +60,9 @@ pub struct TrayIcon {
     pub account: Option<AccountUuid>,
     /// The percentage comes from a stale reading.
     pub stale: bool,
-    /// The worst account's login is expired; without a worst account, any account's is.
-    pub login_expired: bool,
+    /// The worst account's access token is expired; without a worst account, any account's
+    /// is.
+    pub token_expired: bool,
 }
 
 /// One account as the tray shows it.
@@ -77,7 +78,7 @@ pub struct TrayAccount {
     /// This account drives the icon.
     pub worst: bool,
     pub stale: bool,
-    pub login_expired: bool,
+    pub token_expired: bool,
     /// Session, weekly, then model windows, as last read; past resets read as zero.
     pub windows: Vec<TrayWindow>,
     /// The menu heading: label and percentage, or why there is none ("A · 35%").
@@ -140,7 +141,7 @@ impl TrayView {
                 color: neutral(),
                 account: None,
                 stale: false,
-                login_expired: false,
+                token_expired: false,
             },
             tooltip: fit(vec![format!("mccboard: {message}")]),
             notice: Some(message),
@@ -187,7 +188,7 @@ pub(crate) fn view(
                 color: a.account.color.clone(),
                 account: Some(a.account.uuid.clone()),
                 stale: a.stale,
-                login_expired: a.login_expired,
+                token_expired: a.token_expired,
             }
         }
         None => TrayIcon {
@@ -198,7 +199,7 @@ pub(crate) fn view(
             },
             account: None,
             stale: false,
-            login_expired: accounts.iter().any(|a| a.login_expired),
+            token_expired: accounts.iter().any(|a| a.token_expired),
         },
     };
 
@@ -240,7 +241,7 @@ fn peak(usage: &AccountUsage, now: Timestamp) -> Option<f64> {
 
 fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
     let reading = usage.reading.clone().map(|r| as_of(r, now));
-    let login_expired = usage.status == UsageStatus::LoginExpired;
+    let token_expired = usage.status == UsageStatus::TokenExpired;
     let mut windows = Vec::new();
     if let Some(reading) = &reading {
         let main = [
@@ -273,7 +274,7 @@ fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
         percent: peak(usage, now).map(percent),
         worst: false,
         stale: usage.stale,
-        login_expired,
+        token_expired,
         windows,
         title: String::new(),
         lines: Vec::new(),
@@ -293,8 +294,8 @@ fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
 /// What the tray says about an account besides its numbers.
 fn status_of(account: &TrayAccount) -> Status {
     if account.read_at.is_some() {
-        return if account.login_expired {
-            Status::LoginExpired
+        return if account.token_expired {
+            Status::TokenExpired
         } else if account.stale {
             Status::Stale
         } else {
@@ -303,7 +304,7 @@ fn status_of(account: &TrayAccount) -> Status {
     }
     match &account.status {
         UsageStatus::Ok | UsageStatus::NeverRead => Status::NeverRead,
-        UsageStatus::LoginExpired => Status::LoginExpired,
+        UsageStatus::TokenExpired => Status::TokenExpired,
         UsageStatus::NotLoggedIn => Status::NotLoggedIn,
         UsageStatus::CredentialsUnreadable => Status::CredentialsUnreadable,
         UsageStatus::Failed { .. } => Status::Failed,

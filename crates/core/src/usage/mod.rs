@@ -3,7 +3,7 @@
 //!
 //! Token rules (AGENTS.md, ADR 0002) enforced here:
 //! - the token is only read, never refreshed, and only handed to the port's endpoint call;
-//! - a token past its `expiresAt` reads as "login expired" and no call is made;
+//! - a token past its `expiresAt` reads as "token expired" and no call is made;
 //! - at most one call per 60 s per account; after a 429 or any error the interval doubles, up
 //!   to 300 s (or longer when the endpoint's `Retry-After` says so), and a success resets it;
 //! - the last known reading is kept, marked stale, and a window past its reset reads as zero.
@@ -70,7 +70,7 @@ pub enum UsageStatus {
     NeverRead,
     /// Every token of the account is past its expiry. Claude Code renews it the next time it
     /// runs; mccboard never does, and makes no call.
-    LoginExpired,
+    TokenExpired,
     /// No registered instance is logged in with this account.
     NotLoggedIn,
     /// An instance is logged in with this account, but its credentials can't be read.
@@ -147,7 +147,7 @@ pub enum UsageWarning {
 /// What an account's instances offer for a call.
 enum Source {
     Token(AccessToken),
-    LoginExpired,
+    TokenExpired,
     CredentialsUnreadable,
     NotLoggedIn,
 }
@@ -270,7 +270,7 @@ fn source(
     }
     match best {
         Some((_, token)) => Source::Token(token),
-        None if expired => Source::LoginExpired,
+        None if expired => Source::TokenExpired,
         None if unreadable => Source::CredentialsUnreadable,
         None => Source::NotLoggedIn,
     }
@@ -353,7 +353,7 @@ fn view(
             };
             (status, entry.next_call_at.filter(|at| *at > now))
         }
-        Source::LoginExpired => (UsageStatus::LoginExpired, None),
+        Source::TokenExpired => (UsageStatus::TokenExpired, None),
         Source::CredentialsUnreadable => (UsageStatus::CredentialsUnreadable, None),
         Source::NotLoggedIn => (UsageStatus::NotLoggedIn, None),
     };

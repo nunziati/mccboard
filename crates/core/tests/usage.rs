@@ -243,7 +243,7 @@ fn usage_is_read_once_per_account_not_once_per_instance() {
 }
 
 #[test]
-fn an_expired_token_reads_as_login_expired_and_no_call_is_made() {
+fn an_expired_token_reads_as_token_expired_and_no_call_is_made() {
     let home = TempHome::new();
     let primary = home.primary();
     primary
@@ -256,7 +256,7 @@ fn an_expired_token_reads_as_login_expired_and_no_call_is_made() {
     let report = core.refresh_usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::LoginExpired);
+    assert_eq!(usage.status, UsageStatus::TokenExpired);
     assert!(!usage.called);
     assert_eq!(env.usage_calls(), 0);
     assert_eq!(primary.credentials_bytes(), before);
@@ -549,7 +549,7 @@ fn a_failed_refresh_keeps_the_last_reading_marked_stale() {
 }
 
 #[test]
-fn an_expired_login_keeps_the_last_reading_marked_stale() {
+fn an_expired_token_keeps_the_last_reading_marked_stale() {
     let (home, core, env) = home_with_a();
     env.push_usage_reply(ok(limits_body(10.0, 20.0)));
     core.refresh_usage().unwrap();
@@ -560,7 +560,7 @@ fn an_expired_login_keeps_the_last_reading_marked_stale() {
     let report = core.refresh_usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::LoginExpired);
+    assert_eq!(usage.status, UsageStatus::TokenExpired);
     assert!(usage.stale);
     assert!(usage.reading.is_some());
     assert_eq!(env.usage_calls(), 1);

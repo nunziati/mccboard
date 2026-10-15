@@ -103,8 +103,8 @@ fn print_account(usage: &AccountUsage, cached: bool) {
             Some("not read yet; run `mccboard usage` to read it".to_owned())
         }
         UsageStatus::NeverRead => Some("not read yet".to_owned()),
-        UsageStatus::LoginExpired => Some(
-            "login expired: Claude Code renews it the next time it runs with this account"
+        UsageStatus::TokenExpired => Some(
+            "token expired: Claude Code renews it the next time it runs with this account"
                 .to_owned(),
         ),
         UsageStatus::NotLoggedIn => {
