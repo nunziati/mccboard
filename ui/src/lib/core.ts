@@ -253,3 +253,20 @@ export interface RepairReport {
 export function repair(path: string, item?: string): Promise<RepairReport> {
   return invoke<RepairReport>('repair', { path, item: item ?? null })
 }
+
+// Removing an instance: from mccboard only, or with its folder too.
+
+export type FolderOutcome = 'kept' | 'deleted' | 'already_gone'
+
+export interface Removal {
+  config_dir: string
+  folder: FolderOutcome
+}
+
+/**
+ * Removes the linked instance in `path` and its launcher. With `deleteFolder`, which the user
+ * must have confirmed, also deletes its folder; refused while Claude Code runs there.
+ */
+export function removeInstance(path: string, deleteFolder: boolean): Promise<Removal> {
+  return invoke<Removal>('remove_instance', { path, deleteFolder })
+}

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use mccboard_core::{
     Account, AccountUpdate, AccountUuid, Candidate, ClaudeProcess, Color, Core, Doctor,
-    LauncherStatus, LauncherSync, Registration, Registry, RepairReport, SharingAnswer,
-    SystemEnvironment,
+    LauncherStatus, LauncherSync, Registration, Registry, Removal, RemoveLevel, RepairReport,
+    SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -71,6 +71,22 @@ fn register(core: tauri::State<'_, Core>, path: PathBuf) -> Result<Registration,
 #[tauri::command]
 fn unregister(core: tauri::State<'_, Core>, path: PathBuf) -> Result<(), CommandError> {
     Ok(core.unregister(&path)?)
+}
+
+/// Removes a linked instance from mccboard, with its launcher; with `delete_folder`, which the
+/// UI confirms with the user first, also deletes its folder.
+#[tauri::command]
+fn remove_instance(
+    core: tauri::State<'_, Core>,
+    path: PathBuf,
+    delete_folder: bool,
+) -> Result<Removal, CommandError> {
+    let level = if delete_folder {
+        RemoveLevel::WithFolder
+    } else {
+        RemoveLevel::FromMccboard
+    };
+    Ok(core.remove(&path, level)?)
 }
 
 /// `launcher`: `None` leaves it, `Some("")` drops the override, anything else sets it.
@@ -163,6 +179,7 @@ pub fn run() {
             registry,
             register,
             unregister,
+            remove_instance,
             update_account,
             doctor,
             answer_sharing,
