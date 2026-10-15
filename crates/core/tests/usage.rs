@@ -11,8 +11,8 @@ use common::{FIXTURE_REFRESH, FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, now};
 use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
-    AccountUsage, AccountUuid, Core, EndpointReply, UsageFailure, UsageReport, UsageSource,
-    UsageStatus, UsageWarning, UsageWindow,
+    AccountUsage, AccountUuid, Core, EndpointReply, LoginState, UsageFailure, UsageReport,
+    UsageSource, UsageStatus, UsageWarning, UsageWindow,
 };
 use serde_json::json;
 
@@ -315,6 +315,65 @@ fn an_instance_now_logged_in_as_another_account_lends_no_token() {
     assert_eq!(only(&report).account.uuid, AccountUuid::new(UUID_A));
     assert_eq!(only(&report).status, UsageStatus::NotLoggedIn);
     assert_eq!(env.usage_calls(), 0);
+}
+
+#[test]
+fn the_login_state_and_the_usage_status_agree_on_the_same_credentials() {
+    let future = (now() + hours(5)).as_millisecond();
+    let past = (now() - hours(1)).as_millisecond();
+    let token = TOKEN_A;
+    let cases = [
+        (
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","expiresAt":{future}}}}}"#),
+            UsageStatus::NeverRead,
+        ),
+        (
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","expiresAt":{past}}}}}"#),
+            UsageStatus::TokenExpired,
+        ),
+        (
+            r#"{"claudeAiOauth":{"accessToken":"","expiresAt":0}}"#.to_owned(),
+            UsageStatus::NotLoggedIn,
+        ),
+        (
+            format!(r#"{{"claudeAiOauth":{{"expiresAt":{future}}}}}"#),
+            UsageStatus::NotLoggedIn,
+        ),
+        (
+            format!(r#"{{"claudeAiOauth":{{"accessToken":null,"expiresAt":{future}}}}}"#),
+            UsageStatus::NotLoggedIn,
+        ),
+        (
+            format!(r#"{{"claudeAiOauth":{{"accessToken":42,"expiresAt":{future}}}}}"#),
+            UsageStatus::CredentialsUnreadable,
+        ),
+        (
+            format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}"}}}}"#),
+            UsageStatus::CredentialsUnreadable,
+        ),
+    ];
+    for (credentials, status) in cases {
+        let home = TempHome::new();
+        let primary = home.primary();
+        primary
+            .logged_in_as(UUID_A, "a@example.com")
+            .raw_credentials(&credentials);
+        let (core, env) = home.core();
+        core.register(&primary.dir).unwrap();
+
+        let login = core.observe(&primary.dir).login;
+        let usage = core.usage().unwrap();
+
+        assert_eq!(only(&usage).status, status, "{credentials}");
+        let agrees = match login {
+            LoginState::LoggedIn { .. } => status == UsageStatus::NeverRead,
+            LoginState::Expired { .. } => status == UsageStatus::TokenExpired,
+            LoginState::NotLoggedIn => status == UsageStatus::NotLoggedIn,
+            LoginState::Unknown => status == UsageStatus::CredentialsUnreadable,
+        };
+        assert!(agrees, "{credentials}: {login:?} vs {status:?}");
+        assert_eq!(env.usage_calls(), 0);
+    }
 }
 
 #[test]
