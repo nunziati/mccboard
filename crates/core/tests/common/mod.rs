@@ -136,3 +136,49 @@ impl TempHome {
         fs::write(self.config_path(), contents).unwrap();
     }
 }
+
+impl Instance {
+    /// Writes `.credentials.json` with a given dummy access token, so tests can tell which
+    /// instance's token a call used.
+    pub fn credentials_with_token(&self, token: &str, expires_at: Timestamp) -> &Self {
+        self.raw_credentials(
+            &json!({
+                "claudeAiOauth": {
+                    "accessToken": token,
+                    "refreshToken": FIXTURE_REFRESH,
+                    "expiresAt": expires_at.as_millisecond(),
+                    "scopes": ["user:inference", "user:profile"],
+                }
+            })
+            .to_string(),
+        )
+    }
+
+    /// The bytes of `.credentials.json`, to check mccboard never wrote it.
+    pub fn credentials_bytes(&self) -> Vec<u8> {
+        fs::read(self.dir.join(".credentials.json")).unwrap()
+    }
+}
+
+impl TempHome {
+    /// Every file under `~/.mccboard/` (config and state), as text.
+    pub fn mccboard_files(&self) -> Vec<(PathBuf, String)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).into_owned();
+                    out.push((path, text));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.path().join(".mccboard"), &mut out);
+        out
+    }
+}

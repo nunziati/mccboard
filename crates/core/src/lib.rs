@@ -19,23 +19,30 @@ mod registry;
 mod scan;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod usage;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
-pub use environment::{Environment, SystemEnvironment};
+pub use environment::{EndpointReply, Environment, SystemEnvironment};
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
 pub use scan::Candidate;
+pub use usage::{
+    AccessToken, AccountUsage, ModelWindow, UsageFailure, UsageReading, UsageReport, UsageSource,
+    UsageStatus, UsageWarning, UsageWindow,
+};
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
 #[derive(Clone)]
 pub struct Core {
     home: PathBuf,
     env: Arc<dyn Environment>,
+    /// Serializes usage refreshes within this process (rate limits are per account).
+    usage_lock: Arc<Mutex<()>>,
 }
 
 impl Core {
@@ -44,6 +51,7 @@ impl Core {
         Self {
             home: home.into(),
             env: Arc::new(env),
+            usage_lock: Arc::default(),
         }
     }
 
@@ -110,5 +118,31 @@ impl Core {
     /// Whether `config_dir` is the primary instance's (Claude Code's default) or a linked one.
     pub fn kind_of(&self, config_dir: &Path) -> InstanceKind {
         InstanceKind::of(&self.home, config_dir)
+    }
+
+    /// Every registered account's last known usage reading, without calling the endpoint.
+    /// Windows whose reset time has passed read as zero.
+    pub fn usage(&self) -> Result<UsageReport, Error> {
+        usage::report(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            &self.usage_lock,
+            false,
+        )
+    }
+
+    /// Refreshes usage, then reports it like [`Core::usage`]. The endpoint is called once per
+    /// account, with a token from one of its registered instances, and only where the rate
+    /// limits allow it: a manual refresh follows the same rules as a periodic one. A failed
+    /// call keeps the last reading, marked stale.
+    pub fn refresh_usage(&self) -> Result<UsageReport, Error> {
+        usage::report(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            &self.usage_lock,
+            true,
+        )
     }
 }
