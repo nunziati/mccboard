@@ -19,6 +19,11 @@ toml.workspace = true
 toml_edit.workspace = true
 ureq.workspace = true
 
+# The user PATH (launchers' bin folder) lives in the registry on Windows.
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [dev-dependencies]
 mccboard-core = { path = ".", features = ["testing"] }
 tempfile.workspace = true

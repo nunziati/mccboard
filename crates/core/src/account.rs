@@ -58,15 +58,7 @@ impl Account {
         if let Some(name) = &self.launcher {
             return name.clone();
         }
-        let mut slug = String::new();
-        for c in self.label.chars() {
-            if c.is_ascii_alphanumeric() {
-                slug.push(c.to_ascii_lowercase());
-            } else if !slug.is_empty() && !slug.ends_with('-') {
-                slug.push('-');
-            }
-        }
-        let slug = slug.trim_end_matches('-');
+        let slug = slug(&self.label);
         if slug.is_empty() {
             let prefix: String = self
                 .uuid
@@ -103,6 +95,20 @@ impl Serialize for Account {
         }
         .serialize(serializer)
     }
+}
+
+/// `text` lowercased and reduced to ASCII letters, digits and single dashes, for launcher
+/// names (`"Personal Max"` → `personal-max`). Empty when nothing is left.
+pub(crate) fn slug(text: &str) -> String {
+    let mut slug = String::new();
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').to_owned()
 }
 
 /// Changes to an account's label, color and launcher name. `None` leaves a field as it is;

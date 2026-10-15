@@ -12,7 +12,8 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use mccboard_core::{
     Account, AccountStatus, AccountUpdate, AccountUuid, Candidate, Color, Core, InstanceKind,
-    InstanceStatus, LoginState, Observation, Registry, SystemEnvironment, Warning,
+    InstanceStatus, LauncherPlace, LauncherState, LauncherStatus, LauncherSync, LoginState,
+    Observation, Registry, SystemEnvironment, UserPathChange, Warning,
 };
 
 #[derive(Parser)]
@@ -78,6 +79,29 @@ enum Command {
     /// Answer whether an unknown item of the primary instance is linked in every linked
     /// instance or kept private. Remembered in config.toml.
     Share(doctor::ShareArgs),
+    /// Launchers: the `claude-b` commands that start Claude Code in linked instances.
+    Launcher {
+        #[command(subcommand)]
+        command: LauncherCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum LauncherCommand {
+    /// Compare the launchers with the registered linked instances. Exits with 2 when
+    /// something needs fixing.
+    Status {
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create missing launchers, fix stale ones and remove the ones nothing needs. Rename a
+    /// launcher with `mccboard account set <account> --launcher <name>`.
+    Sync {
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -161,6 +185,9 @@ fn run(cli: Cli) -> Result<()> {
                     if instance.registered_account.is_none() {
                         println!("Not logged in yet: it will join an account once it is.");
                     }
+                    if let Some(launcher) = core.launchers()?.instance(&instance.config_dir) {
+                        println!("Launcher: {}.", launcher.name);
+                    }
                 }
                 registrations.push(registration);
             }
@@ -210,8 +237,130 @@ fn run(cli: Cli) -> Result<()> {
                 );
             }
         }
+        Command::Launcher {
+            command: LauncherCommand::Status { json },
+        } => {
+            let status = core.launchers()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                print_launchers(&status);
+            }
+            if status.drift_count() > 0 {
+                std::io::Write::flush(&mut std::io::stdout())?;
+                std::process::exit(2);
+            }
+        }
+        Command::Launcher {
+            command: LauncherCommand::Sync { json },
+        } => {
+            let sync = core.sync_launchers()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sync)?);
+            } else {
+                print_sync(&core.launchers()?.place, &sync);
+            }
+        }
     }
     Ok(())
+}
+
+fn print_launchers(status: &LauncherStatus) {
+    match &status.place {
+        LauncherPlace::RcFile { path } => {
+            println!(
+                "Launchers: aliases in mccboard's block of {}.",
+                path.display()
+            );
+        }
+        LauncherPlace::BinFolder { path, on_user_path } => println!(
+            "Launchers: scripts in {}, {}.",
+            path.display(),
+            if *on_user_path {
+                "which is on your user PATH"
+            } else {
+                "which is NOT on your user PATH"
+            }
+        ),
+    }
+    if status.instances.is_empty() && status.orphans.is_empty() {
+        println!(
+            "No linked instance registered, so no launcher is needed. The primary instance uses plain `claude`."
+        );
+        return;
+    }
+    let width = status
+        .instances
+        .iter()
+        .map(|i| i.name.chars().count())
+        .chain(status.orphans.iter().map(|o| o.name.chars().count()))
+        .max()
+        .unwrap_or(0);
+    for instance in &status.instances {
+        let state = match &instance.state {
+            LauncherState::Ok => "ok".to_owned(),
+            LauncherState::Missing => "missing".to_owned(),
+            LauncherState::Stale { found: Some(found) } => {
+                format!("stale: starts {}", found.display())
+            }
+            LauncherState::Stale { found: None } => "stale: not as mccboard wrote it".to_owned(),
+        };
+        println!(
+            "  {:<width$}  {}  {state}",
+            instance.name,
+            instance.config_dir.display()
+        );
+    }
+    for orphan in &status.orphans {
+        println!(
+            "  {:<width$}  {}  not needed by any registered instance",
+            orphan.name,
+            orphan
+                .config_dir
+                .as_ref()
+                .map_or_else(|| "?".to_owned(), |dir| dir.display().to_string())
+        );
+    }
+    let drift = status.drift_count();
+    if drift > 0 {
+        println!("{drift} to fix: run `mccboard launcher sync`.");
+    }
+}
+
+fn print_sync(place: &LauncherPlace, sync: &LauncherSync) {
+    let show = |verb: &str, launchers: &[mccboard_core::Launcher]| {
+        for launcher in launchers {
+            match &launcher.config_dir {
+                Some(dir) => println!("{verb} {} ({}).", launcher.name, dir.display()),
+                None => println!("{verb} {}.", launcher.name),
+            }
+        }
+    };
+    show("Created", &sync.created);
+    show("Updated", &sync.updated);
+    show("Removed", &sync.removed);
+    let changed = !(sync.created.is_empty() && sync.updated.is_empty() && sync.removed.is_empty());
+    match (&sync.user_path, place) {
+        (Some(UserPathChange::Added), LauncherPlace::BinFolder { path, .. }) => println!(
+            "Added {} to your user PATH: open a new terminal to use the launchers.",
+            path.display()
+        ),
+        (Some(UserPathChange::NotAdded { reason }), LauncherPlace::BinFolder { path, .. }) => {
+            println!(
+                "Couldn't add {} to your user PATH ({reason}); add it by hand.",
+                path.display()
+            )
+        }
+        _ => {}
+    }
+    if !changed {
+        println!("Launchers already up to date.");
+    } else if let LauncherPlace::RcFile { path } = place {
+        println!(
+            "Open a new terminal, or run `source {}`, to use them.",
+            path.display()
+        );
+    }
 }
 
 /// A path as typed: relative ones are taken from the current directory; `~` is left for the

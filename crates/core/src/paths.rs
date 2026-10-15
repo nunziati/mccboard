@@ -27,6 +27,11 @@ impl Paths {
     pub fn state_dir(&self) -> PathBuf {
         self.root.join("state")
     }
+
+    /// `~/.mccboard/bin/`: the launchers on Windows, a folder on the user PATH.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.root.join("bin")
+    }
 }
 
 /// Turns a path the user typed into the form mccboard stores: `~` expanded to the home,

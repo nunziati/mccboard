@@ -71,6 +71,43 @@ export interface AccountUpdate {
   launcher?: string
 }
 
+/** A launcher as found: its command name and the config directory it starts Claude Code in. */
+export interface Launcher {
+  name: string
+  config_dir: string | null
+}
+
+/** Where launchers live: a block of the shell rc file (Linux) or mccboard's bin folder (Windows). */
+export type LauncherPlace =
+  | { kind: 'rc_file'; path: string }
+  | { kind: 'bin_folder'; path: string; on_user_path: boolean }
+
+export type LauncherState =
+  | { state: 'ok' }
+  | { state: 'missing' }
+  | { state: 'stale'; found: string | null }
+
+/** A registered linked instance's launcher. */
+export type InstanceLauncher = { config_dir: string; name: string } & LauncherState
+
+export interface LauncherStatus {
+  place: LauncherPlace
+  instances: InstanceLauncher[]
+  orphans: Launcher[]
+}
+
+export type UserPathChange =
+  | { status: 'already_on' }
+  | { status: 'added' }
+  | { status: 'not_added'; reason: string }
+
+export interface LauncherSync {
+  created: Launcher[]
+  updated: Launcher[]
+  removed: Launcher[]
+  user_path: UserPathChange | null
+}
+
 /** A typed core error: `code` is stable and translated by the UI. */
 export interface CoreError {
   code: string
@@ -100,6 +137,14 @@ export function unregister(path: string): Promise<void> {
 
 export function updateAccount(uuid: string, update: AccountUpdate): Promise<Account> {
   return invoke<Account>('update_account', { uuid, ...update })
+}
+
+export function launchers(): Promise<LauncherStatus> {
+  return invoke<LauncherStatus>('launchers')
+}
+
+export function syncLaunchers(): Promise<LauncherSync> {
+  return invoke<LauncherSync>('sync_launchers')
 }
 
 /** Calls `onChange` whenever config.toml changes on disk (CLI, editor, this app). */
