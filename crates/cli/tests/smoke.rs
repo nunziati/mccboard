@@ -89,3 +89,97 @@ fn a_missing_home_fails_with_a_non_zero_exit() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nobody"));
 }
+
+#[test]
+fn register_list_and_unregister() {
+    let home = fixture_home();
+    let b = home.path().join(".claude-b");
+
+    let out = mccboard(home.path(), &["register", "~/.claude", b.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = mccboard(home.path(), &["list", "--json"]);
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["accounts"][0]["uuid"], UUID_A);
+    assert_eq!(json["accounts"][0]["label"], "A");
+    assert_eq!(json["instances"][0]["kind"], "primary");
+    assert_eq!(
+        json["instances"][0]["account_status"]["status"],
+        "unchanged"
+    );
+    assert_eq!(
+        json["instances"][1]["registered_account"],
+        serde_json::Value::Null
+    );
+
+    let out = mccboard(home.path(), &["unregister", b.to_str().unwrap()]);
+    assert!(out.status.success());
+    let out = mccboard(home.path(), &["list", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["instances"].as_array().unwrap().len(), 1);
+    assert!(b.is_dir());
+}
+
+#[test]
+fn account_set_changes_label_and_color_by_label() {
+    let home = fixture_home();
+    assert!(
+        mccboard(home.path(), &["register", "~/.claude"])
+            .status
+            .success()
+    );
+
+    let out = mccboard(
+        home.path(),
+        &[
+            "account", "set", "a", "--label", "Main", "--color", "#16A34A", "--json",
+        ],
+    );
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["label"], "Main");
+    assert_eq!(json["color"], "#16a34a");
+    assert_eq!(json["launcher_name"], "claude-main");
+}
+
+#[test]
+fn a_corrupt_config_fails_and_stays_as_it_was() {
+    let home = fixture_home();
+    let config = home.path().join(".mccboard").join("config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "[[instances]\n").unwrap();
+
+    let out = mccboard(home.path(), &["register", "~/.claude"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("config.toml"));
+    assert_eq!(fs::read_to_string(&config).unwrap(), "[[instances]\n");
+}
+
+#[test]
+fn no_token_in_registration_output_or_config() {
+    let home = fixture_home();
+
+    let out = mccboard(home.path(), &["register", "~/.claude", "--json"]);
+    let config = fs::read_to_string(home.path().join(".mccboard").join("config.toml")).unwrap();
+    let list = mccboard(home.path(), &["list"]);
+
+    for text in [
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        String::from_utf8_lossy(&list.stdout).into_owned(),
+        config,
+    ] {
+        assert!(!text.contains("FIXTURE"), "{text}");
+    }
+}

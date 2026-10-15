@@ -10,10 +10,12 @@
 
 mod account;
 mod claude_files;
+mod config;
 mod environment;
 mod error;
 mod instance;
 mod paths;
+mod registry;
 mod scan;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -21,11 +23,12 @@ pub mod testing;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use account::{AccountUuid, ObservedAccount};
+pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
 pub use environment::{Environment, SystemEnvironment};
 pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use paths::Paths;
+pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
 pub use scan::Candidate;
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
@@ -56,9 +59,46 @@ impl Core {
 
     /// Finds instance candidates in the home: `~/.claude` (the primary instance) and every
     /// `~/.claude-*` directory (linked instances), primary first. Scanning only proposes
-    /// instances: it registers nothing and writes nothing.
+    /// instances: it registers nothing and writes nothing. Each candidate says whether it is
+    /// registered already.
     pub fn scan(&self) -> Result<Vec<Candidate>, Error> {
-        scan::scan(&self.home, self.env.as_ref())
+        let registered = registry::registered_dirs(&self.paths().config_file())?;
+        scan::scan(&self.home, self.env.as_ref(), &registered)
+    }
+
+    /// The registered accounts and instances, each instance observed now. Reads
+    /// `config.toml` and writes nothing.
+    pub fn registry(&self) -> Result<Registry, Error> {
+        registry::registry(&self.home, &self.paths().config_file(), self.env.as_ref())
+    }
+
+    /// Registers the instance whose config directory is `path` (absolute, or starting with
+    /// `~`), at any location, logged in or not. The instance is recorded with the account it
+    /// is logged in with; an account seen for the first time is added with a suggested label
+    /// and color. Registering a registered instance again is harmless and accepts the account
+    /// it is now logged in with.
+    pub fn register(&self, path: &Path) -> Result<Registration, Error> {
+        registry::register(
+            &self.home,
+            &self.paths().config_file(),
+            self.env.as_ref(),
+            path,
+        )
+    }
+
+    /// Forgets a registered instance. Nothing on disk changes but `config.toml`; the account
+    /// keeps its label and color.
+    pub fn unregister(&self, path: &Path) -> Result<(), Error> {
+        registry::unregister(&self.home, &self.paths().config_file(), path)
+    }
+
+    /// Changes an account's label, color or launcher name override.
+    pub fn update_account(
+        &self,
+        uuid: &AccountUuid,
+        update: AccountUpdate,
+    ) -> Result<Account, Error> {
+        registry::update_account(&self.paths().config_file(), uuid, update)
     }
 
     /// Observes the account and login state of the instance whose config directory is

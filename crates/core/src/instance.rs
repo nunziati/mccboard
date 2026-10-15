@@ -17,7 +17,7 @@ pub enum InstanceKind {
 
 impl InstanceKind {
     pub(crate) fn of(home: &Path, config_dir: &Path) -> Self {
-        if config_dir == home.join(".claude") {
+        if crate::paths::same(config_dir, &home.join(".claude")) {
             InstanceKind::Primary
         } else {
             InstanceKind::Linked
@@ -47,6 +47,8 @@ pub enum Warning {
     GlobalConfigUnreadable,
     /// `.credentials.json` exists but can't be read or parsed.
     CredentialsUnreadable,
+    /// The config directory itself is gone (a registered instance whose folder was deleted).
+    ConfigDirMissing,
 }
 
 /// What an instance looks like right now: its observed account and login state.
@@ -59,6 +61,9 @@ pub struct Observation {
 
 pub(crate) fn observe(home: &Path, config_dir: &Path, env: &dyn Environment) -> Observation {
     let mut warnings = Vec::new();
+    if !config_dir.is_dir() {
+        warnings.push(Warning::ConfigDirMissing);
+    }
     let kind = InstanceKind::of(home, config_dir);
 
     let account = match claude_files::read_global_config(&claude_files::global_config_path(

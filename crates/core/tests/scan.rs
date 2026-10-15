@@ -341,6 +341,7 @@ fn candidates_serialize_to_a_stable_json_shape() {
             {
                 "config_dir": home.path().join(".claude"),
                 "kind": "primary",
+                "registered": false,
                 "account": { "uuid": UUID_A, "email": "a@example.com" },
                 "login": { "state": "logged_in", "expires_at": "2026-10-15T17:00:00Z" },
                 "warnings": [],
@@ -348,6 +349,7 @@ fn candidates_serialize_to_a_stable_json_shape() {
             {
                 "config_dir": home.path().join(".claude-b"),
                 "kind": "linked",
+                "registered": false,
                 "account": null,
                 "login": { "state": "not_logged_in" },
                 "warnings": [],

@@ -4,18 +4,24 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::instance::{self, InstanceKind, Observation};
-use crate::{Environment, Error};
+use crate::{Environment, Error, paths};
 
 /// A config directory found by a scan and proposed as an instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Candidate {
     pub config_dir: PathBuf,
     pub kind: InstanceKind,
+    /// Whether this config directory is a registered instance already.
+    pub registered: bool,
     #[serde(flatten)]
     pub observation: Observation,
 }
 
-pub(crate) fn scan(home: &Path, env: &dyn Environment) -> Result<Vec<Candidate>, Error> {
+pub(crate) fn scan(
+    home: &Path,
+    env: &dyn Environment,
+    registered: &[PathBuf],
+) -> Result<Vec<Candidate>, Error> {
     let unreadable = |source| Error::HomeUnreadable {
         path: home.to_path_buf(),
         source,
@@ -46,6 +52,7 @@ pub(crate) fn scan(home: &Path, env: &dyn Environment) -> Result<Vec<Candidate>,
         .chain(linked)
         .map(|config_dir| Candidate {
             kind: InstanceKind::of(home, &config_dir),
+            registered: registered.iter().any(|r| paths::same(r, &config_dir)),
             observation: instance::observe(home, &config_dir, env),
             config_dir,
         })

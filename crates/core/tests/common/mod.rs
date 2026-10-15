@@ -114,3 +114,25 @@ impl Instance {
         self
     }
 }
+
+pub const UUID_A: &str = "11111111-1111-4111-8111-111111111111";
+pub const UUID_B: &str = "22222222-2222-4222-8222-222222222222";
+pub const UUID_C: &str = "33333333-3333-4333-8333-333333333333";
+
+impl TempHome {
+    /// `~/.mccboard/config.toml`.
+    pub fn config_path(&self) -> PathBuf {
+        self.path().join(".mccboard").join("config.toml")
+    }
+
+    /// The text of `~/.mccboard/config.toml`, or `None` when it doesn't exist.
+    pub fn config_text(&self) -> Option<String> {
+        fs::read_to_string(self.config_path()).ok()
+    }
+
+    /// Writes `~/.mccboard/config.toml` as a user editing it by hand would.
+    pub fn write_config(&self, contents: &str) {
+        fs::create_dir_all(self.config_path().parent().unwrap()).unwrap();
+        fs::write(self.config_path(), contents).unwrap();
+    }
+}
