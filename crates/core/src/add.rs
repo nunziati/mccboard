@@ -147,12 +147,12 @@ impl Core {
     /// Refuses before changing anything for the primary instance's folder or a path leading
     /// there through links ([`Error::PrimaryInstance`]), a file, a folder holding the home, the
     /// primary instance or mccboard's files, one inside them, or a link
-    /// ([`Error::FolderNotAddable`]), a folder in the Claude desktop app's data, when
+    /// ([`Error::FolderNotAddable`]), a folder in the Claude desktop app's data, a folder that
+    /// belongs to an account with another label ([`Error::FolderHasAnotherAccount`]), when
     /// file links are needed and Windows Developer Mode is off, and while a Claude Code
-    /// process uses the folder, and for a folder that belongs to an account with another label
-    /// ([`Error::FolderHasAnotherAccount`]). Idempotent and resumable: after a failure at any step,
-    /// adding again completes what's missing; an instance set up but not logged in is
-    /// registered, and [`Core::login`] can finish it too.
+    /// process uses the folder. Idempotent and resumable: after a failure at any step, adding
+    /// again completes what's missing; an instance set up but not logged in is registered,
+    /// with the label waiting for its account, and [`Core::login`] can finish it too.
     pub fn add(&self, request: &AddRequest) -> Result<AddReport, Error> {
         let label = account::validate_label(&request.label)?;
         let config_dir = match &request.config_dir {
