@@ -14,6 +14,10 @@
 //!    is logged in already;
 //! 6. observes the account and registers the instance again, under it.
 //!
+//! The label asked for waits in `config.toml`, on the instance's entry, until an account is
+//! observed in it: a login that happens later (`mccboard login`, "Log in" in the app, the
+//! instance registered again) gives it to the account all the same.
+//!
 //! Each step is idempotent, so running the add again after a failure at any step completes
 //! what's missing. mccboard never reads or writes credentials here: Claude Code's login
 //! writes them, and mccboard reads `oauthAccount` from `.claude.json` afterwards.
@@ -24,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::account::{self, Account, AccountUpdate, AccountUuid};
+use crate::account::{self, Account, AccountUuid};
 use crate::config::ConfigFile;
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
@@ -151,20 +155,17 @@ impl Core {
             None => self.add_folder(&label)?,
         };
         self.check_addable(&config_dir)?;
-        let known: Vec<AccountUuid> = self
-            .registry()?
-            .accounts
-            .into_iter()
-            .map(|a| a.uuid)
-            .collect();
 
         let created = !config_dir.exists();
         fs::create_dir_all(&config_dir).map_err(|source| Error::FolderNotCreated {
             path: config_dir.clone(),
             source,
         })?;
+        // The label waits in config.toml for the account, so a login that happens later (a
+        // failed or skipped one, finished with `login`) still gives it.
+        let registration = self.register_labelled(&config_dir, Some(&label))?;
         // An instance registered already keeps the spelling of its path in config.toml.
-        let config_dir = self.register(&config_dir)?.instance.config_dir;
+        let config_dir = registration.instance.config_dir;
         let setup = self.repair(&config_dir, None)?;
         let sharing_questions = self.sharing_questions()?;
 
@@ -175,7 +176,8 @@ impl Core {
         } else {
             self.open_login(&config_dir)?
         };
-        let login = self.after_login(&config_dir, run, Some((&label, &known)))?;
+        let mut login = self.after_login(&config_dir, run)?;
+        login.new_account |= registration.new_account.is_some();
         Ok(AddReport {
             config_dir,
             created,
@@ -199,7 +201,7 @@ impl Core {
             .map(|entry| entry.config_dir.clone())
             .ok_or(Error::NotRegistered { path: config_dir })?;
         let run = self.open_login(&config_dir)?;
-        self.after_login(&config_dir, run, None)
+        self.after_login(&config_dir, run)
     }
 
     fn check_addable(&self, config_dir: &Path) -> Result<(), Error> {
@@ -280,15 +282,9 @@ impl Core {
         }
     }
 
-    /// Observes the account and registers the instance under it. `add` is the label asked
-    /// for and the accounts known before the add began: an account new since then gets the
-    /// label, if no other account has it.
-    fn after_login(
-        &self,
-        config_dir: &Path,
-        run: LoginRun,
-        add: Option<(&str, &[AccountUuid])>,
-    ) -> Result<LoginReport, Error> {
+    /// Observes the account and registers the instance under it; an account new to mccboard
+    /// gets the label the add asked for, if one is waiting (see [`Core::register`]).
+    fn after_login(&self, config_dir: &Path, run: LoginRun) -> Result<LoginReport, Error> {
         let registration = self.register(config_dir)?;
         let uuid = registration
             .instance
@@ -296,26 +292,12 @@ impl Core {
             .account
             .as_ref()
             .map(|observed| observed.uuid.clone());
-        let new_account = registration.new_account.is_some()
-            || add.is_some_and(|(_, known)| uuid.as_ref().is_some_and(|u| !known.contains(u)));
+        let new_account = registration.new_account.is_some();
 
         let registry = self.registry()?;
-        let mut account = uuid
+        let account = uuid
             .as_ref()
             .and_then(|uuid| registry.accounts.iter().find(|a| &a.uuid == uuid).cloned());
-        if let (Some((label, _)), Some(current)) = (add, &account) {
-            let taken = registry
-                .accounts
-                .iter()
-                .any(|a| a.uuid != current.uuid && account::same_label(&a.label, label));
-            if new_account && current.label != label && !taken {
-                let update = AccountUpdate {
-                    label: Some(label.to_owned()),
-                    ..AccountUpdate::default()
-                };
-                account = Some(self.update_account(&current.uuid, update)?);
-            }
-        }
 
         let mut warnings = Vec::new();
         if let Some(uuid) = &uuid {

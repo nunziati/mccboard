@@ -81,11 +81,15 @@ pub(crate) fn registry(
     })
 }
 
+/// `label` is the account label asked for by an add: it waits in `config.toml` until an
+/// account is observed in the instance, and that account gets it if it is new to mccboard and
+/// no other account has it. `None` keeps whatever label is waiting.
 pub(crate) fn register(
     home: &Path,
     config_file: &Path,
     env: &dyn Environment,
     path: &Path,
+    label: Option<&str>,
 ) -> Result<Registration, Error> {
     let config_dir = paths::resolve(home, path)?;
     let mut file = ConfigFile::load(config_file)?;
@@ -99,10 +103,16 @@ pub(crate) fn register(
         .map_or(config_dir, |entry| entry.config_dir.clone());
 
     let observation = instance::observe(home, &config_dir, env);
-    let new_account = observation
-        .account
-        .as_ref()
-        .and_then(|observed| record_account(&mut file, &config_dir, home, observed));
+    let wanted = label.map(str::to_owned).or_else(|| {
+        file.config
+            .instance(&config_dir)
+            .and_then(|entry| entry.label.clone())
+    });
+    let new_account = observation.account.as_ref().and_then(|observed| {
+        record_account(&mut file, &config_dir, home, observed, wanted.as_deref())
+    });
+    // Once an account is observed the label has been used, or the account had one already.
+    let waiting = wanted.filter(|_| observation.account.is_none());
 
     // A logged-out instance keeps the account it was registered with.
     let account = observation
@@ -114,12 +124,13 @@ pub(crate) fn register(
                 .instance(&config_dir)
                 .and_then(|entry| entry.account.clone())
         });
-    file.set_instance(&config_dir, account.as_ref());
+    file.set_instance(&config_dir, account.as_ref(), waiting.as_deref());
     file.save()?;
 
     let entry = InstanceEntry {
         config_dir,
         account,
+        label: waiting,
     };
     Ok(Registration {
         instance: status_with(home, &entry, observation),
@@ -127,13 +138,15 @@ pub(crate) fn register(
     })
 }
 
-/// Adds a newly seen account with suggested label and color, or refreshes the email of a
-/// known one. Returns the account if it is new.
+/// Adds a newly seen account, labelled `wanted` when given and free, else with a suggested
+/// label, and a suggested color; or refreshes the email of a known one. Returns the account if
+/// it is new.
 fn record_account(
     file: &mut ConfigFile,
     config_dir: &Path,
     home: &Path,
     observed: &ObservedAccount,
+    wanted: Option<&str>,
 ) -> Option<Account> {
     if let Some(known) = file.config.account(&observed.uuid) {
         if observed.email.is_some() && known.email != observed.email {
@@ -153,9 +166,19 @@ fn record_account(
         .collect();
     let colors: Vec<_> = file.config.accounts.iter().map(|a| &a.color).collect();
     let primary = InstanceKind::of(home, config_dir) == InstanceKind::Primary;
+    let label = wanted
+        .filter(|wanted| {
+            !labels
+                .iter()
+                .any(|taken| account::same_label(taken, wanted))
+        })
+        .map_or_else(
+            || account::suggest_label(config_dir, primary, &labels),
+            str::to_owned,
+        );
     let account = Account {
         uuid: observed.uuid.clone(),
-        label: account::suggest_label(config_dir, primary, &labels),
+        label,
         color: account::suggest_color(&colors),
         email: observed.email.clone(),
         launcher: None,

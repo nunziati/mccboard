@@ -125,12 +125,23 @@ impl Core {
     ///
     /// A linked instance gets its launcher (see [`Core::sync_launchers`]). If the launchers
     /// can't be written, the error says so; the registration is saved all the same.
+    ///
+    /// An instance added without its login keeps the account label asked for in `config.toml`
+    /// until its account is first observed: registering it then gives that label to the
+    /// account, if the account is new and no other account has the label.
     pub fn register(&self, path: &Path) -> Result<Registration, Error> {
+        self.register_labelled(path, None)
+    }
+
+    /// [`Core::register`], with `label` waiting for the instance's account (see
+    /// [`Core::add`]).
+    fn register_labelled(&self, path: &Path, label: Option<&str>) -> Result<Registration, Error> {
         let registration = registry::register(
             &self.home,
             &self.paths().config_file(),
             self.env.as_ref(),
             path,
+            label,
         )?;
         self.sync_launchers()?;
         Ok(registration)

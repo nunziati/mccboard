@@ -581,6 +581,63 @@ fn adding_without_login_stops_after_the_launcher() {
     assert!(f.registered(&dir).is_some());
 }
 
+#[test]
+fn the_label_asked_for_waits_in_the_config_for_a_later_login() {
+    let f = fixture();
+    let request = AddRequest {
+        login: false,
+        ..add("Personal Max")
+    };
+    f.core.add(&request).unwrap();
+    let dir = f.path(".claude-personal-max");
+    let config = f.home.config_text().unwrap();
+    assert!(config.contains(r#"label = "Personal Max""#), "{config}");
+
+    f.env.login_as(UUID_B, "b@example.com");
+    let report = f.core.login(&dir).unwrap();
+
+    let account = report.account.unwrap();
+    assert_eq!(account.uuid.as_str(), UUID_B);
+    assert_eq!(account.label, "Personal Max");
+    assert!(report.new_account);
+    // Used once the account is observed, then forgotten.
+    let config = f.home.config_text().unwrap();
+    assert_eq!(config.matches("label = ").count(), 2, "{config}");
+}
+
+#[test]
+fn the_label_asked_for_survives_a_login_that_couldnt_start() {
+    let f = fixture();
+    f.env
+        .on_login(|_| Err(io::Error::new(io::ErrorKind::NotFound, "program not found")));
+    f.core.add(&add("Work")).unwrap_err();
+
+    f.env.login_as(UUID_B, "b@example.com");
+    let report = f.core.login(&f.path(".claude-work")).unwrap();
+
+    assert_eq!(report.account.unwrap().label, "Work");
+}
+
+#[test]
+fn an_instance_registered_by_hand_later_gets_the_label_asked_for_too() {
+    let f = fixture();
+    let request = AddRequest {
+        login: false,
+        ..add("Work")
+    };
+    f.core.add(&request).unwrap();
+    let dir = f.path(".claude-work");
+    // Logged in outside mccboard (the launcher), then registered again.
+    f.home
+        .linked(".claude-work")
+        .logged_in_as(UUID_B, "b@example.com");
+
+    let registration = f.core.register(&dir).unwrap();
+
+    assert_eq!(registration.new_account.unwrap().label, "Work");
+    assert_eq!(f.label_of(UUID_B).as_deref(), Some("Work"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Refusals
 

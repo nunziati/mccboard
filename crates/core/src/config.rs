@@ -18,6 +18,8 @@
 //! [[instances]]
 //! path = "/home/me/.claude-b"   # absolute config directory
 //! account = "<account uuid>"    # the account it was registered with; absent when not logged in
+//! label = "B"                   # the account label asked for when it was added, kept until its
+//!                               # account is first observed (then that account gets it)
 //!
 //! [sharing.items]               # answers about unknown items of the primary instance
 //! gsd-core = "link"             # "link" from the primary, or keep "private" to each instance
@@ -43,6 +45,9 @@ use crate::{Error, Language, paths};
 pub(crate) struct InstanceEntry {
     pub config_dir: PathBuf,
     pub account: Option<AccountUuid>,
+    /// The account label asked for when the instance was added, while no account has been
+    /// observed in it yet.
+    pub label: Option<String>,
 }
 
 /// The validated contents of `config.toml`.
@@ -179,14 +184,21 @@ impl ConfigFile {
         }
     }
 
-    /// Registers an instance, or updates the account it is registered with.
-    pub fn set_instance(&mut self, config_dir: &Path, account: Option<&AccountUuid>) {
+    /// Registers an instance, or updates the account it is registered with and the label
+    /// waiting for its account (`None` removes it).
+    pub fn set_instance(
+        &mut self,
+        config_dir: &Path,
+        account: Option<&AccountUuid>,
+        label: Option<&str>,
+    ) {
         let uuid = account.map(AccountUuid::as_str);
         let mut found = false;
         for_each_instance(&mut self.doc, |entry| {
             if entry_is(entry, config_dir) {
                 found = true;
                 set_str(entry, "account", uuid);
+                set_str(entry, "label", label);
             }
         });
         if !found {
@@ -198,6 +210,9 @@ impl ConfigFile {
                     if let Some(uuid) = uuid {
                         table.insert("account", uuid.into());
                     }
+                    if let Some(label) = label {
+                        table.insert("label", label.into());
+                    }
                     array.push(table);
                 }
                 _ => {
@@ -205,6 +220,9 @@ impl ConfigFile {
                     table.insert("path", toml_edit::value(path.as_ref()));
                     if let Some(uuid) = uuid {
                         table.insert("account", toml_edit::value(uuid));
+                    }
+                    if let Some(label) = label {
+                        table.insert("label", toml_edit::value(label));
                     }
                     self.doc
                         .entry("instances")
@@ -222,10 +240,14 @@ impl ConfigFile {
             .iter_mut()
             .find(|i| paths::same(&i.config_dir, config_dir))
         {
-            Some(existing) => existing.account = account.cloned(),
+            Some(existing) => {
+                existing.account = account.cloned();
+                existing.label = label.map(str::to_owned);
+            }
             None => self.config.instances.push(InstanceEntry {
                 config_dir: config_dir.to_path_buf(),
                 account: account.cloned(),
+                label: label.map(str::to_owned),
             }),
         }
     }
@@ -362,6 +384,7 @@ struct RawAccount {
 struct RawInstance {
     path: PathBuf,
     account: Option<String>,
+    label: Option<String>,
 }
 
 impl RawConfig {
@@ -397,12 +420,18 @@ impl RawConfig {
                     raw.path.display()
                 ));
             }
+            let label = raw
+                .label
+                .map(|label| account::validate_label(&label))
+                .transpose()
+                .map_err(|e| format!("instances[{index}].label: {e}"))?;
             instances.push(InstanceEntry {
                 config_dir: raw.path,
                 account: raw
                     .account
                     .filter(|uuid| !uuid.is_empty())
                     .map(AccountUuid::new),
+                label,
             });
         }
         let mut sharing = BTreeMap::new();
