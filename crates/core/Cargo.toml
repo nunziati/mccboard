@@ -1,0 +1,21 @@
+[package]
+name = "mccboard-core"
+description = "mccboard's domain, data sources, setup operations and token rules (no Tauri)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Exposes `mccboard_core::testing` (the fake environment port) to tests.
+testing = []
+
+[dependencies]
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mccboard-core = { path = ".", features = ["testing"] }
+tempfile.workspace = true

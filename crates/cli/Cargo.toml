@@ -1,0 +1,22 @@
+[package]
+name = "mccboard-cli"
+description = "mccboard's command-line front end."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mccboard"
+path = "src/main.rs"
+
+[dependencies]
+mccboard-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+jiff.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
