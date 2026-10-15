@@ -17,7 +17,18 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
+# Listing Claude Code processes for the session guard (environment and working directory).
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
+[target.'cfg(windows)'.dependencies]
+# Directory links on Windows are junctions, which need no privilege (ADR 0006).
+junction = "2"
+# The Developer Mode check reads the registry.
+winreg = "0.56"
 
 [dev-dependencies]
 mccboard-core = { path = ".", features = ["testing"] }
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+junction = "2"

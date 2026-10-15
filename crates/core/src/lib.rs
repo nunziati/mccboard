@@ -9,8 +9,10 @@
 //! anything this crate returns, prints or persists.
 
 mod account;
+mod backup;
 mod claude_files;
 mod config;
+mod desktop_app;
 mod doctor;
 mod environment;
 mod error;
@@ -18,8 +20,11 @@ mod instance;
 mod links;
 mod paths;
 mod registry;
+mod repair;
 mod scan;
+mod session_guard;
 mod sharing;
+mod system;
 #[cfg(feature = "testing")]
 pub mod testing;
 
@@ -33,7 +38,9 @@ pub use error::Error;
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
+pub use repair::{RepairOutcome, RepairReport, RepairedItem};
 pub use scan::Candidate;
+pub use session_guard::{ClaudeProcess, ProcessConfigDir};
 pub use sharing::{SharingAnswer, SharingQuestion};
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
@@ -154,5 +161,33 @@ impl Core {
         let mut file = config::ConfigFile::load(&self.paths().config_file())?;
         file.set_sharing(item, answer);
         file.save()
+    }
+
+    /// The Claude Code processes using the instance in `config_dir` (absolute, or starting
+    /// with `~`). While there are any, operations that change the instance refuse.
+    pub fn processes_using(&self, config_dir: &Path) -> Result<Vec<ClaudeProcess>, Error> {
+        let config_dir = paths::resolve(&self.home, config_dir)?;
+        Ok(session_guard::processes_using(
+            &self.home,
+            self.env.as_ref(),
+            &config_dir,
+        ))
+    }
+
+    /// Repairs the drift of the registered instance in `config_dir`: every item, or only the
+    /// one whose id is `item` ([`DriftItem::id`]). Refuses before changing anything while a
+    /// Claude Code process uses the instance ([`Error::InstanceInUse`]), when a file link is
+    /// needed and Windows Developer Mode is off ([`Error::DeveloperModeOff`]), or when a link
+    /// would land in the Claude desktop app's data folder. Real files and folders a link
+    /// replaces are moved to a backup under `~/.mccboard/state/backups/` first. Repairing
+    /// again changes nothing; the primary instance is never relinked.
+    pub fn repair(&self, config_dir: &Path, item: Option<&str>) -> Result<RepairReport, Error> {
+        repair::repair(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            config_dir,
+            item,
+        )
     }
 }

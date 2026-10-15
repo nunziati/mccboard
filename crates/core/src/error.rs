@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::ClaudeProcess;
+
 /// Errors from core operations. Front ends translate them by [`Error::code`]; messages carry
 /// paths and mccboard's own settings only, never the contents of Claude Code's files, so no
 /// credential can leak through them.
@@ -65,6 +67,47 @@ pub enum Error {
          instance's folder, not one in the sharing table"
     )]
     InvalidSharingItem { item: String },
+
+    #[error(
+        "{} is in use by Claude Code ({}); close those sessions and try again. Nothing was \
+         changed",
+        path.display(),
+        describe_processes(processes)
+    )]
+    InstanceInUse {
+        path: PathBuf,
+        processes: Vec<ClaudeProcess>,
+    },
+
+    #[error(
+        "linking files on Windows needs Developer Mode, which is off. Turn it on in Settings > \
+         System > For developers (ms-settings:developers), then repair again. Nothing was changed"
+    )]
+    DeveloperModeOff,
+
+    #[error(
+        "{} is inside the Claude desktop app's data folder, where mccboard never creates links. \
+         Nothing was changed",
+        path.display()
+    )]
+    DesktopAppFolder { path: PathBuf },
+
+    #[error(
+        "{} has no drift item {id}: it may be repaired already. `mccboard doctor` lists the items",
+        path.display()
+    )]
+    DriftItemNotFound { path: PathBuf, id: String },
+}
+
+fn describe_processes(processes: &[ClaudeProcess]) -> String {
+    processes
+        .iter()
+        .map(|p| match &p.cwd {
+            Some(cwd) => format!("{} pid {} in {}", p.name, p.pid, cwd.display()),
+            None => format!("{} pid {}", p.name, p.pid),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl Error {
@@ -84,6 +127,10 @@ impl Error {
             Error::InvalidColor { .. } => "invalid_color",
             Error::InvalidLauncher { .. } => "invalid_launcher",
             Error::InvalidSharingItem { .. } => "invalid_sharing_item",
+            Error::InstanceInUse { .. } => "instance_in_use",
+            Error::DeveloperModeOff => "developer_mode_off",
+            Error::DesktopAppFolder { .. } => "desktop_app_folder",
+            Error::DriftItemNotFound { .. } => "drift_item_not_found",
         }
     }
 
@@ -96,7 +143,19 @@ impl Error {
             | Error::ConfigUnwritable { path, .. }
             | Error::RelativePath { path }
             | Error::NotADirectory { path }
-            | Error::NotRegistered { path } => Some(path),
+            | Error::NotRegistered { path }
+            | Error::InstanceInUse { path, .. }
+            | Error::DesktopAppFolder { path }
+            | Error::DriftItemNotFound { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The Claude Code processes that keep an instance from being changed, for
+    /// [`Error::InstanceInUse`].
+    pub fn processes(&self) -> Option<&[ClaudeProcess]> {
+        match self {
+            Error::InstanceInUse { processes, .. } => Some(processes),
             _ => None,
         }
     }
