@@ -111,7 +111,7 @@ pub fn doctor(core: &Core, args: DoctorArgs) -> Result<()> {
 }
 
 /// Asks about each unknown item; returns whether any answer was recorded.
-fn ask(core: &Core, questions: &[SharingQuestion]) -> Result<bool> {
+pub fn ask(core: &Core, questions: &[SharingQuestion]) -> Result<bool> {
     let stdin = std::io::stdin();
     let mut answered = false;
     println!("The primary instance has items mccboard doesn't know. Each is asked about once.");

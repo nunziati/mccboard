@@ -1,5 +1,6 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
+mod add;
 mod doctor;
 mod remove;
 mod repair;
@@ -53,6 +54,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Add a linked instance for an account: create its folder (~/.claude-<label> by
+    /// default), link and align it, create its launcher, open Claude Code's login, then
+    /// register it under the account it logged in with. Running it again completes what's
+    /// missing.
+    Add(add::AddArgs),
+    /// Open Claude Code's login in a registered instance (in this terminal on Linux, in a new
+    /// window on Windows), then record the account it logged in with. mccboard never sees
+    /// the credentials.
+    Login(add::LoginArgs),
     /// Forget registered instances. Their folders stay as they are.
     Unregister {
         /// Config directories to forget.
@@ -158,6 +168,8 @@ fn run(cli: Cli) -> Result<()> {
     let core = Core::new(home, SystemEnvironment);
 
     match cli.command {
+        Command::Add(args) => add::add(&core, args)?,
+        Command::Login(args) => add::login(&core, args)?,
         Command::Doctor(args) => doctor::doctor(&core, args)?,
         Command::Share(args) => doctor::share(&core, args)?,
         Command::Repair(args) => repair::repair(&core, args)?,
