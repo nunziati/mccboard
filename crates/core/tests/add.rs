@@ -405,6 +405,41 @@ fn adding_again_changes_nothing_and_doesnt_log_in_again() {
 }
 
 #[test]
+fn adding_again_opens_the_login_when_the_credentials_say_it_is_needed() {
+    let f = fixture();
+    f.env.login_as(UUID_B, "b@example.com");
+    f.core.add(&add("B")).unwrap();
+
+    // The token expired, perhaps for good: like the app's "Log in", adding again logs in.
+    f.env.advance(jiff::SignedDuration::from_hours(9));
+    let again = f.core.add(&add("B")).unwrap();
+    assert_eq!(again.login.run, LoginRun::Ran { exit_code: Some(0) });
+
+    // `oauthAccount` without credentials is no login either.
+    fs::remove_file(f.path(".claude-b/.credentials.json")).unwrap();
+    let again = f.core.add(&add("B")).unwrap();
+    assert_eq!(again.login.run, LoginRun::Ran { exit_code: Some(0) });
+    assert_eq!(f.env.login_invocations().len(), 3);
+}
+
+#[test]
+fn on_windows_an_account_without_a_credentials_file_counts_as_logged_in() {
+    // Claude Code may keep the credentials in the Windows Credential Manager, where mccboard
+    // doesn't look: the account in `.claude.json` is all there is to see.
+    let f = fixture();
+    f.env.set_os(OsKind::Windows);
+    f.home
+        .linked(".claude-b")
+        .logged_in_as(UUID_B, "b@example.com");
+
+    let report = f.core.add(&add("B")).unwrap();
+
+    assert_eq!(report.login.run, LoginRun::AlreadyLoggedIn);
+    assert!(f.env.login_invocations().is_empty());
+    assert_eq!(report.login.account.unwrap().label, "B");
+}
+
+#[test]
 fn a_login_that_cant_start_leaves_the_instance_ready_and_a_rerun_finishes() {
     let f = fixture();
     f.env

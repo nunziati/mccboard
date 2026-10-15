@@ -11,7 +11,7 @@
 //! 4. repairs its drift: the sharing table's links and the aligned items (Global config
 //!    keys, plugins and marketplaces);
 //! 5. opens Claude Code's official login through the environment port, unless the instance
-//!    is logged in already;
+//!    is logged in already (its credentials say so);
 //! 6. observes the account and registers the instance again, under it.
 //!
 //! The label asked for waits in `config.toml`, on the instance's entry, until an account is
@@ -29,12 +29,13 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::account::{self, Account, AccountUuid};
+use crate::claude_files;
 use crate::config::ConfigFile;
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::sharing::{self, Sharing};
 use crate::{
-    Core, Error, InstanceStatus, LoginInvocation, LoginTerminal, OsKind, RepairReport,
+    Core, Error, InstanceStatus, LoginInvocation, LoginState, LoginTerminal, OsKind, RepairReport,
     SharingQuestion, desktop_app, doctor, folder_guard, paths, session_guard,
 };
 
@@ -171,7 +172,7 @@ impl Core {
 
         let run = if !request.login {
             LoginRun::NotRequested
-        } else if self.observe(&config_dir).account.is_some() {
+        } else if self.logged_in_already(&config_dir) {
             LoginRun::AlreadyLoggedIn
         } else {
             self.open_login(&config_dir)?
@@ -202,6 +203,28 @@ impl Core {
             .ok_or(Error::NotRegistered { path: config_dir })?;
         let run = self.open_login(&config_dir)?;
         self.after_login(&config_dir, run)
+    }
+
+    /// Whether an add can skip the login. The credentials decide, as they do for the app's
+    /// "Log in" ([`LoginState`]): a valid token skips it; an expired one (perhaps for good: a
+    /// dead refresh token reads as expired), none, or unreadable ones open it. `oauthAccount`
+    /// alone says nothing: it may outlive the login.
+    ///
+    /// One exception: on Windows Claude Code may keep the credentials in the Credential
+    /// Manager instead of `.credentials.json`, and mccboard doesn't look there. With no
+    /// credentials file and an account in `.claude.json`, the login can't be told, so it isn't
+    /// forced; "Log in" stays available for the instance.
+    fn logged_in_already(&self, config_dir: &Path) -> bool {
+        let observation = self.observe(config_dir);
+        match observation.login {
+            LoginState::LoggedIn { .. } => true,
+            LoginState::NotLoggedIn => {
+                self.env.os() == OsKind::Windows
+                    && observation.account.is_some()
+                    && !claude_files::credentials_path(config_dir).exists()
+            }
+            LoginState::Expired { .. } | LoginState::Unknown => false,
+        }
     }
 
     fn check_addable(&self, config_dir: &Path) -> Result<(), Error> {
