@@ -159,6 +159,76 @@ fn account_set_changes_label_and_color_by_label() {
     assert_eq!(json["launcher_name"], "claude-main");
 }
 
+/// `mccboard` is the CLI's own name in the launchers' folder on Windows: no launcher takes it.
+#[test]
+fn mccboard_is_refused_as_a_launcher_name() {
+    let home = fixture_home();
+    assert!(
+        mccboard(home.path(), &["register", "~/.claude"])
+            .status
+            .success()
+    );
+
+    for name in ["mccboard", "MCCBOARD"] {
+        let out = mccboard(home.path(), &["account", "set", "A", "--launcher", name]);
+
+        assert!(!out.status.success());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("not a valid launcher name"), "{stderr}");
+        assert!(stderr.contains("\"mccboard\""), "{stderr}");
+    }
+}
+
+/// On Windows a launcher sync copies this CLI into the launchers' folder, on the PATH. That
+/// copy finds the shim and the app where it came from: it writes launchers too.
+#[cfg(windows)]
+#[test]
+fn on_windows_launcher_sync_puts_this_cli_in_the_bin_folder_and_the_copy_works() {
+    let home = fixture_home();
+    let out = mccboard(home.path(), &["register", "~/.claude", "~/.claude-b"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let this = Path::new(env!("CARGO_BIN_EXE_mccboard"));
+    let bin = home.path().join(".mccboard").join("bin");
+    let copy = bin.join("mccboard.exe");
+    assert_eq!(fs::read(&copy).unwrap(), fs::read(this).unwrap());
+    assert_eq!(
+        fs::read_to_string(bin.join("mccboard.origin"))
+            .unwrap()
+            .trim_end(),
+        this.parent().unwrap().display().to_string()
+    );
+
+    // The copy is the same version, and rewrites a launcher from the shim next to the app.
+    let version = Command::new(&copy).arg("--version").output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        format!("mccboard {}", env!("CARGO_PKG_VERSION"))
+    );
+    fs::remove_file(bin.join("claude-b.exe")).unwrap();
+    let out = Command::new(&copy)
+        .arg("--home")
+        .arg(home.path())
+        .args(["launcher", "sync"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let shim = this.with_file_name("mccboard-shim.exe");
+    assert_eq!(
+        fs::read(bin.join("claude-b.exe")).unwrap(),
+        fs::read(shim).unwrap()
+    );
+    // Identical to the CLI it came from: left as it is.
+    assert_eq!(fs::read(&copy).unwrap(), fs::read(this).unwrap());
+}
+
 #[test]
 fn a_corrupt_config_fails_and_stays_as_it_was() {
     let home = fixture_home();
