@@ -13,6 +13,7 @@
 //! Texts come in the app's [`Language`], with reset times relative to now and in the given
 //! time zone.
 
+pub(crate) mod profiles;
 mod text;
 
 use jiff::Timestamp;
