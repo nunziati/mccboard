@@ -469,6 +469,87 @@ fn labels_that_make_the_same_file_name_get_distinct_shortcuts() {
     );
 }
 
+/// A copy of mccboard's app: installed, or a development build in a cargo build folder.
+fn mccboard_copy(home: &TempHome, installed: bool) -> PathBuf {
+    let program = if installed {
+        home.path()
+            .join("Programs")
+            .join("mccboard")
+            .join("mccboard-app.exe")
+    } else {
+        let target = home.path().join("src").join("mccboard").join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        target.join("debug").join("mccboard-app.exe")
+    };
+    fs::create_dir_all(program.parent().unwrap()).unwrap();
+    fs::write(&program, "MZ fake mccboard").unwrap();
+    program
+}
+
+#[test]
+fn a_development_build_leaves_the_installed_apps_shortcut_alone() {
+    let (home, core, env) = setup();
+    let installed = mccboard_copy(&home, true);
+    let dev = mccboard_copy(&home, false);
+    env.set_mccboard_app(Some(&installed));
+    add_b(&home, &core);
+    env.set_desktop_processes(vec![desktop_process(
+        20,
+        &[&user_data_dir(&folder(&home, "b"))],
+    )]);
+
+    env.set_mccboard_app(Some(&dev));
+    let sync = core.sync_desktop_shortcuts().unwrap();
+    let running = core.running_desktop_profiles().unwrap();
+
+    assert!(
+        sync.written.is_empty(),
+        "the shortcut still starts the installed app"
+    );
+    assert_eq!(env.shortcuts_written().len(), 1);
+    assert_eq!(env.shortcuts_written()[0].target, installed);
+    let relaunch = running[0].identity.relaunch_command.clone().unwrap();
+    assert!(
+        relaunch.contains(&*installed.to_string_lossy()),
+        "{relaunch}"
+    );
+}
+
+#[test]
+fn the_installed_app_takes_the_shortcut_back_from_a_development_build() {
+    let (home, core, env) = setup();
+    let installed = mccboard_copy(&home, true);
+    let dev = mccboard_copy(&home, false);
+    env.set_mccboard_app(Some(&dev));
+    add_b(&home, &core);
+    assert_eq!(env.shortcuts_written()[0].target, dev);
+
+    env.set_mccboard_app(Some(&installed));
+    core.sync_desktop_shortcuts().unwrap();
+
+    assert_eq!(env.shortcuts_written().pop().unwrap().target, installed);
+}
+
+#[test]
+fn a_development_build_takes_the_shortcut_once_the_installed_app_is_gone() {
+    let (home, core, env) = setup();
+    let installed = mccboard_copy(&home, true);
+    let dev = mccboard_copy(&home, false);
+    env.set_mccboard_app(Some(&installed));
+    add_b(&home, &core);
+    fs::remove_file(&installed).unwrap();
+
+    env.set_mccboard_app(Some(&dev));
+    core.sync_desktop_shortcuts().unwrap();
+
+    assert_eq!(env.shortcuts_written().pop().unwrap().target, dev);
+}
+
 #[test]
 fn running_profiles_are_the_non_default_ones_with_all_their_processes() {
     let (home, core, env) = setup();

@@ -16,6 +16,9 @@
 //!   match the stored profiles: written when a profile is added, rewritten when its label or
 //!   color changes, removed with it. Pinning stays a manual right-click: Windows doesn't allow
 //!   it from code.
+//! - **Which mccboard they start**: the running app, except that a development build (in a
+//!   cargo build folder) leaves alone a shortcut that starts an installed copy still there.
+//!   With both on one machine, the installed app keeps the shortcuts and pins.
 //! - **Which shortcuts are mccboard's**: the ones it recorded in
 //!   `~/.mccboard/state/shortcuts.json`. Only those are ever rewritten or removed; a file of the
 //!   same name it didn't make is left alone.
@@ -244,7 +247,11 @@ pub(crate) fn running(
     if processes.is_empty() {
         return Ok(Vec::new());
     }
-    let target = env.mccboard_app().ok();
+    let recorded = load_record(&paths.state_dir().join(RECORD_FILE));
+    let target = env
+        .mccboard_app()
+        .ok()
+        .map(|app| shortcut_target(app, &recorded));
     let mut running = Vec::new();
     for profile in profiles(home, &config) {
         let account = &profile.entry.account;
@@ -314,9 +321,10 @@ pub(crate) fn sync(
             // Another home than the user's: no Start menu to keep in step.
             return Ok(report);
         };
-        let target = env.mccboard_app().map_err(|e| Error::AppProgramNotFound {
+        let app = env.mccboard_app().map_err(|e| Error::AppProgramNotFound {
             reason: e.to_string(),
         })?;
+        let target = shortcut_target(app, &recorded);
         let mut names = HashSet::new();
         for profile in &profiles {
             let account = &profile.entry.account;
@@ -410,6 +418,29 @@ pub(crate) fn sync(
         Some(error) => Err(error),
         None => Ok(report),
     }
+}
+
+/// The mccboard that shortcuts and relaunch commands start: `app`, the running one, unless it
+/// is a development build and a shortcut mccboard made starts an installed copy that is still
+/// there. The development build takes the shortcuts only once that copy is gone.
+fn shortcut_target(app: PathBuf, recorded: &[Record]) -> PathBuf {
+    if !is_cargo_build(&app) {
+        return app;
+    }
+    recorded
+        .iter()
+        .map(|r| &r.shortcut.target)
+        .find(|target| !is_cargo_build(target) && target.is_file())
+        .cloned()
+        .unwrap_or(app)
+}
+
+/// Whether `program` lies in a cargo build folder, which cargo marks with a `CACHEDIR.TAG`.
+fn is_cargo_build(program: &Path) -> bool {
+    program
+        .ancestors()
+        .skip(1)
+        .any(|dir| dir.join("CACHEDIR.TAG").is_file())
 }
 
 /// The stored desktop profiles whose account is registered, by label. A hand-edited entry for
