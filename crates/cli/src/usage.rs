@@ -4,7 +4,8 @@ use anyhow::Result;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use mccboard_core::{
-    AccountUsage, Core, UsageFailure, UsageReport, UsageStatus, UsageWarning, UsageWindow,
+    AccountUsage, Core, RenewalFailure, RenewalOutcome, UsageFailure, UsageReport, UsageStatus,
+    UsageWarning, UsageWindow,
 };
 
 /// Refreshes usage within the rate limits (or, with `cached`, only reads the last readings)
@@ -21,7 +22,7 @@ pub fn run(core: &Core, json: bool, cached: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print(&report, cached);
+        print(&report, cached, core.renew_expired_tokens()?);
     }
     Ok(())
 }
@@ -37,7 +38,7 @@ fn warning_text(warning: UsageWarning) -> &'static str {
     }
 }
 
-fn print(report: &UsageReport, cached: bool) {
+fn print(report: &UsageReport, cached: bool, renewal_on: bool) {
     if report.accounts.is_empty() {
         println!(
             "No account registered yet. Run `mccboard scan`, then `mccboard register <path>`."
@@ -48,11 +49,11 @@ fn print(report: &UsageReport, cached: bool) {
         if index > 0 {
             println!();
         }
-        print_account(usage, cached);
+        print_account(usage, cached, renewal_on);
     }
 }
 
-fn print_account(usage: &AccountUsage, cached: bool) {
+fn print_account(usage: &AccountUsage, cached: bool, renewal_on: bool) {
     let account = &usage.account;
     match &account.email {
         Some(email) => println!("{} {}  {email}", account.label, account.color),
@@ -103,8 +104,9 @@ fn print_account(usage: &AccountUsage, cached: bool) {
             Some("not read yet; run `mccboard usage` to read it".to_owned())
         }
         UsageStatus::NeverRead => Some("not read yet".to_owned()),
+        UsageStatus::TokenExpired if renewal_on => Some("token expired".to_owned()),
         UsageStatus::TokenExpired => Some(
-            "token expired: Claude Code renews it the next time it runs with this account"
+            "token expired: Claude Code renews it the next time it runs with this account              (or turn renewal on: `mccboard settings --renew-expired-tokens on`)"
                 .to_owned(),
         ),
         UsageStatus::NotLoggedIn => {
@@ -122,11 +124,57 @@ fn print_account(usage: &AccountUsage, cached: bool) {
     if let Some(status) = status {
         println!("  {status}");
     }
+    if let Some(renewal) = renewal_text(usage) {
+        println!("  {renewal}");
+    }
     if let Some(at) = usage.next_call_at
         && !usage.called
         && !cached
     {
         println!("  next refresh possible after {}", local(at));
+    }
+}
+
+/// When Claude Code renewed the account's token, or why it couldn't and when it tries again.
+fn renewal_text(usage: &AccountUsage) -> Option<String> {
+    let renewal = usage.renewal.as_ref()?;
+    let expired = usage.status == UsageStatus::TokenExpired;
+    let next = match renewal.next_attempt_at {
+        Some(at) => format!("next try after {}", local(at)),
+        None => "next try at the next refresh".to_owned(),
+    };
+    match (&renewal.last, expired) {
+        (Some(last), false) if last.outcome == RenewalOutcome::Renewed => Some(format!(
+            "token renewed by Claude Code at {}",
+            local(last.at)
+        )),
+        (_, false) => None,
+        (Some(last), true) => Some(match &last.outcome {
+            RenewalOutcome::Failed { failure } => format!(
+                "renewal in {} failed at {}: {}; {next}",
+                renewal.config_dir.display(),
+                local(last.at),
+                renewal_failure_text(failure)
+            ),
+            RenewalOutcome::Renewed => {
+                format!("renewal in {}: {next}", renewal.config_dir.display())
+            }
+        }),
+        (None, true) => Some(format!(
+            "renewal in {}: {next}",
+            renewal.config_dir.display()
+        )),
+    }
+}
+
+fn renewal_failure_text(failure: &RenewalFailure) -> String {
+    match failure {
+        RenewalFailure::ClaudeNotFound => "Claude Code (claude) is not on the PATH".to_owned(),
+        RenewalFailure::TimedOut => "Claude Code didn't finish within a minute".to_owned(),
+        RenewalFailure::Exited { code: Some(code) } => format!("Claude Code exited with {code}"),
+        RenewalFailure::Exited { code: None } => "Claude Code was stopped".to_owned(),
+        RenewalFailure::StillExpired => "the token is still expired".to_owned(),
+        RenewalFailure::NotStarted => "Claude Code couldn't be started".to_owned(),
     }
 }
 

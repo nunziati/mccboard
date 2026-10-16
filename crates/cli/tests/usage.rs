@@ -1,5 +1,5 @@
 //! Smoke tests for `mccboard usage`. None of them can reach the endpoint: they use `--cached`,
-//! or homes with no token at all.
+//! homes with no token at all, or an expired token that a fake Claude Code doesn't renew.
 
 use std::fs;
 use std::path::Path;
@@ -141,4 +141,141 @@ fn usage_with_nothing_registered_says_so() {
 
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("No account registered"));
+}
+
+// --- Claude Code renewing an expired token (#30) ------------------------------------------
+
+/// A home whose primary instance is logged in as A with a token that expired in 2020.
+fn expired_home() -> tempfile::TempDir {
+    let home = registered_home(false);
+    fs::write(
+        home.path().join(".claude").join(".credentials.json"),
+        format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"{FIXTURE_TOKEN}","refreshToken":"{FIXTURE_TOKEN}","expiresAt":1577836800000}}}}"#
+        ),
+    )
+    .unwrap();
+    home
+}
+
+/// A folder holding only a fake `claude` that appends what it was run with to `<bin>/seen`
+/// and exits 0 without renewing anything, so nothing can reach the endpoint.
+fn fake_claude(home: &Path) -> std::path::PathBuf {
+    let bin = home.join("fake-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let seen = bin.join("seen");
+    if cfg!(windows) {
+        fs::write(
+            bin.join("claude.cmd"),
+            format!(
+                "@echo off\r\n>>\"{}\" echo %CLAUDE_CONFIG_DIR%^|%USERPROFILE%^|%CD%^|%*\r\n\
+                 echo {{\"loggedIn\": true, \"email\": \"a@example.com\"}}\r\nexit /b 0\r\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+    } else {
+        let script = bin.join("claude");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"${{CLAUDE_CONFIG_DIR-}}|$HOME|$PWD|$*\" >> '{}'\n\
+                 echo '{{\"loggedIn\": true, \"email\": \"a@example.com\"}}'\nexit 0\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    bin
+}
+
+/// `mccboard` with a PATH where the only `claude` is the fake one: never a real Claude Code.
+fn mccboard_with_fake_claude(home: &Path, bin: &Path, args: &[&str]) -> Output {
+    let system = if cfg!(windows) {
+        // cmd.exe, which runs the fake `claude.cmd`.
+        std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32")
+    } else {
+        "/usr/bin:/bin".into()
+    };
+    let path = std::env::join_paths([bin.to_path_buf(), system]).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_mccboard"))
+        .arg("--home")
+        .arg(home)
+        .args(args)
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
+fn seen(bin: &Path) -> Vec<String> {
+    fs::read_to_string(bin.join("seen"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn an_expired_token_is_handed_to_claude_code_once_and_the_outcome_shown() {
+    let home = expired_home();
+    let bin = fake_claude(home.path());
+
+    let out = mccboard_with_fake_claude(home.path(), &bin, &["usage"]);
+
+    assert!(out.status.success(), "{out:?}");
+    assert_no_token(&out);
+    let seen = seen(&bin);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let fields: Vec<&str> = seen[0].trim().split('|').collect();
+    // The primary instance: no CLAUDE_CONFIG_DIR, the home is its folder's parent.
+    assert_eq!(fields[0], "");
+    let same = |a: &str, b: &Path| {
+        assert_eq!(
+            Path::new(a).canonicalize().unwrap(),
+            b.canonicalize().unwrap()
+        )
+    };
+    same(fields[1], home.path());
+    same(fields[2], &home.path().join(".mccboard/state/renewal"));
+    assert_eq!(fields[3], "auth status");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("token expired"), "{text}");
+    assert!(text.contains("the token is still expired"), "{text}");
+    assert!(text.contains("next try after"), "{text}");
+    // Claude Code's own output names the account; mccboard shows none of it.
+    assert!(!text.contains("loggedIn"), "{text}");
+
+    // The next refresh within 30 minutes doesn't run it again.
+    let again = mccboard_with_fake_claude(home.path(), &bin, &["usage", "--json"]);
+    assert!(again.status.success());
+    assert_eq!(self::seen(&bin).len(), 1);
+    let report: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    let renewal = &report["accounts"][0]["renewal"];
+    assert_eq!(renewal["last"]["outcome"], "failed");
+    assert_eq!(renewal["last"]["failure"]["kind"], "still_expired");
+}
+
+#[test]
+fn with_renewal_off_claude_code_is_not_run() {
+    let home = expired_home();
+    let bin = fake_claude(home.path());
+
+    let set = mccboard(home.path(), &["settings", "--renew-expired-tokens", "off"]);
+    assert!(set.status.success(), "{set:?}");
+    assert!(String::from_utf8_lossy(&set.stdout).contains("renew-expired-tokens: off"));
+    let out = mccboard_with_fake_claude(home.path(), &bin, &["usage"]);
+
+    assert!(out.status.success());
+    assert!(seen(&bin).is_empty());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("--renew-expired-tokens on"), "{text}");
+
+    let shown = mccboard(home.path(), &["settings", "--json"]);
+    let settings: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(settings["renew_expired_tokens"], false);
 }

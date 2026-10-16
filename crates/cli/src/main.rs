@@ -4,6 +4,7 @@ mod add;
 mod doctor;
 mod remove;
 mod repair;
+mod settings;
 mod usage;
 
 use std::path::{Path, PathBuf};
@@ -70,7 +71,9 @@ enum Command {
         paths: Vec<PathBuf>,
     },
     /// Show each account's usage windows. Refreshes from the usage endpoint first, once per
-    /// account and only as often as the rate limits allow.
+    /// account and only as often as the rate limits allow. An expired token is first renewed
+    /// by Claude Code, run hidden in that instance, unless `mccboard settings
+    /// --renew-expired-tokens off`.
     Usage {
         /// Print machine-readable JSON.
         #[arg(long)]
@@ -103,6 +106,8 @@ enum Command {
         #[command(subcommand)]
         command: LauncherCommand,
     },
+    /// Show mccboard's preferences, or change them. Saved in config.toml.
+    Settings(settings::SettingsArgs),
 }
 
 #[derive(Subcommand)]
@@ -226,6 +231,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Usage { json, cached } => usage::run(&core, json, cached)?,
+        Command::Settings(args) => settings::settings(&core, args)?,
         Command::Account {
             command:
                 AccountCommand::Set {
