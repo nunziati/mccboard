@@ -3,6 +3,7 @@
   import AccountHeader from './lib/AccountHeader.svelte'
   import AddInstance from './lib/AddInstance.svelte'
   import DesktopProfiles from './lib/DesktopProfiles.svelte'
+  import DesktopNoticesBanner from './lib/DesktopNoticesBanner.svelte'
   import DriftCount from './lib/DriftCount.svelte'
   import DriftList from './lib/DriftList.svelte'
   import LauncherCell from './lib/LauncherCell.svelte'
@@ -354,6 +355,8 @@
       <button onclick={reload} disabled={busy}>{t('instances.rescan')}</button>
     </div>
   </header>
+
+  <DesktopNoticesBanner />
 
   {#if loadError}
     {@render failure(loadError, null)}

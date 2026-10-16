@@ -1,6 +1,7 @@
 //! The Tauri binding: exposes core operations as commands. No logic lives here (ADR 0004).
 
 mod desktop;
+mod desktop_watch;
 mod settings;
 mod tray;
 mod usage;
@@ -257,6 +258,8 @@ pub fn run() {
             desktop::add_desktop_profile,
             desktop::update_desktop_profile,
             desktop::remove_desktop_profile,
+            desktop_watch::desktop_notices,
+            desktop_watch::dismiss_desktop_notice,
             settings::language,
             settings::set_language
         ])
@@ -268,6 +271,7 @@ pub fn run() {
                 eprintln!("mccboard: cannot watch config.toml: {error}");
             }
             desktop::open_at_start(&core);
+            desktop_watch::setup(app, &core)?;
             Ok(())
         })
         .build(tauri::generate_context!())
