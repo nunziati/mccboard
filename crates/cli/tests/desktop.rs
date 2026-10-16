@@ -254,3 +254,22 @@ fn open_off_windows_says_profiles_open_on_windows_only() {
     }
     assert!(!folder.exists(), "no folder is created when nothing opens");
 }
+
+#[test]
+fn notices_with_no_profile_running_report_none() {
+    let home = fixture_home();
+    let folder = home.path().join("profiles").join("b");
+    let out = mccboard(
+        home.path(),
+        &["desktop", "add", "B", "--folder", folder.to_str().unwrap()],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+
+    let notices = json(&mccboard(home.path(), &["desktop", "notices", "--json"]));
+    assert_eq!(notices["language"], "en");
+    assert_eq!(notices["notices"], serde_json::json!([]));
+
+    let out = mccboard(home.path(), &["desktop", "notices"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("opened by mccboard"), "{}", text(&out));
+}

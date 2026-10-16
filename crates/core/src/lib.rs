@@ -20,6 +20,7 @@ mod desktop_app;
 mod desktop_launch;
 mod desktop_process;
 mod desktop_profile;
+mod desktop_watch;
 mod doctor;
 mod environment;
 mod error;
@@ -58,6 +59,7 @@ pub use desktop_profile::{
     DesktopObservation, DesktopOpening, DesktopProfile, DesktopProfileRemoval,
     DesktopProfileUpdate, DesktopWarning,
 };
+pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
     ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
@@ -94,6 +96,8 @@ pub struct Core {
     env: Arc<dyn Environment>,
     /// Serializes usage refreshes within this process (rate limits are per account).
     usage_lock: Arc<Mutex<()>>,
+    /// What the desktop profile watch remembers between polls ([`Core::poll_desktop_profiles`]).
+    desktop_watch: Arc<Mutex<desktop_watch::Watch>>,
 }
 
 impl Core {
@@ -103,6 +107,7 @@ impl Core {
             home: home.into(),
             env: Arc::new(env),
             usage_lock: Arc::default(),
+            desktop_watch: Arc::default(),
         }
     }
 
@@ -312,6 +317,41 @@ impl Core {
     /// variables are still removed). Refuses as [`Core::open_desktop_profile`] does.
     pub fn open_default_desktop_profile(&self) -> Result<DesktopOpening, Error> {
         desktop_profile::open(&self.home, &self.paths(), self.env.as_ref(), None)
+    }
+
+    /// Looks at the desktop app's processes once, compares them with the previous look and
+    /// with the processes mccboard launched (remembered in `~/.mccboard/state/`), and returns
+    /// the notices showing, in `language`:
+    /// - a stored profile running from a process mccboard didn't start, probably the app's
+    ///   restart after an update ([`DesktopNoticeKind::ReopenedWithoutMccboard`]): its Code tab
+    ///   may lack its instance;
+    /// - a profile that vanished while, within a minute, a new copy of the default profile
+    ///   appeared ([`DesktopNoticeKind::ClosedByUpdate`]).
+    ///
+    /// Front ends call it every few seconds; one look alone can only tell the first case. A
+    /// notice goes once the profile runs again from a launch by mccboard, or when dismissed
+    /// ([`Core::dismiss_desktop_notice`]). Nothing is ever closed. Without stored profiles,
+    /// no process is listed.
+    pub fn poll_desktop_profiles(&self, language: Language) -> Result<DesktopNotices, Error> {
+        desktop_watch::poll(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            &self.desktop_watch,
+            language,
+        )
+    }
+
+    /// The desktop profile notices as of the last [`Core::poll_desktop_profiles`], in
+    /// `language`. Lists no process.
+    pub fn desktop_notices(&self, language: Language) -> Result<DesktopNotices, Error> {
+        desktop_watch::notices(&self.paths(), &self.desktop_watch, language)
+    }
+
+    /// Hides the notice of `account`'s desktop profile until it happens again; `false` when
+    /// none was showing.
+    pub fn dismiss_desktop_notice(&self, account: &AccountUuid) -> bool {
+        desktop_watch::dismiss(&self.desktop_watch, account)
     }
 
     /// The processes of the Claude desktop app using the data folder `data_folder`

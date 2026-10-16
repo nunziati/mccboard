@@ -34,6 +34,7 @@ use crate::account::{self, Account, AccountUuid, Color};
 use crate::config::{Config, ConfigFile, DesktopProfileEntry};
 use crate::desktop_launch::{self, DesktopLaunch};
 use crate::desktop_process::{self, DesktopProcess};
+use crate::desktop_watch::launches;
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::{
@@ -158,7 +159,12 @@ pub(crate) fn open(
 
     let Some(account) = account else {
         let program = desktop_launch::find_app(home, env)?;
-        let pid = start(env, &desktop_launch::launch(program.clone(), None, None))?;
+        let pid = start(
+            paths,
+            env,
+            &desktop_launch::launch(program.clone(), None, None),
+            None,
+        )?;
         return Ok(DesktopOpening {
             default: true,
             account: default_account.cloned(),
@@ -195,7 +201,7 @@ pub(crate) fn open(
         source,
     })?;
     let launch = desktop_launch::launch(program.clone(), Some(&data_folder), Some(&instance));
-    let pid = start(env, &launch)?;
+    let pid = start(paths, env, &launch, Some(account))?;
     Ok(DesktopOpening {
         default: false,
         account: Some(account.clone()),
@@ -208,11 +214,30 @@ pub(crate) fn open(
     })
 }
 
-fn start(env: &dyn Environment, launch: &DesktopLaunch) -> Result<u32, Error> {
-    env.launch_desktop_app(launch)
+/// Starts the app and remembers the pid for the watch ([`crate::desktop_watch`]): a profile
+/// mccboard started is never reported as reopened without it. Failing to remember doesn't fail
+/// the opening; the app runs already.
+fn start(
+    paths: &Paths,
+    env: &dyn Environment,
+    launch: &DesktopLaunch,
+    account: Option<&AccountUuid>,
+) -> Result<u32, Error> {
+    let pid = env
+        .launch_desktop_app(launch)
         .map_err(|e| Error::DesktopAppNotOpened {
             reason: e.to_string(),
-        })
+        })?;
+    let _ = launches::record(
+        paths,
+        env,
+        launches::Launch {
+            pid,
+            account: account.cloned(),
+            at: env.now(),
+        },
+    );
+    Ok(pid)
 }
 
 pub(crate) fn list(
