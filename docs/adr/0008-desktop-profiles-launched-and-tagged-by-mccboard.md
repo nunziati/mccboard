@@ -14,7 +14,7 @@ Checked by hand on the Windows laptop with Claude 2.42304 (MSIX, package family 
 - **Signing in.** It never relies on the `claude://` link, which the default profile receives. Instead: open the e-mailed link in the browser, cancel opening the app, choose "sign in with a code", and type the code into the profile's window. mccboard guides the user through this.
 - **The account.** A profile's account is observed from the names of its `claude-code-sessions\<account uuid>` folders. The token stays in the app's encrypted store and mccboard never reads it (ADR 0002).
 
-The app restarts itself after an update. That restart may lose `--user-data-dir` and does lose `CLAUDE_CONFIG_DIR` (anthropics/claude-code#90868). mccboard detects a profile the app restarted on its own and offers to reopen it, rather than stopping the app's updates. A profile whose Code tab fell back to `~\.claude` would write its account into the primary instance's `.claude.json` (#99240).
+The app restarts itself after an update. That restart may lose `--user-data-dir` and does lose `CLAUDE_CONFIG_DIR` (anthropics/claude-code#90868). mccboard detects a profile the app restarted on its own and offers to reopen it, rather than stopping the app's updates. A profile whose Code tab fell back to `~\.claude` would write its account into the primary instance's `.claude.json` (anthropics/claude-code#99240).
 
 ## Considered Options
 
