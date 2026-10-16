@@ -1,5 +1,5 @@
 //! The tray view model (spec stories 60–64; ticket #8): the icon's worst account and
-//! percentage, the tooltip, the status lines of the menu, "no instances" and "token expired".
+//! weekly percentage (#45), the tooltip, the status lines of the menu, "no instances" and "token expired".
 //!
 //! Every test runs on a temporary home with the fake environment port, and gets its usage
 //! report the way the app does: `refresh_usage` or `usage`, then `tray_view`.
@@ -111,10 +111,10 @@ fn color_of(core: &Core, uuid: &str) -> String {
         .to_string()
 }
 
-// --- The icon: the account closest to a limit ---------------------------------------------
+// --- The icon: the account closest to its weekly limit (#45) ------------------------------
 
 #[test]
-fn the_icon_shows_the_account_whose_session_or_weekly_window_is_highest_in_its_color() {
+fn the_icon_shows_the_account_whose_weekly_window_is_highest_in_its_color() {
     let (_home, core, env) = home_with_a_and_b();
     // Accounts are called in label order: A, then B.
     env.push_usage_reply(ok(35.0, 14.0, &[]));
@@ -133,22 +133,25 @@ fn the_icon_shows_the_account_whose_session_or_weekly_window_is_highest_in_its_c
 }
 
 #[test]
-fn model_windows_do_not_drive_the_icon() {
+fn session_and_model_windows_do_not_drive_the_icon() {
     let (_home, core, env) = home_with_a_and_b();
+    // B's session window is the highest of all, A's model window too: A's weekly one wins.
     env.push_usage_reply(ok(20.0, 30.0, &[("Fable", 95.0)]));
-    env.push_usage_reply(ok(40.0, 10.0, &[]));
+    env.push_usage_reply(ok(90.0, 10.0, &[]));
 
     let view = english(&core, &core.refresh_usage().unwrap());
 
-    assert_eq!(view.icon.percent, Some(40));
-    assert_eq!(view.icon.account, Some(AccountUuid::new(UUID_B)));
+    assert_eq!(view.icon.percent, Some(30));
+    assert_eq!(view.icon.account, Some(AccountUuid::new(UUID_A)));
+    // The menu headings still give each account's highest window.
+    assert_eq!(view.accounts[1].title, "B · 90%");
 }
 
 #[test]
 fn a_tie_goes_to_the_first_account_in_label_order() {
     let (_home, core, env) = home_with_a_and_b();
-    env.push_usage_reply(ok(50.0, 10.0, &[]));
     env.push_usage_reply(ok(10.0, 50.0, &[]));
+    env.push_usage_reply(ok(70.0, 50.0, &[]));
 
     let view = english(&core, &core.refresh_usage().unwrap());
 
@@ -197,7 +200,7 @@ fn a_stale_worst_reading_marks_the_icon_tooltip_and_menu() {
 
     let view = english(&core, &core.refresh_usage().unwrap());
 
-    assert_eq!(view.icon.percent, Some(35));
+    assert_eq!(view.icon.percent, Some(14));
     assert!(view.icon.stale);
     assert!(view.accounts[0].stale);
     assert!(
@@ -273,16 +276,20 @@ fn a_window_whose_reset_passed_reads_as_zero_even_in_an_older_report() {
     let (_home, core, env) = home_with_a();
     env.push_usage_reply(ok(90.0, 20.0, &[]));
     let report = core.refresh_usage().unwrap();
-    assert_eq!(english(&core, &report).icon.percent, Some(90));
+    assert_eq!(english(&core, &report).icon.percent, Some(20));
 
     // The session window resets at 15:00; the tray redraws from the same report afterwards.
     env.set_now(ts(SESSION_RESET) + secs(60));
     let view = english(&core, &report);
 
-    assert_eq!(view.icon.percent, Some(20));
     let session = &view.accounts[0].windows[0];
     assert_eq!(session.percent, 0);
     assert_eq!(session.resets_at, None);
+    assert_eq!(view.accounts[0].title, "A · 20%");
+
+    // So does the weekly one, and the icon with it.
+    env.set_now(ts(WEEKLY_RESET) + secs(60));
+    assert_eq!(english(&core, &report).icon.percent, Some(0));
 }
 
 // --- No instances, single account ----------------------------------------------------------
@@ -337,7 +344,7 @@ fn a_single_account_is_a_plain_usage_indicator() {
 
     let view = english(&core, &core.refresh_usage().unwrap());
 
-    assert_eq!(view.icon.percent, Some(35));
+    assert_eq!(view.icon.percent, Some(14));
     assert_eq!(view.icon.color.to_string(), color_of(&core, UUID_A));
     // No account label: one line per window with its reset.
     assert_eq!(

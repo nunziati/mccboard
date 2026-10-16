@@ -641,9 +641,9 @@ impl Core {
     }
 
     /// What the tray shows for `report` (from [`Core::usage`] or [`Core::refresh_usage`]),
-    /// as of now: the worst account's percentage and color for the icon, a tooltip that fits
-    /// the Windows tray, every account's windows as menu lines, and "no instances" when none
-    /// is registered. Texts are in `language`, with reset times shown in `tz`. Windows whose
+    /// as of now: the weekly window and color of the account closest to its weekly limit for
+    /// the icon, a tooltip that fits the Windows tray, every account's windows as menu lines,
+    /// and "no instances" when none is registered. Texts are in `language`, with reset times shown in `tz`. Windows whose
     /// reset passed since the report read as zero. Reads `config.toml`; calls nothing.
     pub fn tray_view(
         &self,
