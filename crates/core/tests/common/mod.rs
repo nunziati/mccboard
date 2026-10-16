@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use jiff::Timestamp;
 use mccboard_core::Core;
@@ -218,4 +219,22 @@ pub fn desktop_process(pid: u32, args: &[&str]) -> mccboard_core::ProcessListing
 /// `--user-data-dir=<folder>`, as mccboard passes it.
 pub fn user_data_dir(folder: &Path) -> String {
     format!("--user-data-dir={}", folder.display())
+}
+
+/// Sets the modification time of the folder `dir`. On Windows a folder opens only with
+/// `FILE_FLAG_BACKUP_SEMANTICS`, and setting its times needs `FILE_WRITE_ATTRIBUTES`.
+pub fn set_folder_modified(dir: &Path, modified: SystemTime) {
+    #[cfg(windows)]
+    let folder = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+    };
+    #[cfg(not(windows))]
+    let folder = fs::File::open(dir);
+    folder.unwrap().set_modified(modified).unwrap();
 }

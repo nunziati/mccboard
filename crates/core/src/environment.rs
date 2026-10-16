@@ -69,8 +69,11 @@ pub trait Environment: Send + Sync {
     fn program_icon(&self, program: &Path) -> io::Result<Image>;
 
     /// The current user's Start-menu Programs folder, where desktop profiles' shortcuts go
-    /// (`%APPDATA%\Microsoft\Windows\Start Menu\Programs`). `Unsupported` off Windows.
-    fn start_menu_programs(&self) -> io::Result<PathBuf>;
+    /// (`%APPDATA%\Microsoft\Windows\Start Menu\Programs`), for a core working in `home`.
+    /// `None` when `home` isn't the current user's (`mccboard --home`, tests): shortcuts made
+    /// there would never show in the Start menu, and the user's own are never touched.
+    /// `Unsupported` off Windows.
+    fn start_menu_programs(&self, home: &Path) -> io::Result<Option<PathBuf>>;
 
     /// mccboard's app, the program a desktop profile's shortcut starts: the running program
     /// when it is the app, else the app next to it (the CLI's folder). Errors when it isn't
@@ -312,13 +315,19 @@ impl Environment for SystemEnvironment {
         ))
     }
 
+    /// Only for a core working in the user's own home: one working in another home
+    /// (`mccboard --home`, tests) never writes in the user's Start menu.
     #[cfg(windows)]
-    fn start_menu_programs(&self) -> io::Result<PathBuf> {
-        crate::windows_shell::start_menu_programs()
+    fn start_menu_programs(&self, home: &Path) -> io::Result<Option<PathBuf>> {
+        let own = std::env::home_dir().is_some_and(|own| crate::paths::same(&own, home));
+        if !own {
+            return Ok(None);
+        }
+        crate::windows_shell::start_menu_programs().map(Some)
     }
 
     #[cfg(not(windows))]
-    fn start_menu_programs(&self) -> io::Result<PathBuf> {
+    fn start_menu_programs(&self, _home: &Path) -> io::Result<Option<PathBuf>> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "the Start menu exists on Windows only",

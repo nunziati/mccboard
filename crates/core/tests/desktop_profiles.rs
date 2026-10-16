@@ -10,7 +10,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use common::{FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, UUID_C, desktop_process, user_data_dir};
+use common::{
+    FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, UUID_C, desktop_process, set_folder_modified,
+    user_data_dir,
+};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
     AccountUpdate, AccountUuid, AddRequest, CLAUDE_ORANGE, Color, Core, DesktopDataDir,
@@ -44,7 +47,7 @@ fn signed_in(data_folder: &Path, account: &str, modified: SystemTime) {
     let org_dir = account_dir.join(ORG);
     fs::create_dir_all(&org_dir).unwrap();
     for dir in [&org_dir, &account_dir] {
-        fs::File::open(dir).unwrap().set_modified(modified).unwrap();
+        set_folder_modified(dir, modified);
     }
 }
 

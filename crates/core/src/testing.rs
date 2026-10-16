@@ -60,6 +60,7 @@ struct State {
     desktop_launch_handler: DesktopLaunchHandler,
     program_icon: Option<Image>,
     start_menu: Option<PathBuf>,
+    other_home: bool,
     mccboard_app: Option<PathBuf>,
     shortcuts_written: Vec<Shortcut>,
     shortcut_error: Option<String>,
@@ -131,6 +132,7 @@ impl FakeEnvironment {
                 desktop_launch_handler: DesktopLaunchHandler(None),
                 program_icon: None,
                 start_menu: None,
+                other_home: false,
                 mccboard_app: Some(PathBuf::from(FAKE_MCCBOARD_APP)),
                 shortcuts_written: Vec::new(),
                 shortcut_error: None,
@@ -258,6 +260,12 @@ impl FakeEnvironment {
     /// Sets the Start menu's Programs folder; `None` (the default): it can't be found.
     pub fn set_start_menu(&self, folder: Option<&Path>) {
         self.state().start_menu = folder.map(Path::to_path_buf);
+    }
+
+    /// Plays a core working in another home than the user's (`mccboard --home`) when `true`:
+    /// the Start menu is not offered, as the real environment does. `false` by default.
+    pub fn set_other_home(&self, other: bool) {
+        self.state().other_home = other;
     }
 
     /// Sets where mccboard's app is; `None`: it can't be found. [`FAKE_MCCBOARD_APP`] by
@@ -473,10 +481,15 @@ impl Environment for FakeEnvironment {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no program icon"))
     }
 
-    fn start_menu_programs(&self) -> io::Result<PathBuf> {
-        self.state()
+    fn start_menu_programs(&self, _home: &Path) -> io::Result<Option<PathBuf>> {
+        let state = self.state();
+        if state.other_home {
+            return Ok(None);
+        }
+        state
             .start_menu
             .clone()
+            .map(Some)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no Start menu"))
     }
 

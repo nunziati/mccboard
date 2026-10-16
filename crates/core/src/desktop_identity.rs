@@ -236,7 +236,7 @@ pub(crate) fn running(
 /// Makes the Start-menu shortcuts match the stored desktop profiles (Windows; elsewhere it
 /// does nothing). Writes a missing or outdated shortcut, deletes the ones mccboard made that no
 /// profile needs, and leaves the rest. With no profile and no shortcut recorded, it asks the
-/// system nothing.
+/// system nothing; in another home than the user's (`mccboard --home`) it does nothing.
 ///
 /// Fails, before writing anything, when the Start menu or mccboard's app can't be found; after
 /// the others are done, when a shortcut can't be written.
@@ -259,11 +259,15 @@ pub(crate) fn sync(
 
     let mut wanted = Vec::new();
     if !profiles.is_empty() {
-        let folder = env
-            .start_menu_programs()
+        let Some(folder) = env
+            .start_menu_programs(home)
             .map_err(|e| Error::StartMenuNotFound {
                 reason: e.to_string(),
-            })?;
+            })?
+        else {
+            // Another home than the user's: no Start menu to keep in step.
+            return Ok(report);
+        };
         let target = env.mccboard_app().map_err(|e| Error::AppProgramNotFound {
             reason: e.to_string(),
         })?;

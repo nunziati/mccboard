@@ -373,12 +373,13 @@ fn a_profile_whose_instance_went_away_is_not_opened_on_the_primary_one() {
 #[test]
 fn a_hand_edited_data_folder_on_an_instance_is_never_used() {
     let (home, core, env) = setup();
-    let text = home.config_text().unwrap();
     let instance = home.path().join(".claude-b");
-    home.write_config(&text.replace(
-        &format!("{:?}", folder_b(&home).display().to_string()),
-        &format!("{:?}", instance.display().to_string()),
-    ));
+    // Edited as TOML: the core may write a Windows path as a literal string ('C:\…').
+    let mut config: toml_edit::DocumentMut = home.config_text().unwrap().parse().unwrap();
+    config["desktop_profiles"][0]["data_folder"] = toml_edit::value(instance.to_str().unwrap());
+    home.write_config(&config.to_string());
+    let profile = profile(&core.desktop_profiles().unwrap(), UUID_B).clone();
+    assert_eq!(profile.data_folder, instance, "the edit took");
 
     let error = core.open_desktop_profile(&uuid(UUID_B)).unwrap_err();
 

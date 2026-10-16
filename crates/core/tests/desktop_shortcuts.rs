@@ -262,6 +262,24 @@ fn off_windows_no_shortcut_is_written() {
 }
 
 #[test]
+fn in_another_home_than_the_users_no_shortcut_is_made() {
+    // `mccboard --home <folder>` (and the CLI's tests) on Windows: the user's own Start menu
+    // is never written, and the missing app next to the CLI doesn't fail the add.
+    let (home, core, env) = setup();
+    env.set_other_home(true);
+    env.set_mccboard_app(None);
+
+    add_b(&home, &core);
+    let sync = core.sync_desktop_shortcuts().unwrap();
+    core.remove_desktop_profile(&uuid(UUID_B), RemoveLevel::FromMccboard)
+        .unwrap();
+
+    assert_eq!(sync, Default::default());
+    assert!(env.shortcuts_written().is_empty());
+    assert!(!home.start_menu().exists());
+}
+
+#[test]
 fn with_no_profile_nothing_is_asked_of_the_system() {
     let (_home, core, env) = setup();
     env.set_start_menu(None);

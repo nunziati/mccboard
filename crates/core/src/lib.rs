@@ -347,7 +347,8 @@ impl Core {
     /// deleted; files it didn't make are never touched. Pinning stays the user's.
     ///
     /// Adding, changing and removing profiles and accounts call it; the app also calls it when
-    /// it starts and when `config.toml` changes. Running it again changes nothing. Fails when
+    /// it starts and when `config.toml` changes. Running it again changes nothing. A core
+    /// working in another home than the user's (`mccboard --home`) makes no shortcut. Fails when
     /// the Start menu ([`Error::StartMenuNotFound`]) or mccboard's app
     /// ([`Error::AppProgramNotFound`]) can't be found, or a shortcut can't be written
     /// ([`Error::ShortcutNotWritten`]); an icon that can't be drawn is only a warning.
