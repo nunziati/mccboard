@@ -88,7 +88,9 @@ pub use environment::{
     LoginTerminal, OsKind, RenewalExit, RenewalInvocation, SystemEnvironment,
 };
 pub use error::Error;
-pub use icon::{IconCache, IconSources, Image, PackageLogos, ProfileIcons};
+pub use icon::{
+    IconCache, IconSources, Image, LogoStyle, PackageLogos, ProfileIcons, mccboard_logo,
+};
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use language::Language;
 pub use launcher::{
