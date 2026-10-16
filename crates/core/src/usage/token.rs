@@ -2,7 +2,7 @@
 //! call only.
 //!
 //! Token rules (AGENTS.md, ADR 0002): the token is read-only, never refreshed, and never
-//! printed. [`AccessToken`] has no `Debug`, `Display`, `Clone` or `Serialize`, no public
+//! printed. An expired one is renewed by Claude Code only ([`super::renewal`]). [`AccessToken`] has no `Debug`, `Display`, `Clone` or `Serialize`, no public
 //! constructor and no public accessor: outside the core it can only be passed along.
 
 use std::fs;
@@ -52,7 +52,7 @@ pub(crate) enum TokenRead {
         expires_at: Timestamp,
     },
     /// A token past its `expiresAt`: "token expired", and no call is made with it.
-    Expired,
+    Expired { expires_at: Timestamp },
     /// No credentials file, no claude.ai login in it, or an emptied token (logged out).
     Missing,
     /// The file exists but can't be read, or its token or expiry can't be understood.
@@ -98,7 +98,7 @@ pub(crate) fn read(config_dir: &Path, now: Timestamp) -> TokenRead {
         .and_then(|ms| Timestamp::from_millisecond(ms).ok())
     {
         Some(expires_at) if expires_at > now => TokenRead::Valid { token, expires_at },
-        Some(_) => TokenRead::Expired,
+        Some(expires_at) => TokenRead::Expired { expires_at },
         None => TokenRead::Unreadable,
     }
 }

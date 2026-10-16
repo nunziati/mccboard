@@ -29,6 +29,7 @@ Personal project of Giacomo.
 ## Token rules: hard guardrails
 Credentials are **read-only** to mccboard. Claude Code owns them.
 1. Read the OAuth access token from `<config dir>/.credentials.json`, and only read it. Refreshing it (any call to `oauth/token`) or writing the credentials file rotates the refresh token and logs Claude Code out. An expired token is shown as "expired" until Claude Code renews it.
+   - To get it renewed, mccboard may only run Claude Code itself in that instance (`claude auth status`, hidden, at most once per 15 min, backing off to 6 h), when a usage reading is due and the preference is on (ADR 0002). Its output names the account: discard it.
 2. **A token stays on its machine.** For a remote instance, the remote performs the endpoint call over SSH and returns only the result.
 3. **The usage endpoint has a small budget shared with Claude Code**:
    - at most one request per 60 s per account;

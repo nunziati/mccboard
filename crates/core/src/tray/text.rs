@@ -5,7 +5,7 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
 use super::{Detail, LanguageChoice, TrayAccount, TrayMenu, TrayWindow, WindowName};
-use crate::Language;
+use crate::{Language, RenewalFailure, RenewalOutcome};
 
 /// What the tray says about an account besides its numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +43,7 @@ impl Texts {
         }
     }
 
-    pub fn menu(&self) -> TrayMenu {
+    pub fn menu(&self, renew_tokens_on: bool) -> TrayMenu {
         TrayMenu {
             open_instances: self.pick("Open Instances", "Apri Istanze").to_owned(),
             refresh: self.pick("Refresh usage", "Aggiorna l'utilizzo").to_owned(),
@@ -57,6 +57,13 @@ impl Texts {
                     selected: language == self.language,
                 })
                 .collect(),
+            renew_tokens: self
+                .pick(
+                    "Let Claude Code renew an expired token",
+                    "Lascia che Claude Code rinnovi un token scaduto",
+                )
+                .to_owned(),
+            renew_tokens_on,
             quit: self.pick("Quit", "Esci").to_owned(),
         }
     }
@@ -172,25 +179,32 @@ impl Texts {
         };
         let Some(peak) = account.percent else {
             let status = self.status(status).unwrap_or_default();
-            return format!("{head}: {status}");
+            return match self.renewal_note(account, detail) {
+                Some(note) => format!("{head}: {status} · {note}"),
+                None => format!("{head}: {status}"),
+            };
         };
         if detail == Detail::Peak {
             return format!("{head}: {peak}%");
         }
-        let windows: Vec<String> = account
+        let mut parts: Vec<String> = account
             .windows
             .iter()
             .filter_map(|w| self.tooltip_window(w, detail, true))
             .collect();
-        format!("{head}: {}", windows.join(" · "))
+        parts.extend(self.renewal_note(account, detail));
+        format!("{head}: {}", parts.join(" · "))
     }
 
     /// The tooltip of a single account: one line per window, without label, then its status.
     pub fn single_tooltip(&self, account: &TrayAccount, detail: Detail) -> Vec<String> {
         let status = super::status_of(account);
+        let renewal = (detail == Detail::WithRenewal)
+            .then(|| self.single_renewal_note(account))
+            .flatten();
         let Some(peak) = account.percent else {
             let status = self.status(status).unwrap_or_default();
-            return vec![capitalize(status)];
+            return [capitalize(status)].into_iter().chain(renewal).collect();
         };
         let mut lines: Vec<String> = if detail == Detail::Peak {
             vec![format!("{peak}%")]
@@ -209,7 +223,117 @@ impl Texts {
                 self.clock(read_at)
             ));
         }
+        lines.extend(renewal);
         lines
+    }
+
+    /// The menu line about the token's renewal: when Claude Code renewed it, or why it
+    /// couldn't and when it tries again. `None` when there is nothing to say.
+    pub fn renewal_line(&self, account: &TrayAccount) -> Option<String> {
+        let renewal = account.renewal.as_ref()?;
+        let next = match renewal.next_attempt_at {
+            Some(at) => format!(
+                "{} {}",
+                self.pick("next try at", "nuovo tentativo alle"),
+                self.clock(at)
+            ),
+            None => self
+                .pick(
+                    "next try at the next refresh",
+                    "nuovo tentativo al prossimo aggiornamento",
+                )
+                .to_owned(),
+        };
+        match (&renewal.last, account.token_expired) {
+            (Some(last), false) if last.outcome == RenewalOutcome::Renewed => Some(format!(
+                "{} {}",
+                self.pick("Token renewed at", "Token rinnovato alle"),
+                self.clock(last.at)
+            )),
+            (_, false) => None,
+            (Some(last), true) => match &last.outcome {
+                RenewalOutcome::Failed { failure } => Some(format!(
+                    "{} ({}), {next}",
+                    self.pick("Renewal failed", "Rinnovo non riuscito"),
+                    self.failure(failure)
+                )),
+                RenewalOutcome::Renewed => Some(format!(
+                    "{}: {next}",
+                    self.pick("Token renewal", "Rinnovo del token")
+                )),
+            },
+            (None, true) => Some(format!(
+                "{}: {next}",
+                self.pick("Token renewal", "Rinnovo del token")
+            )),
+        }
+    }
+
+    fn failure(&self, failure: &RenewalFailure) -> String {
+        match failure {
+            RenewalFailure::ClaudeNotFound => self
+                .pick("Claude Code not found", "Claude Code non trovato")
+                .to_owned(),
+            RenewalFailure::TimedOut => self
+                .pick(
+                    "Claude Code took too long",
+                    "Claude Code ci ha messo troppo",
+                )
+                .to_owned(),
+            RenewalFailure::Exited { code: Some(code) } => format!(
+                "{} {code}",
+                self.pick(
+                    "Claude Code exited with code",
+                    "Claude Code è uscito con codice"
+                )
+            ),
+            RenewalFailure::Exited { code: None } => self
+                .pick("Claude Code was stopped", "Claude Code è stato interrotto")
+                .to_owned(),
+            RenewalFailure::StillExpired => self
+                .pick("token still expired", "token ancora scaduto")
+                .to_owned(),
+            RenewalFailure::NotStarted => self
+                .pick("Claude Code couldn't start", "Claude Code non è partito")
+                .to_owned(),
+        }
+    }
+
+    /// A short note on the token's renewal for an account's tooltip line, at the most detailed
+    /// level only: "renewed 14:32", or "renewal failed, retry 15:00" while it is expired.
+    fn renewal_note(&self, account: &TrayAccount, detail: Detail) -> Option<String> {
+        if detail != Detail::WithRenewal {
+            return None;
+        }
+        let renewal = account.renewal.as_ref()?;
+        let last = renewal.last.as_ref()?;
+        match (&last.outcome, account.token_expired) {
+            (RenewalOutcome::Renewed, false) => Some(format!(
+                "{} {}",
+                self.pick("renewed", "rinnovato"),
+                self.clock(last.at)
+            )),
+            (RenewalOutcome::Failed { .. }, true) => Some(match renewal.next_attempt_at {
+                Some(at) => format!(
+                    "{} {}",
+                    self.pick("renewal failed, retry", "rinnovo fallito, riprovo"),
+                    self.clock(at)
+                ),
+                None => self.pick("renewal failed", "rinnovo fallito").to_owned(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The renewal note of a single account's tooltip, as a line of its own.
+    fn single_renewal_note(&self, account: &TrayAccount) -> Option<String> {
+        let note = self.renewal_note(account, Detail::WithRenewal)?;
+        let renewed = !account.token_expired;
+        Some(if renewed {
+            self.renewal_line(account).unwrap_or(note)
+        } else {
+            capitalize(&note)
+        })
     }
 
     /// A window in the tooltip at the given detail, or `None` when it is left out. Compact
@@ -220,7 +344,7 @@ impl Texts {
             return None;
         }
         let resets = match detail {
-            Detail::Full => true,
+            Detail::WithRenewal | Detail::Full => true,
             Detail::ModelsWithoutResets => !model,
             _ => false,
         };

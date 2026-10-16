@@ -7,6 +7,8 @@
 //! - **Tooltip:** every account with its windows and reset times, compact enough for the
 //!   Windows tray (127 UTF-16 units): detail is dropped step by step until it fits, but every
 //!   account stays named. A single account reads as a plain usage indicator, without label.
+//!   When Claude Code renewed an expired token, or failed to, a short note says when (or when
+//!   it tries again); it is the first detail dropped.
 //! - **Menu status lines:** the full detail, one account at a time, for platforms without
 //!   tooltips (Linux) and for what the tooltip had to drop.
 //!
@@ -21,7 +23,10 @@ use jiff::tz::TimeZone;
 use serde::Serialize;
 
 use crate::usage::as_of;
-use crate::{Account, AccountUsage, AccountUuid, Color, Error, Language, UsageReport, UsageStatus};
+use crate::{
+    Account, AccountUsage, AccountUuid, Color, Error, Language, TokenRenewal, UsageReport,
+    UsageStatus,
+};
 use text::{Status, Texts};
 
 /// The Windows tray keeps at most this many UTF-16 units of a tooltip.
@@ -79,10 +84,12 @@ pub struct TrayAccount {
     pub token_expired: bool,
     /// Session, weekly, then model windows, as last read; past resets read as zero.
     pub windows: Vec<TrayWindow>,
+    /// Claude Code renewing the account's expired token, as the usage report says.
+    pub renewal: Option<TokenRenewal>,
     /// The menu heading: label and percentage, or why there is none ("A · 35%").
     pub title: String,
     /// The menu lines under the heading: every window with its reset, then when it was read
-    /// if the reading is stale.
+    /// if the reading is stale, then the token's renewal.
     pub lines: Vec<String>,
 }
 
@@ -113,6 +120,10 @@ pub struct TrayMenu {
     pub settings: String,
     pub language: String,
     pub languages: Vec<LanguageChoice>,
+    /// The settings item that lets Claude Code renew an expired token (#30).
+    pub renew_tokens: String,
+    /// Whether that preference is on, so the item shows checked.
+    pub renew_tokens_on: bool,
     pub quit: String,
 }
 
@@ -145,7 +156,8 @@ impl TrayView {
             notice: Some(message),
             accounts: Vec::new(),
             no_instances: false,
-            menu: texts.menu(),
+            // The preference can't be read either; the item shows as the default.
+            menu: texts.menu(true),
         }
     }
 }
@@ -155,6 +167,7 @@ impl TrayView {
 pub(crate) fn view(
     report: &UsageReport,
     no_instances: bool,
+    renew_tokens_on: bool,
     language: Language,
     tz: &TimeZone,
     now: Timestamp,
@@ -215,7 +228,7 @@ pub(crate) fn view(
         notice,
         accounts: if no_instances { Vec::new() } else { accounts },
         no_instances,
-        menu: texts.menu(),
+        menu: texts.menu(renew_tokens_on),
     }
 }
 
@@ -274,6 +287,7 @@ fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
         stale: usage.stale,
         token_expired,
         windows,
+        renewal: usage.renewal.clone(),
         title: String::new(),
         lines: Vec::new(),
     };
@@ -285,6 +299,9 @@ fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
         .collect();
     if let Some(read_at) = account.read_at.filter(|_| account.stale) {
         account.lines.push(texts.read_at(read_at));
+    }
+    if let Some(line) = texts.renewal_line(&account) {
+        account.lines.push(line);
     }
     account
 }
@@ -312,6 +329,8 @@ fn status_of(account: &TrayAccount) -> Status {
 /// How much a tooltip says, from everything to the bare minimum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Detail {
+    /// Every window with its reset, and the token's renewal.
+    WithRenewal,
     /// Every window with its reset.
     Full,
     /// Model windows without their reset.
@@ -324,7 +343,8 @@ pub(crate) enum Detail {
     Peak,
 }
 
-const DETAILS: [Detail; 5] = [
+const DETAILS: [Detail; 6] = [
+    Detail::WithRenewal,
     Detail::Full,
     Detail::ModelsWithoutResets,
     Detail::NoModels,

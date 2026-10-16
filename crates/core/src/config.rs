@@ -31,6 +31,7 @@
 //!
 //! [preferences]
 //! language = "it"               # the app's language, "en" or "it"; absent: the system's
+//! renew_expired_tokens = true   # let Claude Code renew an expired token; absent: true
 //! ```
 
 use std::collections::BTreeMap;
@@ -64,7 +65,7 @@ pub(crate) struct DesktopProfileEntry {
 }
 
 /// The validated contents of `config.toml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub accounts: Vec<Account>,
     pub instances: Vec<InstanceEntry>,
@@ -74,6 +75,21 @@ pub(crate) struct Config {
     pub sharing: BTreeMap<String, SharingAnswer>,
     /// The app's language, when the user chose one.
     pub language: Option<Language>,
+    /// Whether mccboard asks Claude Code to renew an expired token (#30).
+    pub renew_expired_tokens: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            instances: Vec::new(),
+            desktop_profiles: Vec::new(),
+            sharing: BTreeMap::new(),
+            language: None,
+            renew_expired_tokens: true,
+        }
+    }
 }
 
 impl Config {
@@ -351,6 +367,19 @@ impl ConfigFile {
         self.config.language = Some(language);
     }
 
+    /// Sets whether Claude Code may be asked to renew an expired token, in `[preferences]`,
+    /// keeping the comment after an existing value.
+    pub fn set_renew_expired_tokens(&mut self, on: bool) {
+        let preferences = self
+            .doc
+            .entry("preferences")
+            .or_insert_with(|| Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut()
+            .expect("validated: preferences is a table");
+        set_bool(preferences, "renew_expired_tokens", on);
+        self.config.renew_expired_tokens = on;
+    }
+
     /// Stores a new desktop profile, `open_at_start` written out so it can be found by hand.
     pub fn add_desktop_profile(&mut self, entry: &DesktopProfileEntry) {
         let folder = entry.data_folder.to_string_lossy();
@@ -538,6 +567,7 @@ struct RawDesktopProfile {
 #[derive(Deserialize, Default)]
 struct RawPreferences {
     language: Option<String>,
+    renew_expired_tokens: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -664,6 +694,7 @@ impl RawConfig {
             desktop_profiles,
             sharing,
             language,
+            renew_expired_tokens: self.preferences.renew_expired_tokens.unwrap_or(true),
         })
     }
 }

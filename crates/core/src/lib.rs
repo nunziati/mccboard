@@ -84,7 +84,7 @@ pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
     ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
-    LoginTerminal, OsKind, SystemEnvironment,
+    LoginTerminal, OsKind, RenewalExit, RenewalInvocation, SystemEnvironment,
 };
 pub use error::Error;
 pub use icon::{IconCache, IconSources, Image, PackageLogos, ProfileIcons};
@@ -107,8 +107,9 @@ pub use tray::{
     WindowName,
 };
 pub use usage::{
-    AccessToken, AccountUsage, ModelWindow, UsageFailure, UsageReading, UsageReport, UsageSource,
-    UsageStatus, UsageWarning, UsageWindow,
+    AccessToken, AccountUsage, ModelWindow, RenewalAttempt, RenewalFailure, RenewalOutcome,
+    TokenRenewal, UsageFailure, UsageReading, UsageReport, UsageSource, UsageStatus, UsageWarning,
+    UsageWindow,
 };
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
@@ -552,6 +553,13 @@ impl Core {
     /// account, with a token from one of its registered instances, and only where the rate
     /// limits allow it: a manual refresh follows the same rules as a periodic one. A failed
     /// call keeps the last reading, marked stale.
+    ///
+    /// When every token of an account has expired and the preference allows it
+    /// ([`Core::renew_expired_tokens`]), Claude Code is first asked to renew the token in the
+    /// account's usage instance (`claude auth status`, hidden), at most once per instance
+    /// every 15 minutes, backing off up to 6 hours after failures. The token is then read
+    /// again, and the endpoint called with it if it was renewed. mccboard never refreshes a
+    /// token or writes credentials itself.
     pub fn refresh_usage(&self) -> Result<UsageReport, Error> {
         usage::report(
             &self.home,
@@ -616,6 +624,22 @@ impl Core {
         file.save()
     }
 
+    /// Whether a usage refresh may ask Claude Code to renew an expired token
+    /// (`renew_expired_tokens` in `config.toml`'s `[preferences]`; on unless set to false).
+    pub fn renew_expired_tokens(&self) -> Result<bool, Error> {
+        Ok(config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .renew_expired_tokens)
+    }
+
+    /// Saves whether a usage refresh may ask Claude Code to renew an expired token, keeping
+    /// everything else in `config.toml`.
+    pub fn set_renew_expired_tokens(&self, on: bool) -> Result<(), Error> {
+        let mut file = config::ConfigFile::load(&self.paths().config_file())?;
+        file.set_renew_expired_tokens(on);
+        file.save()
+    }
+
     /// What the tray shows for `report` (from [`Core::usage`] or [`Core::refresh_usage`]),
     /// as of now: the worst account's percentage and color for the icon, a tooltip that fits
     /// the Windows tray, every account's windows as menu lines, and "no instances" when none
@@ -631,6 +655,7 @@ impl Core {
         Ok(tray::view(
             report,
             config.instances.is_empty(),
+            config.renew_expired_tokens,
             language,
             tz,
             self.env.now(),

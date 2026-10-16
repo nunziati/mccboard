@@ -8,6 +8,9 @@
 //!
 //! The login is the exception: it is interactive, so it runs in a terminal the user sees (the
 //! CLI's own, or a new window), and mccboard reads nothing it prints.
+//!
+//! The token renewal (`claude auth status`) runs hidden like a background run, but in a folder
+//! of mccboard's own and with its output discarded, since it names the account.
 
 use std::env;
 use std::ffi::OsString;
@@ -18,7 +21,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::instance::InstanceKind;
-use crate::{ClaudeInvocation, ClaudeRun, LoginExit, LoginInvocation, LoginTerminal};
+use crate::{
+    ClaudeInvocation, ClaudeRun, LoginExit, LoginInvocation, LoginTerminal, RenewalExit,
+    RenewalInvocation,
+};
 
 /// Variables that make Claude Code use another login than the instance's.
 const LOGIN_OVERRIDES: &[&str] = &[
@@ -171,6 +177,74 @@ fn is_program(path: &Path) -> bool {
     path.is_file()
 }
 
+/// Claude Code's auth status: with an expired token it renews it first. No model call.
+const RENEW_ARGS: &[&str] = &["auth", "status"];
+
+/// About a second when it works; a minute covers a slow network.
+const RENEW_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Runs `claude auth status` in the instance, in the background, so Claude Code renews its own
+/// expired token. Its output names the account, so it goes nowhere: only the exit code is kept.
+pub(crate) fn renew(renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
+    renew_with(renewal, &Lookup::from_env(), RENEW_TIMEOUT)
+}
+
+fn renew_with(
+    renewal: &RenewalInvocation,
+    lookup: &Lookup,
+    timeout: Duration,
+) -> io::Result<RenewalExit> {
+    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let mut command = crate::background::command(claude);
+    command
+        .args(RENEW_ARGS)
+        .current_dir(&renewal.working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    in_instance(&mut command, &renewal.config_dir, renewal.kind);
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Claude Code didn't finish its auth status in time",
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    Ok(RenewalExit {
+        exit_code: status.code(),
+    })
+}
+
+/// Points `command` at the instance in `config_dir`, as the login does: `CLAUDE_CONFIG_DIR`
+/// for a linked instance; for the primary instance none, with the home set to its folder's
+/// parent. The variables that would override the instance's own login are removed.
+fn in_instance(command: &mut Command, config_dir: &Path, kind: InstanceKind) {
+    match kind {
+        InstanceKind::Linked => {
+            command.env("CLAUDE_CONFIG_DIR", config_dir);
+        }
+        InstanceKind::Primary => {
+            // Claude Code's default folder is `.claude` in its home: the folder's parent.
+            command.env_remove("CLAUDE_CONFIG_DIR");
+            if let Some(home) = config_dir.parent() {
+                command.env(HOME_VAR, home);
+            }
+        }
+    }
+    for name in LOGIN_OVERRIDES {
+        command.env_remove(name);
+    }
+}
+
 fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit> {
     // Checked first, so `NotFound` below always means Claude Code itself.
     if !login.config_dir.is_dir() {
@@ -201,21 +275,7 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         }
         Some(window) => new_window(&claude, window),
     };
-    match login.kind {
-        InstanceKind::Linked => {
-            command.env("CLAUDE_CONFIG_DIR", &login.config_dir);
-        }
-        InstanceKind::Primary => {
-            // Claude Code's default folder is `.claude` in its home: the folder's parent.
-            command.env_remove("CLAUDE_CONFIG_DIR");
-            if let Some(home) = login.config_dir.parent() {
-                command.env(HOME_VAR, home);
-            }
-        }
-    }
-    for name in LOGIN_OVERRIDES {
-        command.env_remove(name);
-    }
+    in_instance(&mut command, &login.config_dir, login.kind);
     let status = command.current_dir(&login.config_dir).status()?;
     Ok(LoginExit {
         exit_code: status.code(),
@@ -418,6 +478,166 @@ mod tests {
             lookup(bin.path(), None).find("claude"),
             Some(bin.path().join("claude.cmd"))
         );
+    }
+
+    fn renewal(config_dir: &Path, kind: InstanceKind, working_dir: &Path) -> RenewalInvocation {
+        RenewalInvocation {
+            config_dir: config_dir.to_path_buf(),
+            kind,
+            working_dir: working_dir.to_path_buf(),
+        }
+    }
+
+    /// A home with a `bin` folder, a linked instance `.claude-b`, the neutral folder and an
+    /// `out` folder where fake programs write what they saw.
+    fn renewal_home() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let [bin, dir, neutral, out] = ["bin", ".claude-b", "neutral", "out"].map(|name| {
+            let path = home.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            path
+        });
+        (home, bin, dir, neutral, out)
+    }
+
+    #[test]
+    fn without_claude_on_the_path_a_renewal_is_not_found() {
+        let (_home, bin, dir, neutral, _out) = renewal_home();
+
+        let error = renew_with(
+            &renewal(&dir, InstanceKind::Linked, &neutral),
+            &lookup(&bin, None),
+            RENEW_TIMEOUT,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renewal_runs_auth_status_in_the_instance_from_the_neutral_folder() {
+        let (_home, bin, dir, neutral, out) = renewal_home();
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"$PWD\" \
+                 \"$*\" \"${{ANTHROPIC_API_KEY-unset}}\" > '{}/claude'\n\
+                 echo '{{\"loggedIn\": true, \"email\": \"a@example.com\"}}'\nexit 0\n",
+                out.display()
+            ),
+        );
+
+        let exit = renew_with(
+            &renewal(&dir, InstanceKind::Linked, &neutral),
+            &lookup(&bin, None),
+            RENEW_TIMEOUT,
+        )
+        .unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(
+            seen.trim(),
+            format!("{}|{}|auth status|unset", dir.display(), neutral.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renewal_of_the_primary_instance_sets_the_home_not_the_config_dir() {
+        let (home, bin, _dir, neutral, out) = renewal_home();
+        let primary = home.path().join(".claude");
+        fs::create_dir_all(&primary).unwrap();
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s|%s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"$HOME\" \
+                 > '{}/claude'\nexit 1\n",
+                out.display()
+            ),
+        );
+
+        let exit = renew_with(
+            &renewal(&primary, InstanceKind::Primary, &neutral),
+            &lookup(&bin, None),
+            RENEW_TIMEOUT,
+        )
+        .unwrap();
+
+        assert_eq!(exit.exit_code, Some(1));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(seen.trim(), format!("unset|{}", home.path().display()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renewal_that_hangs_is_stopped_and_times_out() {
+        let (_home, bin, dir, neutral, _out) = renewal_home();
+        write_program(&bin.join("claude"), "#!/bin/sh\nexec sleep 30\n");
+
+        let started = Instant::now();
+        let error = renew_with(
+            &renewal(&dir, InstanceKind::Linked, &neutral),
+            &lookup(&bin, None),
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_renewal_runs_an_npm_claude_cmd_in_the_instance_from_the_neutral_folder() {
+        let (_home, bin, dir, neutral, out) = renewal_home();
+        fs::write(
+            bin.join("claude.cmd"),
+            format!(
+                "@echo off\r\n>\"{}\\claude\" echo %CLAUDE_CONFIG_DIR%^|%CD%^|%*\r\n\
+                 echo {{\"loggedIn\": true}}\r\nexit /b 0\r\n",
+                out.display()
+            ),
+        )
+        .unwrap();
+
+        let exit = renew_with(
+            &renewal(&dir, InstanceKind::Linked, &neutral),
+            &lookup(&bin, None),
+            RENEW_TIMEOUT,
+        )
+        .unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(
+            seen.trim().to_lowercase(),
+            format!("{}|{}|auth status", dir.display(), neutral.display()).to_lowercase()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_renewal_that_hangs_is_stopped_and_times_out() {
+        let (_home, bin, dir, neutral, _out) = renewal_home();
+        fs::write(
+            bin.join("claude.cmd"),
+            // Short: killing cmd.exe leaves ping running, in the temporary folder.
+            "@echo off\r\nping -n 5 127.0.0.1 >nul\r\n",
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let error = renew_with(
+            &renewal(&dir, InstanceKind::Linked, &neutral),
+            &lookup(&bin, None),
+            Duration::from_millis(500),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[cfg(unix)]
