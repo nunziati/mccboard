@@ -22,7 +22,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VT_LPWSTR;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
-    FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink,
+    FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, SHStrDupW, ShellLink,
 };
 use windows::core::{HSTRING, Interface, PWSTR};
 
@@ -57,21 +57,23 @@ fn io_error(error: windows::core::Error) -> io::Error {
     io::Error::other(error.message())
 }
 
-/// A `VT_LPWSTR` PROPVARIANT borrowing `wide` (NUL-terminated). `IPropertyStore::SetValue`
-/// copies it. It is never cleared: clearing would free Rust's memory with CoTaskMemFree.
-fn lpwstr(wide: &[u16]) -> PROPVARIANT {
+/// A `VT_LPWSTR` PROPVARIANT owning a copy of `text` in COM's task memory. The `windows`
+/// crate's PROPVARIANT clears itself on drop (`PropVariantClear`, which frees the string with
+/// CoTaskMemFree), so the string must never be borrowed from Rust's memory: that freed it
+/// twice and corrupted the heap.
+fn lpwstr(text: &str) -> windows::core::Result<PROPVARIANT> {
+    let copy: PWSTR = unsafe { SHStrDupW(&HSTRING::from(text))? };
     let mut value = PROPVARIANT::default();
     unsafe {
         let inner = &mut *value.Anonymous.Anonymous;
         inner.vt = VT_LPWSTR;
-        inner.Anonymous.pwszVal = PWSTR(wide.as_ptr() as *mut u16);
+        inner.Anonymous.pwszVal = copy;
     }
-    value
+    Ok(value)
 }
 
 fn set_string(store: &IPropertyStore, key: &PROPERTYKEY, text: &str) -> windows::core::Result<()> {
-    let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    unsafe { store.SetValue(key, &lpwstr(&wide)) }
+    unsafe { store.SetValue(key, &lpwstr(text)?) }
 }
 
 /// The current user's Start-menu Programs folder.
@@ -234,5 +236,84 @@ pub(crate) fn program_icon(program: &Path) -> io::Result<Image> {
             }
         }
         Ok(Image::new(width as u32, height as u32, pixels))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        GPS_DEFAULT, SHGetPropertyStoreFromParsingName,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
+
+    fn shortcut(dir: &Path) -> Shortcut {
+        Shortcut {
+            path: dir.join("Claude Test.lnk"),
+            target: std::env::current_exe().unwrap(),
+            arguments: "--open-profile 00000000-0000-0000-0000-000000000000".into(),
+            icon: None,
+            app_user_model_id: "Mccboard.Test.Profile".into(),
+            description: "Claude Test".into(),
+        }
+    }
+
+    // A property set through `set_string` used to free Rust's buffer with CoTaskMemFree when
+    // the PROPVARIANT dropped, then again as a Vec: the process died of heap corruption.
+    #[test]
+    fn a_shortcut_carries_the_profile_app_user_model_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let shortcut = shortcut(dir.path());
+        write_shortcut(&shortcut).unwrap();
+        write_shortcut(&shortcut).unwrap(); // replacing it works too
+
+        let _com = Com::init();
+        let store: IPropertyStore = unsafe {
+            SHGetPropertyStoreFromParsingName(
+                &HSTRING::from(shortcut.path.as_path()),
+                None,
+                GPS_DEFAULT,
+            )
+        }
+        .unwrap();
+        let id = unsafe { store.GetValue(&PKEY_AppUserModel_ID) }.unwrap();
+        assert_eq!(id.to_string(), "Mccboard.Test.Profile");
+    }
+
+    #[test]
+    fn a_tagged_window_carries_the_profile_identity() {
+        let _com = Com::init();
+        let class: Vec<u16> = "STATIC".encode_utf16().chain([0]).collect();
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                null_mut(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        let identity = WindowIdentity {
+            app_user_model_id: "Mccboard.Test.Window".into(),
+            display_name: "Claude Test".into(),
+            relaunch_command: Some("\"mccboard-app.exe\" --open-profile test".into()),
+            icon: None,
+        };
+
+        let tagged = unsafe { tag_window(hwnd, &identity) };
+        let id = unsafe { SHGetPropertyStoreForWindow::<IPropertyStore>(HWND(hwnd)) }
+            .and_then(|store| unsafe { store.GetValue(&PKEY_AppUserModel_ID) })
+            .map(|id| id.to_string());
+        unsafe { DestroyWindow(hwnd) };
+        tagged.unwrap();
+        assert_eq!(id.unwrap(), "Mccboard.Test.Window");
     }
 }
