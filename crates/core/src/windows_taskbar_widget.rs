@@ -382,7 +382,8 @@ unsafe extern "system" fn host_procedure(
         return 0;
     }
     match message {
-        WM_VIEW => with_state(hwnd, |s| {
+        // A view that arrived while the thread was busy waits in `pending` for the relayout.
+        WM_VIEW | WM_RELAYOUT => with_state(hwnd, |s| {
             let view = s.pending.lock().unwrap_or_else(|p| p.into_inner()).take();
             if let Some(view) = view {
                 s.view = Some(view);
@@ -390,7 +391,10 @@ unsafe extern "system" fn host_procedure(
             }
             s.layout(false);
         }),
-        WM_RELAYOUT | WM_SETTINGCHANGE | WM_DISPLAYCHANGE => with_state(hwnd, |s| s.layout(false)),
+        // Broadcasts are sent, their sender waiting: answer at once, lay out right after.
+        WM_SETTINGCHANGE | WM_DISPLAYCHANGE => unsafe {
+            PostMessageW(hwnd, WM_RELAYOUT, 0, 0);
+        },
         WM_COLLISION => with_state(hwnd, |s| {
             if lparam == s.check_id {
                 s.collides = Some(wparam != 0);
