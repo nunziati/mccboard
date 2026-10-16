@@ -31,7 +31,15 @@ const LOGIN_OVERRIDES: &[&str] = &[
 const TIMEOUT: Duration = Duration::from_secs(600);
 
 pub(crate) fn run(invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
-    let mut command = crate::background::command("claude");
+    run_with(invocation, &Lookup::from_env())
+}
+
+/// [`run`] with `claude` looked up like the login's, so both find the same program: on
+/// Windows an npm install's `claude.cmd` too, which std runs through `cmd.exe /d /c` in the
+/// same hidden console.
+fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<ClaudeRun> {
+    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let mut command = crate::background::command(claude);
     command
         .args(&invocation.args)
         .env("CLAUDE_CONFIG_DIR", &invocation.config_dir)
@@ -91,8 +99,13 @@ pub(crate) fn login(login: &LoginInvocation) -> io::Result<LoginExit> {
     login_with(login, &Lookup::from_env())
 }
 
-/// Where the login looks for programs: the PATH (with PATHEXT on Windows) and, for a new
-/// window on Linux, `$TERMINAL`. Read from the process's environment; tests give their own.
+fn not_on_path() -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, "claude is not on the PATH")
+}
+
+/// Where Claude Code and, for a new login window on Linux, the terminal are looked for: the
+/// PATH (with PATHEXT on Windows) and `$TERMINAL`. Read from the process's environment; tests
+/// give their own.
 struct Lookup {
     path: Option<OsString>,
     path_ext: Option<OsString>,
@@ -111,27 +124,17 @@ impl Lookup {
 
     /// The program `name` as the shell would find it on the PATH: on Windows the first of
     /// `name.exe`, `name.cmd`, … in PATHEXT order (an npm install has `claude.cmd`), never a
-    /// file without an extension.
+    /// file without an extension, the same lookup as the launchers'
+    /// ([`mccboard_shim::find_program`]).
     fn find(&self, name: &str) -> Option<PathBuf> {
-        let dirs = env::split_paths(self.path.as_deref()?).collect::<Vec<_>>();
-        let names: Vec<String> = if cfg!(windows) {
-            let path_ext = self
-                .path_ext
-                .as_deref()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or(".COM;.EXE;.BAT;.CMD");
-            path_ext
-                .split(';')
-                .map(str::to_ascii_lowercase)
-                .filter(|ext| matches!(ext.as_str(), ".exe" | ".com" | ".cmd" | ".bat"))
-                .map(|ext| format!("{name}{ext}"))
-                .collect()
+        let path = self.path.as_deref()?;
+        if cfg!(windows) {
+            mccboard_shim::find_program(name, path, self.path_ext.as_deref(), None)
         } else {
-            vec![name.to_owned()]
-        };
-        dirs.iter()
-            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-            .find(|candidate| is_program(candidate))
+            env::split_paths(path)
+                .map(|dir| dir.join(name))
+                .find(|candidate| is_program(candidate))
+        }
     }
 
     /// The terminal emulator for a new window on Linux: `$TERMINAL` (a name on the PATH or a
@@ -187,9 +190,7 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         LoginTerminal::CurrentTerminal => None,
         LoginTerminal::NewWindow => Some(window(lookup)?),
     };
-    let claude = lookup
-        .find("claude")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "claude is not on the PATH"))?;
+    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
     let mut command = match window {
         None => {
             let mut command = Command::new(&claude);
@@ -342,6 +343,67 @@ mod tests {
         .unwrap_err();
 
         assert_ne!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    fn claude_invocation(config_dir: &Path) -> ClaudeInvocation {
+        ClaudeInvocation {
+            config_dir: config_dir.to_path_buf(),
+            args: vec!["plugin".into(), "list".into()],
+        }
+    }
+
+    #[test]
+    fn without_claude_on_the_path_a_background_run_is_not_found() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+
+        let error = run_with(&claude_invocation(home.path()), &lookup(&bin, None)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_background_run_uses_the_claude_found_on_the_path_in_the_instance() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        write_program(
+            &bin.join("claude"),
+            "#!/bin/sh\necho \"$CLAUDE_CONFIG_DIR|$PWD|$*\"\nexit 3\n",
+        );
+
+        let run = run_with(&claude_invocation(&dir), &lookup(&bin, None)).unwrap();
+
+        assert_eq!(run.exit_code, Some(3));
+        assert_eq!(
+            run.stdout.trim(),
+            format!("{}|{}|plugin list", dir.display(), dir.display())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_background_run_starts_an_npm_claude_cmd() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        // npm's stand-in: a batch file only, which std runs through cmd.exe.
+        fs::write(
+            bin.join("claude.cmd"),
+            "@echo off\r\necho %CLAUDE_CONFIG_DIR%^|%*\r\nexit /b 3\r\n",
+        )
+        .unwrap();
+
+        let run = run_with(&claude_invocation(&dir), &lookup(&bin, None)).unwrap();
+
+        assert_eq!(run.exit_code, Some(3));
+        assert_eq!(run.stdout.trim(), format!("{}|plugin list", dir.display()));
     }
 
     #[cfg(windows)]
