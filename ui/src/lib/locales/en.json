@@ -76,7 +76,7 @@
   "error.invalid_label": "A label needs 1 to 40 characters.",
   "error.label_taken": "Another account already has that label.",
   "error.invalid_color": "Colors are written #rrggbb.",
-  "error.invalid_launcher": "A launcher name uses letters, digits, '-', '_' and '.', and can't be “claude”.",
+  "error.invalid_launcher": "A launcher name uses letters, digits, '-', '_' and '.', and can't be “claude” or “mccboard”.",
   "instances.column.drift": "Drift",
   "drift.none": "No drift",
   "drift.count_one": "1 item to fix",
