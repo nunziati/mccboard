@@ -33,15 +33,19 @@ png = "0.18"
 # package (Win32_Storage_Packaging_Appx). Desktop profiles get their own taskbar button: a
 # window-event hook (Win32_UI_Accessibility) tags their windows and sets their icons at the
 # window's DPI (Win32_UI_HiDpi); the exe's icon is the fallback logo (Win32_Graphics_Gdi).
+# Their notification-area icons are repainted (Win32_UI_Shell), and Explorer's restarts are
+# heard by a hidden window (Win32_System_LibraryLoader for its module handle).
 winreg.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_Console",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # COM interfaces windows-sys lacks: a window's property store (its AppUserModelID) and the

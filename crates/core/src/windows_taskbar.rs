@@ -20,13 +20,14 @@
 //!   may use them: `WM_SETICON` doesn't copy them. One replaced by a new color is destroyed a
 //!   sweep later.
 //!
-//! **Seam for more consumers** (the tray's per-profile icons, #38): the watcher's thread has a
-//! message loop and is the one place that knows which profiles run. A consumer is a
-//! [`WatcherListener`] passed to [`ProfileWatcher::start`]; it runs on this thread after every
-//! sweep with [`WatcherEvent::Refreshed`] (also when nothing changed, so it doubles as a
-//! periodic repaint). An event the thread should react to (Explorer's `TaskbarCreated`, which
-//! needs a hidden top-level window: create it in `run` before the loop, and in its window
-//! procedure queue it like [`Pending::Refresh`]) becomes a new [`WatcherEvent`] variant; the
+//! **Consumers** (the profiles' notification-area icons, #38, in `windows_profile_tray`): the
+//! watcher's thread has a message loop and is the one place that knows which profiles run. A
+//! consumer is a [`WatcherListener`] passed to [`ProfileWatcher::start`]; it runs on this
+//! thread after every sweep with [`WatcherEvent::Refreshed`] (also when nothing changed, so it
+//! doubles as a periodic repaint), and with [`WatcherEvent::TaskbarCreated`] when Explorer
+//! restarts. That broadcast reaches top-level windows only, so the thread owns a hidden one;
+//! after it the watcher sweeps a few more times, `AFTER_TASKBAR_CREATED_MS` apart, while the
+//! apps add their own icons back. Another event becomes a new [`WatcherEvent`] variant; the
 //! enum is non-exhaustive for that.
 
 use std::cell::{Cell, RefCell};
@@ -36,7 +37,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::mpsc;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
@@ -44,13 +46,14 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CHILDID_SELF, DestroyIcon, DispatchMessageW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
-    EVENT_OBJECT_SHOW, EnumWindows, GA_PARENT, GW_OWNER, GetAncestor, GetDesktopWindow,
-    GetMessageW, GetWindow, GetWindowThreadProcessId, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON,
-    IsWindowVisible, KillTimer, LR_LOADFROMFILE, LoadImageW, MSG, OBJID_WINDOW, PM_NOREMOVE,
-    PeekMessageW, PostMessageW, PostThreadMessageW, SM_CXICON, SM_CXSMICON, SetTimer,
-    TranslateMessage, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_QUIT, WM_SETICON,
-    WM_TIMER, WM_USER,
+    CHILDID_SELF, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_SHOW, EnumWindows, GA_PARENT, GW_OWNER,
+    GetAncestor, GetDesktopWindow, GetMessageW, GetWindow, GetWindowThreadProcessId, HICON,
+    ICON_BIG, ICON_SMALL, IMAGE_ICON, IsWindowVisible, KillTimer, LR_LOADFROMFILE, LoadImageW, MSG,
+    OBJID_WINDOW, PM_NOREMOVE, PeekMessageW, PostMessageW, PostThreadMessageW, RegisterClassW,
+    RegisterWindowMessageW, SM_CXICON, SM_CXSMICON, SetTimer, TranslateMessage,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_QUIT, WM_SETICON, WM_TIMER, WM_USER,
+    WNDCLASSW, WS_POPUP,
 };
 use windows_sys::core::BOOL;
 
@@ -62,6 +65,18 @@ const SWEEP_EVERY_MS: u32 = 5_000;
 
 /// Posted to the watcher's thread by [`ProfileWatcher::refresh`].
 const WM_REFRESH: u32 = WM_APP + 1;
+
+/// After Explorer restarts, the watcher sweeps this many more times...
+const AFTER_TASKBAR_CREATED_SWEEPS: u32 = 3;
+
+/// ...this far apart: the apps add their own icons back meanwhile.
+const AFTER_TASKBAR_CREATED_MS: u32 = 1_500;
+
+/// The hidden window's timer for those sweeps.
+const TASKBAR_CREATED_TIMER: usize = 1;
+
+/// The class of the watcher's hidden top-level window.
+const WINDOW_CLASS: &str = "mccboard-desktop-profiles";
 
 /// The running desktop profiles, from the core: [`crate::Core::running_desktop_profiles`].
 pub type ProfileSource = Box<dyn Fn() -> Vec<RunningProfile> + Send>;
@@ -80,6 +95,9 @@ pub enum WatcherEvent<'a> {
         profiles: &'a [RunningProfile],
         changed: bool,
     },
+    /// Explorer restarted (the `TaskbarCreated` broadcast): the notification area lost every
+    /// icon, and the apps add theirs back. More [`WatcherEvent::Refreshed`] follow shortly.
+    TaskbarCreated,
 }
 
 /// The watcher's thread. It runs until this is dropped.
@@ -123,6 +141,7 @@ impl Drop for ProfileWatcher {
 enum Pending {
     Event { event: u32, hwnd: isize },
     Refresh,
+    TaskbarCreated,
 }
 
 /// What the watcher's thread knows. Borrowed only for plain Rust work, never across a call
@@ -147,6 +166,10 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static PENDING: RefCell<VecDeque<Pending>> = const { RefCell::new(VecDeque::new()) };
     static BUSY: Cell<bool> = const { Cell::new(false) };
+    /// The `TaskbarCreated` message's number, registered at run time; 0 until then.
+    static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
+    /// The sweeps still to do after Explorer restarted.
+    static SWEEPS_LEFT: Cell<u32> = const { Cell::new(0) };
 }
 
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
@@ -183,6 +206,7 @@ fn run(source: ProfileSource, listeners: Vec<WatcherListener>, ready: mpsc::Send
             0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
+        let window = hidden_window();
         queue(Pending::Refresh);
         let timer = SetTimer(null_mut(), 0, SWEEP_EVERY_MS, None);
 
@@ -196,6 +220,9 @@ fn run(source: ProfileSource, listeners: Vec<WatcherListener>, ready: mpsc::Send
         }
 
         KillTimer(null_mut(), timer);
+        if !window.is_null() {
+            DestroyWindow(window);
+        }
         if !hook.is_null() {
             UnhookWinEvent(hook);
         }
@@ -208,6 +235,68 @@ fn run(source: ProfileSource, listeners: Vec<WatcherListener>, ready: mpsc::Send
             DestroyIcon(icon);
         }
     }
+}
+
+/// A hidden top-level window of the watcher's thread, for the `TaskbarCreated` broadcast (it
+/// doesn't reach message-only windows). Null when it can't be made: Explorer's restarts then go
+/// unnoticed until the next sweep's periodic repaint.
+unsafe fn hidden_window() -> HWND {
+    unsafe {
+        TASKBAR_CREATED.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
+        let class = wide(WINDOW_CLASS);
+        let instance = GetModuleHandleW(null_mut());
+        let window_class = WNDCLASSW {
+            lpfnWndProc: Some(window_procedure),
+            hInstance: instance,
+            lpszClassName: class.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        // Fails harmlessly when the class exists already (a watcher started before).
+        RegisterClassW(&window_class);
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            class.as_ptr(),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            instance,
+            null_mut(),
+        )
+    }
+}
+
+unsafe extern "system" fn window_procedure(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let taskbar_created = TASKBAR_CREATED.get();
+    if taskbar_created != 0 && message == taskbar_created {
+        SWEEPS_LEFT.set(AFTER_TASKBAR_CREATED_SWEEPS);
+        unsafe { SetTimer(hwnd, TASKBAR_CREATED_TIMER, AFTER_TASKBAR_CREATED_MS, None) };
+        queue(Pending::TaskbarCreated);
+        return 0;
+    }
+    if message == WM_TIMER && wparam == TASKBAR_CREATED_TIMER {
+        let left = SWEEPS_LEFT.get().saturating_sub(1);
+        SWEEPS_LEFT.set(left);
+        if left == 0 {
+            unsafe { KillTimer(hwnd, TASKBAR_CREATED_TIMER) };
+        }
+        queue(Pending::Refresh);
+        return 0;
+    }
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
 }
 
 unsafe extern "system" fn on_event(
@@ -239,6 +328,7 @@ fn queue(item: Pending) {
         match item {
             Pending::Event { event, hwnd } => on_window(event, hwnd as HWND),
             Pending::Refresh => sweep(),
+            Pending::TaskbarCreated => tell(&WatcherEvent::TaskbarCreated),
         }
     }
     BUSY.set(false);
@@ -345,7 +435,7 @@ fn update_profiles() {
         return;
     };
     let profiles = source();
-    let listeners = with_state(|s| {
+    let changed = with_state(|s| {
         s.source = Some(source);
         let changed = s.profiles != profiles;
         s.by_pid = profiles
@@ -355,17 +445,25 @@ fn update_profiles() {
             .collect();
         s.not_profile.clear();
         s.profiles = profiles;
-        (std::mem::take(&mut s.listeners), changed)
+        changed
     });
-    let Some((mut listeners, changed)) = listeners else {
+    let Some(changed) = changed else {
         return;
     };
     let profiles = with_state(|s| s.profiles.clone()).unwrap_or_default();
+    tell(&WatcherEvent::Refreshed {
+        profiles: &profiles,
+        changed,
+    });
+}
+
+/// Tells every listener of `event`, not under the state's borrow.
+fn tell(event: &WatcherEvent<'_>) {
+    let Some(mut listeners) = with_state(|s| std::mem::take(&mut s.listeners)) else {
+        return;
+    };
     for listener in &mut listeners {
-        listener(&WatcherEvent::Refreshed {
-            profiles: &profiles,
-            changed,
-        });
+        listener(event);
     }
     with_state(|s| {
         listeners.append(&mut s.listeners);

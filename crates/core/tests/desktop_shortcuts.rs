@@ -417,6 +417,7 @@ fn running_profiles_are_the_non_default_ones_with_all_their_processes() {
     assert_eq!(profile.account, uuid(UUID_B));
     assert_eq!(profile.label, "B");
     assert_eq!(profile.pids, [20, 21]);
+    assert_eq!(profile.main_pid, Some(20));
     let identity = &profile.identity;
     assert_eq!(identity.app_user_model_id, app_user_model_id(&uuid(UUID_B)));
     assert_eq!(identity.display_name, "Claude B");
