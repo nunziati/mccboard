@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment,
-    InstanceKind, LoginExit, LoginInvocation, OsKind,
+    InstanceKind, LoginExit, LoginInvocation, OsKind, RenewalExit, RenewalInvocation,
 };
 
 /// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
@@ -49,6 +49,8 @@ struct State {
     claude_handler: ClaudeHandler,
     login_invocations: Vec<LoginInvocation>,
     login_handler: LoginHandler,
+    renewal_invocations: Vec<RenewalInvocation>,
+    renewal_handler: RenewalHandler,
 }
 
 type HandlerFn = dyn Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Sync;
@@ -62,6 +64,18 @@ type LoginFn = dyn Fn(&LoginInvocation) -> io::Result<LoginExit> + Send + Sync;
 /// What a fake login does; by default the user closes it without logging in.
 #[derive(Clone)]
 struct LoginHandler(Arc<LoginFn>);
+
+type RenewalFn = dyn Fn(&RenewalInvocation) -> io::Result<RenewalExit> + Send + Sync;
+
+/// What a fake token renewal does; by default Claude Code exits 0 and renews nothing.
+#[derive(Clone)]
+struct RenewalHandler(Arc<RenewalFn>);
+
+impl std::fmt::Debug for RenewalHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RenewalHandler")
+    }
+}
 
 impl std::fmt::Debug for LoginHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -96,6 +110,10 @@ impl FakeEnvironment {
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
                 login_invocations: Vec::new(),
                 login_handler: LoginHandler(Arc::new(|_| Ok(LoginExit { exit_code: Some(1) }))),
+                renewal_invocations: Vec::new(),
+                renewal_handler: RenewalHandler(Arc::new(|_| {
+                    Ok(RenewalExit { exit_code: Some(0) })
+                })),
             })),
         }
     }
@@ -258,6 +276,22 @@ impl FakeEnvironment {
         self.state().login_invocations.clone()
     }
 
+    /// Scripts what the token renewal does: `handler` gets each renewal and returns how it
+    /// ended, or an error as when `claude` can't be started (`NotFound`) or hangs
+    /// (`TimedOut`). It may rewrite `.credentials.json`, playing Claude Code renewing its
+    /// token. Without it, Claude Code exits 0 and the token stays expired.
+    pub fn on_renewal(
+        &self,
+        handler: impl Fn(&RenewalInvocation) -> io::Result<RenewalExit> + Send + Sync + 'static,
+    ) {
+        self.state().renewal_handler = RenewalHandler(Arc::new(handler));
+    }
+
+    /// Every token renewal run so far, in order.
+    pub fn renewal_invocations(&self) -> Vec<RenewalInvocation> {
+        self.state().renewal_invocations.clone()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
@@ -350,5 +384,14 @@ impl Environment for FakeEnvironment {
             state.login_handler.clone()
         };
         (handler.0)(login)
+    }
+
+    fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
+        let handler = {
+            let mut state = self.state();
+            state.renewal_invocations.push(renewal.clone());
+            state.renewal_handler.clone()
+        };
+        (handler.0)(renewal)
     }
 }

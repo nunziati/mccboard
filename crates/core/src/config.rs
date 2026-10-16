@@ -26,6 +26,7 @@
 //!
 //! [preferences]
 //! language = "it"               # the app's language, "en" or "it"; absent: the system's
+//! renew_expired_tokens = true   # let Claude Code renew an expired token; absent: true
 //! ```
 
 use std::collections::BTreeMap;
@@ -51,7 +52,7 @@ pub(crate) struct InstanceEntry {
 }
 
 /// The validated contents of `config.toml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub accounts: Vec<Account>,
     pub instances: Vec<InstanceEntry>,
@@ -59,6 +60,20 @@ pub(crate) struct Config {
     pub sharing: BTreeMap<String, SharingAnswer>,
     /// The app's language, when the user chose one.
     pub language: Option<Language>,
+    /// Whether mccboard asks Claude Code to renew an expired token (#30).
+    pub renew_expired_tokens: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            instances: Vec::new(),
+            sharing: BTreeMap::new(),
+            language: None,
+            renew_expired_tokens: true,
+        }
+    }
 }
 
 impl Config {
@@ -290,6 +305,32 @@ impl ConfigFile {
         self.config.language = Some(language);
     }
 
+    /// Sets whether Claude Code may be asked to renew an expired token, in `[preferences]`,
+    /// keeping the comment after an existing value.
+    pub fn set_renew_expired_tokens(&mut self, on: bool) {
+        let preferences = self
+            .doc
+            .entry("preferences")
+            .or_insert_with(|| Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut()
+            .expect("validated: preferences is a table");
+        match preferences
+            .get_mut("renew_expired_tokens")
+            .and_then(Item::as_value_mut)
+        {
+            Some(value) if value.as_bool() == Some(on) => {}
+            Some(value) => {
+                let decor = value.decor().clone();
+                *value = Value::from(on);
+                *value.decor_mut() = decor;
+            }
+            None => {
+                preferences.insert("renew_expired_tokens", toml_edit::value(on));
+            }
+        }
+        self.config.renew_expired_tokens = on;
+    }
+
     /// Forgets an instance; `false` if it wasn't registered.
     pub fn remove_instance(&mut self, config_dir: &Path) -> bool {
         let before = self.config.instances.len();
@@ -364,6 +405,7 @@ struct RawConfig {
 #[derive(Deserialize, Default)]
 struct RawPreferences {
     language: Option<String>,
+    renew_expired_tokens: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -461,6 +503,7 @@ impl RawConfig {
             instances,
             sharing,
             language,
+            renew_expired_tokens: self.preferences.renew_expired_tokens.unwrap_or(true),
         })
     }
 }

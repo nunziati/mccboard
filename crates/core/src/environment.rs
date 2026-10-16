@@ -69,6 +69,41 @@ pub trait Environment: Send + Sync {
     /// current one, no terminal emulator for a new window on Linux); with another kind when
     /// the instance's folder is missing or the program can't be started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
+
+    /// Runs `claude auth status` in the instance `renewal.config_dir`, so that Claude Code
+    /// renews the instance's expired token on its own and rewrites its own credentials (ADR
+    /// 0002): it makes no model call and starts no session window. mccboard never refreshes
+    /// the token itself.
+    ///
+    /// Like the login, a linked instance gets `CLAUDE_CONFIG_DIR`, and the primary instance
+    /// none, with the home set to its folder's parent; the variables that would override the
+    /// instance's own login are removed. Unlike it, the command runs in the background: hidden
+    /// (no console window), with no input, in `renewal.working_dir`, and its output is
+    /// discarded unread, since it names the account. Waits for it to exit.
+    ///
+    /// Errors with `NotFound` only when `claude` isn't found on the PATH, with `TimedOut` when
+    /// it doesn't finish within a minute (it is then stopped), with another kind when it can't
+    /// be started.
+    fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit>;
+}
+
+/// Claude Code's own renewal, to run in an instance whose token has expired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenewalInvocation {
+    /// The instance's config directory.
+    pub config_dir: PathBuf,
+    /// Primary (Claude Code's default folder, no `CLAUDE_CONFIG_DIR`) or linked.
+    pub kind: InstanceKind,
+    /// A folder of mccboard's own to run in (`~/.mccboard/state/renewal/`), so no project's
+    /// settings, hooks or `CLAUDE.md` apply.
+    pub working_dir: PathBuf,
+}
+
+/// How the renewal command ended. The core doesn't trust it: it reads the token again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RenewalExit {
+    /// The exit code; `None` when it was ended by a signal or can't be known.
+    pub exit_code: Option<i32>,
 }
 
 /// Claude Code's login, to open in an instance.
@@ -243,5 +278,9 @@ impl Environment for SystemEnvironment {
 
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit> {
         crate::claude_cli::login(login)
+    }
+
+    fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
+        crate::claude_cli::renew(renewal)
     }
 }

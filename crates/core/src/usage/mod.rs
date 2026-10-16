@@ -3,22 +3,26 @@
 //!
 //! Token rules (AGENTS.md, ADR 0002) enforced here:
 //! - the token is only read, never refreshed, and only handed to the port's endpoint call;
-//! - a token past its `expiresAt` reads as "token expired" and no call is made;
+//! - a token past its `expiresAt` reads as "token expired" and no call is made with it; during
+//!   a refresh, with the preference on, Claude Code may be asked to renew it first
+//!   ([`renewal`]);
 //! - at most one call per 60 s per account; after a 429 or any error the interval doubles, up
 //!   to 300 s (or longer when the endpoint's `Retry-After` says so), and a success resets it;
 //! - the last known reading is kept, marked stale, and a window past its reset reads as zero.
 
 mod endpoint;
+mod renewal;
 mod state;
 mod token;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use endpoint::call as call_endpoint;
+pub use renewal::{RenewalAttempt, RenewalFailure, RenewalOutcome, TokenRenewal};
 pub use token::AccessToken;
 #[cfg(feature = "testing")]
 pub(crate) use token::fingerprint;
@@ -58,6 +62,9 @@ pub struct AccountUsage {
     /// When the endpoint may next be called for this account; `None` when it may be called
     /// now, or when there is no token to call it with.
     pub next_call_at: Option<Timestamp>,
+    /// Claude Code renewing the account's expired token: while it is expired, or after it was
+    /// renewed. `None` when the preference is off, or when no renewal was ever needed.
+    pub renewal: Option<TokenRenewal>,
 }
 
 /// Where an account's usage stands.
@@ -69,7 +76,8 @@ pub enum UsageStatus {
     /// A token is available but no call has been made yet.
     NeverRead,
     /// Every token of the account is past its expiry. Claude Code renews it the next time it
-    /// runs; mccboard never does, and makes no call.
+    /// runs, or when mccboard asks it to ([`AccountUsage::renewal`]); mccboard itself never
+    /// does, and makes no call.
     TokenExpired,
     /// No registered instance is logged in with this account.
     NotLoggedIn,
@@ -147,13 +155,33 @@ pub enum UsageWarning {
 /// What an account's instances offer for a call.
 enum Source {
     Token(AccessToken),
-    TokenExpired,
+    /// Every token expired; `usage_instance` is the instance whose token expired last, where
+    /// Claude Code is asked to renew it.
+    TokenExpired {
+        usage_instance: PathBuf,
+    },
     CredentialsUnreadable,
     NotLoggedIn,
 }
 
-/// Reports every registered account's usage. With `refresh`, first calls the endpoint for
-/// each account that has a valid token and whose rate limit allows a call.
+/// An account's source, and the registered instances currently logged in with it.
+struct Found {
+    source: Source,
+    dirs: Vec<PathBuf>,
+}
+
+impl Found {
+    fn expired_in(&self) -> Option<&Path> {
+        match &self.source {
+            Source::TokenExpired { usage_instance } => Some(usage_instance),
+            _ => None,
+        }
+    }
+}
+
+/// Reports every registered account's usage. With `refresh`, first has Claude Code renew the
+/// expired tokens it may (when the preference is on), then calls the endpoint for each account
+/// that has a valid token and whose rate limit allows a call.
 pub(crate) fn report(
     home: &Path,
     paths: &Paths,
@@ -162,6 +190,7 @@ pub(crate) fn report(
     refresh: bool,
 ) -> Result<UsageReport, Error> {
     let config = ConfigFile::load(&paths.config_file())?.config;
+    let renewal_on = config.renew_expired_tokens;
     let mut accounts = config.accounts;
     accounts
         .sort_by(|a, b| (a.label.to_lowercase(), &a.uuid).cmp(&(b.label.to_lowercase(), &b.uuid)));
@@ -171,19 +200,42 @@ pub(crate) fn report(
     let state_path = paths.state_dir().join("usage.json");
     let mut warnings = Vec::new();
     let mut state = state::load(&state_path, &mut warnings);
-    let now = env.now();
+    let mut now = env.now();
+    let find = |now: Timestamp| -> Vec<Found> {
+        accounts
+            .iter()
+            .map(|account| source(home, &config.instances, &account.uuid, env, now))
+            .collect()
+    };
+    let mut found = find(now);
 
-    let sources: Vec<Source> = accounts
-        .iter()
-        .map(|account| source(home, &config.instances, &account.uuid, env, now))
-        .collect();
+    let mut renewed_in = Vec::new();
+    if refresh && renewal_on {
+        let expired: Vec<&Path> = found.iter().filter_map(Found::expired_in).collect();
+        renewed_in = renewal::run(
+            home,
+            paths,
+            env,
+            &state_path,
+            &mut state,
+            &expired,
+            &mut warnings,
+        );
+        if !renewed_in.is_empty() {
+            // Read the tokens again: Claude Code may have renewed them.
+            now = env.now();
+            found = find(now);
+        }
+    }
 
     // Reserve the calls before making them, so a concurrent mccboard (the app and the CLI)
     // sees the account as just called.
     let mut due = Vec::new();
     if refresh {
-        for (index, (account, source)) in accounts.iter().zip(&sources).enumerate() {
-            let Source::Token(_) = source else { continue };
+        for (index, (account, found)) in accounts.iter().zip(&found).enumerate() {
+            let Source::Token(_) = found.source else {
+                continue;
+            };
             let entry = state.accounts.entry(account.uuid.to_string()).or_default();
             if entry.next_call_at.is_none_or(|at| at <= now) {
                 entry.next_call_at = Some(now + secs(entry.interval_secs));
@@ -197,7 +249,7 @@ pub(crate) fn report(
 
     let mut outcomes = Vec::new();
     for &index in &due {
-        let Source::Token(token) = &sources[index] else {
+        let Source::Token(token) = &found[index].source else {
             continue;
         };
         let reply = env.call_usage_endpoint(token);
@@ -220,16 +272,24 @@ pub(crate) fn report(
 
     let accounts = accounts
         .into_iter()
-        .zip(sources)
+        .zip(found)
         .enumerate()
-        .map(|(index, (account, source))| {
+        .map(|(index, (account, found))| {
             let entry = state
                 .accounts
                 .get(account.uuid.as_str())
                 .cloned()
                 .unwrap_or_default();
             let called = due.contains(&index);
-            view(account, &source, entry, called, now)
+            let renewal = renewal_on
+                .then(|| {
+                    renewal::view(&state, found.expired_in(), &found.dirs, &renewed_in, now)
+                })
+                .flatten();
+            AccountUsage {
+                renewal,
+                ..view(account, &found.source, entry, called, now)
+            }
         })
         .collect();
     Ok(UsageReport { accounts, warnings })
@@ -243,9 +303,11 @@ fn source(
     account: &AccountUuid,
     env: &dyn Environment,
     now: Timestamp,
-) -> Source {
+) -> Found {
     let mut best: Option<(Timestamp, AccessToken)> = None;
-    let (mut expired, mut unreadable) = (false, false);
+    let mut expired: Option<(Timestamp, &Path)> = None;
+    let mut unreadable = false;
+    let mut dirs = Vec::new();
     let mut seen: Vec<&Path> = Vec::new();
     for entry in instances {
         let dir = entry.config_dir.as_path();
@@ -257,23 +319,31 @@ fn source(
         if observed.is_none_or(|observed| &observed.uuid != account) {
             continue;
         }
+        dirs.push(dir.to_path_buf());
         match token::read(dir, now) {
             TokenRead::Valid { token, expires_at } => {
                 if best.as_ref().is_none_or(|(at, _)| expires_at > *at) {
                     best = Some((expires_at, token));
                 }
             }
-            TokenRead::Expired => expired = true,
+            TokenRead::Expired { expires_at } => {
+                if expired.is_none_or(|(at, _)| expires_at > at) {
+                    expired = Some((expires_at, dir));
+                }
+            }
             TokenRead::Unreadable => unreadable = true,
             TokenRead::Missing => {}
         }
     }
-    match best {
-        Some((_, token)) => Source::Token(token),
-        None if expired => Source::TokenExpired,
-        None if unreadable => Source::CredentialsUnreadable,
-        None => Source::NotLoggedIn,
-    }
+    let source = match (best, expired) {
+        (Some((_, token)), _) => Source::Token(token),
+        (None, Some((_, dir))) => Source::TokenExpired {
+            usage_instance: dir.to_path_buf(),
+        },
+        (None, None) if unreadable => Source::CredentialsUnreadable,
+        (None, None) => Source::NotLoggedIn,
+    };
+    Found { source, dirs }
 }
 
 /// What a reply means: a reading, or a failure with the endpoint's `Retry-After`.
@@ -353,7 +423,7 @@ fn view(
             };
             (status, entry.next_call_at.filter(|at| *at > now))
         }
-        Source::TokenExpired => (UsageStatus::TokenExpired, None),
+        Source::TokenExpired { .. } => (UsageStatus::TokenExpired, None),
         Source::CredentialsUnreadable => (UsageStatus::CredentialsUnreadable, None),
         Source::NotLoggedIn => (UsageStatus::NotLoggedIn, None),
     };
@@ -368,6 +438,7 @@ fn view(
         stale,
         called,
         next_call_at,
+        renewal: None,
     }
 }
 

@@ -33,6 +33,12 @@ impl Paths {
         self.root.join("bin")
     }
 
+    /// `~/.mccboard/state/renewal/`: the empty folder Claude Code runs in when mccboard asks
+    /// it to renew an expired token, so no project's settings, hooks or `CLAUDE.md` apply.
+    pub fn renewal_dir(&self) -> PathBuf {
+        self.state_dir().join("renewal")
+    }
+
     /// `~/.mccboard/state/backups/`: real files and folders a repair replaced with links,
     /// as `<UTC time>/<instance>/<item>`.
     pub fn backups_dir(&self) -> PathBuf {
