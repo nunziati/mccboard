@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use jiff::Timestamp;
 use mccboard_core::Core;
@@ -36,10 +37,24 @@ impl TempHome {
         self.dir.path()
     }
 
-    /// A core over this home, with a fake environment whose clock reads [`NOW`].
+    /// A core over this home, with a fake environment whose clock reads [`NOW`] and whose
+    /// Start menu is [`TempHome::start_menu`] (used when the fake plays Windows).
     pub fn core(&self) -> (Core, FakeEnvironment) {
         let env = FakeEnvironment::new(now());
+        env.set_start_menu(Some(&self.start_menu()));
         (Core::new(self.path(), env.clone()), env)
+    }
+
+    /// The Start menu's Programs folder of the fake Windows user, under this home (not
+    /// created: the first shortcut creates it).
+    pub fn start_menu(&self) -> PathBuf {
+        self.path()
+            .join("AppData")
+            .join("Roaming")
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
     }
 
     /// Creates `~/.claude`, the primary instance's config directory.
@@ -181,4 +196,45 @@ impl TempHome {
         walk(&self.path().join(".mccboard"), &mut out);
         out
     }
+}
+
+/// The packaged desktop app's program, as Windows lists it.
+pub const DESKTOP_EXE: &str =
+    r"C:\Program Files\WindowsApps\Claude_1.0.2342.0_x64__pzs8sxrjxfjjc\app\Claude.exe";
+
+/// A process of the packaged desktop app with command line `args` after the program.
+pub fn desktop_process(pid: u32, args: &[&str]) -> mccboard_core::ProcessListing {
+    mccboard_core::ProcessListing {
+        pid,
+        parent_pid: Some(1),
+        name: "Claude.exe".to_owned(),
+        exe: Some(PathBuf::from(DESKTOP_EXE)),
+        args: std::iter::once(DESKTOP_EXE)
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect(),
+    }
+}
+
+/// `--user-data-dir=<folder>`, as mccboard passes it.
+pub fn user_data_dir(folder: &Path) -> String {
+    format!("--user-data-dir={}", folder.display())
+}
+
+/// Sets the modification time of the folder `dir`. On Windows a folder opens only with
+/// `FILE_FLAG_BACKUP_SEMANTICS`, and setting its times needs `FILE_WRITE_ATTRIBUTES`.
+pub fn set_folder_modified(dir: &Path, modified: SystemTime) {
+    #[cfg(windows)]
+    let folder = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+    };
+    #[cfg(not(windows))]
+    let folder = fs::File::open(dir);
+    folder.unwrap().set_modified(modified).unwrap();
 }

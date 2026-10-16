@@ -1,6 +1,9 @@
 //! The Tauri binding: exposes core operations as commands. No logic lives here (ADR 0004).
 
+mod desktop;
+mod desktop_watch;
 mod settings;
+mod taskbar;
 mod tray;
 mod usage;
 
@@ -9,8 +12,9 @@ use std::time::Duration;
 
 use mccboard_core::{
     Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
-    Core, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal, Registration, Registry,
-    Removal, RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
+    Core, DesktopOpening, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal,
+    Registration, Registry, Removal, RemoveLevel, RepairReport, Saved, SharingAnswer,
+    SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -97,7 +101,8 @@ fn remove_instance(
     Ok(core.remove(&path, level)?)
 }
 
-/// `launcher`: `None` leaves it, `Some("")` drops the override, anything else sets it.
+/// `launcher`: `None` leaves it, `Some("")` drops the override, anything else sets it. A
+/// desktop profile's Start-menu shortcut that can't follow is a warning in the result.
 #[tauri::command]
 fn update_account(
     core: tauri::State<'_, Core>,
@@ -105,7 +110,7 @@ fn update_account(
     label: Option<String>,
     color: Option<String>,
     launcher: Option<String>,
-) -> Result<Account, CommandError> {
+) -> Result<Saved<Account>, CommandError> {
     let update = AccountUpdate {
         label,
         color: color.map(|c| c.parse::<Color>()).transpose()?,
@@ -146,6 +151,17 @@ fn repair(
     item: Option<String>,
 ) -> Result<RepairReport, CommandError> {
     Ok(core.repair(&path, item.as_deref())?)
+}
+
+/// Opens the desktop profile of the account `uuid`, or the default desktop profile when
+/// `uuid` is `None` (or the primary instance's account). It doesn't wait for the app.
+#[tauri::command]
+fn open_desktop_profile(
+    core: tauri::State<'_, Core>,
+    uuid: Option<String>,
+) -> Result<DesktopOpening, CommandError> {
+    let account = uuid.map(AccountUuid::new);
+    Ok(desktop::open(&core, account.as_ref())?)
 }
 
 /// The folder a linked instance for `label` gets by default (`~/.claude-<label>`).
@@ -206,6 +222,7 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
             if changed {
                 let _ = handle.emit(CONFIG_CHANGED, ());
                 tray::redraw(&handle);
+                taskbar::config_changed(&handle.state::<Core>());
             }
         },
     )?;
@@ -220,9 +237,20 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
 pub fn run() {
     // Without a home directory the core reports its home as unreadable, which the UI shows.
     let home = std::env::home_dir().unwrap_or_default();
+    // Desktop profiles' shortcuts and pins start this program with `--open-profile`.
+    if let Ok(program) = std::env::current_exe() {
+        SystemEnvironment::set_app_program(program);
+    }
     let core = Core::new(home, SystemEnvironment);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // First: a second copy of the app (a profile's shortcut or pin) hands its arguments to
+    // this one and exits before anything else starts.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        taskbar::on_second_copy(app, &argv);
+    }));
+    builder
         .manage(core.clone())
         .invoke_handler(tauri::generate_handler![
             scan,
@@ -241,6 +269,15 @@ pub fn run() {
             add_folder,
             add_instance,
             login_instance,
+            open_desktop_profile,
+            desktop::desktop_profiles,
+            desktop::desktop_profile_candidates,
+            desktop::desktop_profile_folder,
+            desktop::add_desktop_profile,
+            desktop::update_desktop_profile,
+            desktop::remove_desktop_profile,
+            desktop_watch::desktop_notices,
+            desktop_watch::dismiss_desktop_notice,
             settings::language,
             settings::set_language,
             settings::renew_expired_tokens,
@@ -253,6 +290,9 @@ pub fn run() {
             if let Err(error) = watch_config(app, &core) {
                 eprintln!("mccboard: cannot watch config.toml: {error}");
             }
+            desktop::open_at_start(app.handle());
+            taskbar::setup(app, &core);
+            desktop_watch::setup(app, &core)?;
             Ok(())
         })
         .build(tauri::generate_context!())

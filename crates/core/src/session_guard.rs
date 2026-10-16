@@ -85,7 +85,7 @@ fn uses(home: &Path, config_dir: &Path, process: &ClaudeProcess) -> bool {
 
 /// Two spellings of one folder: equal once normalised, or once links (and on Windows short
 /// names) are resolved.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     if paths::same(a, b) {
         return true;
     }

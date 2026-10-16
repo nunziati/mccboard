@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import AccountHeader from './lib/AccountHeader.svelte'
   import AddInstance from './lib/AddInstance.svelte'
+  import DesktopProfiles from './lib/DesktopProfiles.svelte'
+  import DesktopNoticesBanner from './lib/DesktopNoticesBanner.svelte'
   import DriftCount from './lib/DriftCount.svelte'
   import DriftList from './lib/DriftList.svelte'
   import LauncherCell from './lib/LauncherCell.svelte'
@@ -85,6 +87,8 @@
   let usageReport = $state<UsageReport | null>(null)
   /** Whether mccboard lets Claude Code renew an expired token (config.toml). */
   let renewTokens = $state(true)
+  /** The default desktop profile's account, from the desktop profiles section. */
+  let defaultProfileAccount = $state<string | null>(null)
 
   /** What a login did, in words: the account it registered the instance under, and warnings. */
   function loginNotice(report: LoginReport): string {
@@ -408,6 +412,8 @@
     </div>
   </header>
 
+  <DesktopNoticesBanner />
+
   {#if loadError}
     {@render failure(loadError, null)}
   {:else}
@@ -434,7 +440,11 @@
       {#each groups as group (group.key)}
         <div class="group">
           {#if group.account}
-            <AccountHeader account={group.account} onerror={(e) => (actionError = asCoreError(e))} />
+            <AccountHeader
+              account={group.account}
+              colorLocked={group.account.uuid === defaultProfileAccount}
+              onerror={(e) => (actionError = asCoreError(e))}
+            />
           {:else if group.uuid}
             <div><strong>{t('account.unknown_group', { uuid: group.uuid })}</strong></div>
             <p class="muted small">{t('account.unknown_hint')}</p>
@@ -569,6 +579,13 @@
         </button>
       </form>
     </section>
+
+    <DesktopProfiles
+      accounts={registry?.accounts ?? []}
+      {busy}
+      onaction={act}
+      bind:defaultAccount={defaultProfileAccount}
+    />
 
     <section>
       <h2>{t('section.proposals')}</h2>

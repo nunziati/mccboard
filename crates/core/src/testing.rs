@@ -10,13 +10,20 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment,
-    InstanceKind, LoginExit, LoginInvocation, OsKind, RenewalExit, RenewalInvocation,
+    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopLaunch, DesktopPackage,
+    EndpointReply, Environment, Image, InstanceKind, LoginExit, LoginInvocation, OsKind,
+    ProcessListing, RenewalExit, RenewalInvocation, Shortcut,
 };
+
+/// The first pid a fake launch of the desktop app returns; each launch gets the next one.
+pub const FIRST_FAKE_DESKTOP_PID: u32 = 4000;
 
 /// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
 /// mccboard produces may contain it.
 pub const FAKE_LOGIN_TOKEN: &str = "sk-ant-oat01-FAKE-LOGIN-TOKEN-never-shown-by-mccboard";
+
+/// mccboard's app as [`FakeEnvironment`] finds it unless told otherwise.
+pub const FAKE_MCCBOARD_APP: &str = r"C:\Program Files\mccboard\mccboard.exe";
 
 /// The launcher shim [`FakeEnvironment`] ships unless told otherwise.
 pub const FAKE_LAUNCHER_SHIM: &[u8] = b"MZ fake mccboard-shim.exe, version 1";
@@ -44,6 +51,19 @@ struct State {
     user_path_fails: bool,
     launcher_shim: Option<Vec<u8>>,
     processes: Vec<ClaudeProcess>,
+    desktop_processes: Vec<ProcessListing>,
+    desktop_packages: Vec<DesktopPackage>,
+    desktop_lookup_error: Option<String>,
+    /// The families asked for, one list per lookup.
+    desktop_lookups: Vec<Vec<String>>,
+    desktop_launches: Vec<DesktopLaunch>,
+    desktop_launch_handler: DesktopLaunchHandler,
+    program_icon: Option<Image>,
+    start_menu: Option<PathBuf>,
+    other_home: bool,
+    mccboard_app: Option<PathBuf>,
+    shortcuts_written: Vec<Shortcut>,
+    shortcut_error: Option<String>,
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
     claude_handler: ClaudeHandler,
@@ -77,6 +97,19 @@ impl std::fmt::Debug for RenewalHandler {
     }
 }
 
+type DesktopLaunchFn = dyn Fn(&DesktopLaunch) -> io::Result<u32> + Send + Sync;
+
+/// What a fake launch of the desktop app does; by default it starts nothing and returns the
+/// next pid from [`FIRST_FAKE_DESKTOP_PID`].
+#[derive(Clone)]
+struct DesktopLaunchHandler(Option<Arc<DesktopLaunchFn>>);
+
+impl std::fmt::Debug for DesktopLaunchHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DesktopLaunchHandler")
+    }
+}
+
 impl std::fmt::Debug for LoginHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("LoginHandler")
@@ -105,6 +138,18 @@ impl FakeEnvironment {
                 user_path_fails: false,
                 launcher_shim: Some(FAKE_LAUNCHER_SHIM.to_vec()),
                 processes: Vec::new(),
+                desktop_processes: Vec::new(),
+                desktop_packages: Vec::new(),
+                desktop_lookup_error: None,
+                desktop_lookups: Vec::new(),
+                desktop_launches: Vec::new(),
+                desktop_launch_handler: DesktopLaunchHandler(None),
+                program_icon: None,
+                start_menu: None,
+                other_home: false,
+                mccboard_app: Some(PathBuf::from(FAKE_MCCBOARD_APP)),
+                shortcuts_written: Vec::new(),
+                shortcut_error: None,
                 developer_mode: true,
                 claude_invocations: Vec::new(),
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
@@ -184,6 +229,77 @@ impl FakeEnvironment {
     /// Starts one more Claude Code process.
     pub fn add_process(&self, process: ClaudeProcess) {
         self.state().processes.push(process);
+    }
+
+    /// Replaces the running processes named `Claude`, as the OS lists them (the desktop app's
+    /// and any other).
+    pub fn set_desktop_processes(&self, processes: Vec<ProcessListing>) {
+        self.state().desktop_processes = processes;
+    }
+
+    /// Installs the desktop app's MSIX packages: what every lookup finds, whatever families
+    /// it asks for. None by default: the app isn't installed.
+    pub fn set_desktop_app_packages(&self, packages: Vec<DesktopPackage>) {
+        self.state().desktop_packages = packages;
+    }
+
+    /// Makes looking up the desktop app's packages fail with `message`, as when Windows'
+    /// packaging API does; `None` undoes it.
+    pub fn set_desktop_app_lookup_error(&self, message: Option<&str>) {
+        self.state().desktop_lookup_error = message.map(str::to_owned);
+    }
+
+    /// The package families each lookup of the desktop app asked for, in order.
+    pub fn desktop_app_lookups(&self) -> Vec<Vec<String>> {
+        self.state().desktop_lookups.clone()
+    }
+
+    /// Scripts what launching the desktop app does: `handler` gets each launch and returns
+    /// the pid started, or an error as when the program can't be started. It may look at the
+    /// filesystem, to check what existed at launch.
+    pub fn on_desktop_launch(
+        &self,
+        handler: impl Fn(&DesktopLaunch) -> io::Result<u32> + Send + Sync + 'static,
+    ) {
+        self.state().desktop_launch_handler = DesktopLaunchHandler(Some(Arc::new(handler)));
+    }
+
+    /// Every launch of the desktop app so far, in order.
+    pub fn desktop_launches(&self) -> Vec<DesktopLaunch> {
+        self.state().desktop_launches.clone()
+    }
+
+    /// Gives the desktop app's program an icon, the fallback logo when its package has none;
+    /// none by default.
+    pub fn set_program_icon(&self, icon: Option<Image>) {
+        self.state().program_icon = icon;
+    }
+
+    /// Sets the Start menu's Programs folder; `None` (the default): it can't be found.
+    pub fn set_start_menu(&self, folder: Option<&Path>) {
+        self.state().start_menu = folder.map(Path::to_path_buf);
+    }
+
+    /// Plays a core working in another home than the user's (`mccboard --home`) when `true`:
+    /// the Start menu is not offered, as the real environment does. `false` by default.
+    pub fn set_other_home(&self, other: bool) {
+        self.state().other_home = other;
+    }
+
+    /// Sets where mccboard's app is; `None`: it can't be found. [`FAKE_MCCBOARD_APP`] by
+    /// default.
+    pub fn set_mccboard_app(&self, program: Option<&Path>) {
+        self.state().mccboard_app = program.map(Path::to_path_buf);
+    }
+
+    /// Makes writing a shortcut fail with `message`; `None` undoes it.
+    pub fn set_shortcut_error(&self, message: Option<&str>) {
+        self.state().shortcut_error = message.map(str::to_owned);
+    }
+
+    /// Every shortcut written so far, in order.
+    pub fn shortcuts_written(&self) -> Vec<Shortcut> {
+        self.state().shortcuts_written.clone()
     }
 
     /// Sets the launcher shim mccboard ships: other bytes, as after an upgrade of mccboard, or
@@ -361,6 +477,76 @@ impl Environment for FakeEnvironment {
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {
         self.state().processes.clone()
+    }
+
+    fn desktop_processes(&self) -> Vec<ProcessListing> {
+        self.state().desktop_processes.clone()
+    }
+
+    fn desktop_app_packages(&self, families: &[String]) -> io::Result<Vec<DesktopPackage>> {
+        let mut state = self.state();
+        state.desktop_lookups.push(families.to_vec());
+        match &state.desktop_lookup_error {
+            Some(message) => Err(io::Error::other(format!("fake: {message}"))),
+            None => Ok(state.desktop_packages.clone()),
+        }
+    }
+
+    fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32> {
+        let (handler, count) = {
+            let mut state = self.state();
+            state.desktop_launches.push(launch.clone());
+            (
+                state.desktop_launch_handler.clone(),
+                state.desktop_launches.len() as u32,
+            )
+        };
+        match handler.0 {
+            // Not under the lock: the handler may steer the fake itself.
+            Some(handler) => handler(launch),
+            None => Ok(FIRST_FAKE_DESKTOP_PID + count - 1),
+        }
+    }
+
+    fn program_icon(&self, _program: &Path) -> io::Result<Image> {
+        self.state()
+            .program_icon
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no program icon"))
+    }
+
+    fn start_menu_programs(&self, _home: &Path) -> io::Result<Option<PathBuf>> {
+        let state = self.state();
+        if state.other_home {
+            return Ok(None);
+        }
+        state
+            .start_menu
+            .clone()
+            .map(Some)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no Start menu"))
+    }
+
+    fn mccboard_app(&self) -> io::Result<PathBuf> {
+        self.state()
+            .mccboard_app
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no mccboard app"))
+    }
+
+    /// Records the shortcut and writes a placeholder file at its path (its parent folders
+    /// created), so tests see it on disk as Windows would leave it.
+    fn write_shortcut(&self, shortcut: &Shortcut) -> io::Result<()> {
+        let mut state = self.state();
+        if let Some(message) = &state.shortcut_error {
+            return Err(io::Error::other(format!("fake: {message}")));
+        }
+        if let Some(parent) = shortcut.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&shortcut.path, format!("fake shell link: {shortcut:?}"))?;
+        state.shortcuts_written.push(shortcut.clone());
+        Ok(())
     }
 
     fn file_links_allowed(&self) -> bool {

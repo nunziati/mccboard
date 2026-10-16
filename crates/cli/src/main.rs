@@ -1,6 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod add;
+mod desktop;
 mod doctor;
 mod remove;
 mod repair;
@@ -108,6 +109,12 @@ enum Command {
     },
     /// Show mccboard's preferences, or change them. Saved in config.toml.
     Settings(settings::SettingsArgs),
+    /// Desktop profiles: copies of the Claude desktop app side by side, each bound to one
+    /// account and using its local instance.
+    Desktop {
+        #[command(subcommand)]
+        command: desktop::DesktopCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -179,6 +186,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Share(args) => doctor::share(&core, args)?,
         Command::Repair(args) => repair::repair(&core, args)?,
         Command::Remove(args) => remove::remove(&core, args)?,
+        Command::Desktop { command } => desktop::run(&core, command)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {
@@ -253,17 +261,19 @@ fn run(cli: Cli) -> Result<()> {
                     launcher.map(Some)
                 },
             };
-            let account = core.update_account(&uuid, update)?;
+            let saved = core.update_account(&uuid, update)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&account)?);
+                println!("{}", serde_json::to_string_pretty(&saved)?);
             } else {
+                let account = &saved.value;
                 println!(
                     "Account {}: label {:?}, color {}, launcher {}.",
-                    describe(&account),
+                    describe(account),
                     account.label,
                     account.color,
                     account.launcher_name()
                 );
+                desktop::warn_shortcuts(saved.shortcuts_not_synced.as_ref());
             }
         }
         Command::Launcher {

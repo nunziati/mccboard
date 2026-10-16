@@ -106,7 +106,7 @@ pub(crate) fn remove(
 
 /// Deletes a real folder and everything in it. Links (symlinks, junctions) are removed as
 /// links: what they point to is never touched.
-fn delete_folder(dir: &Path) -> io::Result<()> {
+pub(crate) fn delete_folder(dir: &Path) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         match links::inspect(&path) {

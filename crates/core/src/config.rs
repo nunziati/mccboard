@@ -24,6 +24,11 @@
 //! [sharing.items]               # answers about unknown items of the primary instance
 //! gsd-core = "link"             # "link" from the primary, or keep "private" to each instance
 //!
+//! [[desktop_profiles]]          # desktop profiles other than the default one
+//! account = "<account uuid>"    # the account it is bound to; one profile per account
+//! data_folder = 'C:\Users\me\AppData\Local\Claude-B'  # absolute: its own data directory
+//! open_at_start = false         # open it when mccboard starts; absent: false
+//!
 //! [preferences]
 //! language = "it"               # the app's language, "en" or "it"; absent: the system's
 //! renew_expired_tokens = true   # let Claude Code renew an expired token; absent: true
@@ -51,11 +56,21 @@ pub(crate) struct InstanceEntry {
     pub label: Option<String>,
 }
 
+/// A desktop profile as stored (never the default desktop profile, which is implicit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopProfileEntry {
+    pub account: AccountUuid,
+    pub data_folder: PathBuf,
+    pub open_at_start: bool,
+}
+
 /// The validated contents of `config.toml`.
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub accounts: Vec<Account>,
     pub instances: Vec<InstanceEntry>,
+    /// Desktop profiles other than the default one, at most one per account.
+    pub desktop_profiles: Vec<DesktopProfileEntry>,
     /// Answers about unknown items, by item name.
     pub sharing: BTreeMap<String, SharingAnswer>,
     /// The app's language, when the user chose one.
@@ -69,6 +84,7 @@ impl Default for Config {
         Self {
             accounts: Vec::new(),
             instances: Vec::new(),
+            desktop_profiles: Vec::new(),
             sharing: BTreeMap::new(),
             language: None,
             renew_expired_tokens: true,
@@ -86,6 +102,52 @@ impl Config {
             .iter()
             .find(|i| paths::same(&i.config_dir, config_dir))
     }
+
+    pub fn desktop_profile(&self, account: &AccountUuid) -> Option<&DesktopProfileEntry> {
+        self.desktop_profiles.iter().find(|p| &p.account == account)
+    }
+
+    /// The desktop profiles' data folders, where mccboard never creates links.
+    pub fn desktop_profile_folders(&self) -> Vec<PathBuf> {
+        self.desktop_profiles
+            .iter()
+            .map(|p| p.data_folder.clone())
+            .collect()
+    }
+
+    /// The registered primary instance (`~/.claude` in `home`), if any.
+    pub fn primary_instance(&self, home: &Path) -> Option<&InstanceEntry> {
+        self.instance(&home.join(".claude"))
+    }
+
+    /// The account of the default desktop profile: the one the primary instance is registered
+    /// with.
+    pub fn default_profile_account(&self, home: &Path) -> Option<&AccountUuid> {
+        self.primary_instance(home)?.account.as_ref()
+    }
+
+    /// The accounts as every view model shows them: the default desktop profile's account in
+    /// Claude's orange, whatever color is stored for it.
+    pub fn shown_accounts(&self, home: &Path) -> Vec<Account> {
+        let default = self.default_profile_account(home);
+        self.accounts
+            .iter()
+            .map(|account| shown(account, default))
+            .collect()
+    }
+
+    /// `account` as view models show it (see [`Config::shown_accounts`]).
+    pub fn shown_account(&self, home: &Path, account: &Account) -> Account {
+        shown(account, self.default_profile_account(home))
+    }
+}
+
+fn shown(account: &Account, default_profile_account: Option<&AccountUuid>) -> Account {
+    let mut account = account.clone();
+    if default_profile_account == Some(&account.uuid) {
+        account.color = account::claude_orange();
+    }
+    account
 }
 
 /// `config.toml` as loaded for an edit: the typed view plus the document to change.
@@ -314,21 +376,81 @@ impl ConfigFile {
             .or_insert_with(|| Item::Table(toml_edit::Table::new()))
             .as_table_like_mut()
             .expect("validated: preferences is a table");
-        match preferences
-            .get_mut("renew_expired_tokens")
-            .and_then(Item::as_value_mut)
-        {
-            Some(value) if value.as_bool() == Some(on) => {}
-            Some(value) => {
-                let decor = value.decor().clone();
-                *value = Value::from(on);
-                *value.decor_mut() = decor;
+        set_bool(preferences, "renew_expired_tokens", on);
+        self.config.renew_expired_tokens = on;
+    }
+
+    /// Stores a new desktop profile, `open_at_start` written out so it can be found by hand.
+    pub fn add_desktop_profile(&mut self, entry: &DesktopProfileEntry) {
+        let folder = entry.data_folder.to_string_lossy();
+        match self.doc.get_mut(DESKTOP_PROFILES) {
+            Some(Item::Value(Value::Array(array))) => {
+                let mut table = toml_edit::InlineTable::new();
+                table.insert("account", entry.account.as_str().into());
+                table.insert("data_folder", folder.as_ref().into());
+                table.insert("open_at_start", entry.open_at_start.into());
+                array.push(table);
             }
-            None => {
-                preferences.insert("renew_expired_tokens", toml_edit::value(on));
+            _ => {
+                let mut table = toml_edit::Table::new();
+                table.insert("account", toml_edit::value(entry.account.as_str()));
+                table.insert("data_folder", toml_edit::value(folder.as_ref()));
+                table.insert("open_at_start", toml_edit::value(entry.open_at_start));
+                self.doc
+                    .entry(DESKTOP_PROFILES)
+                    .or_insert(Item::ArrayOfTables(Default::default()))
+                    .as_array_of_tables_mut()
+                    .expect("validated: desktop_profiles is a list of tables")
+                    .push(table);
             }
         }
-        self.config.renew_expired_tokens = on;
+        self.config.desktop_profiles.push(entry.clone());
+    }
+
+    /// Sets whether the desktop profile of `account` opens when mccboard starts, keeping the
+    /// comment after an existing value; `false` if there is no such profile.
+    pub fn set_desktop_profile_open_at_start(&mut self, account: &AccountUuid, on: bool) -> bool {
+        let Some(entry) = self
+            .config
+            .desktop_profiles
+            .iter_mut()
+            .find(|p| &p.account == account)
+        else {
+            return false;
+        };
+        entry.open_at_start = on;
+        for_each_entry(&mut self.doc, DESKTOP_PROFILES, |table| {
+            if profile_is(table, account) {
+                set_bool(table, "open_at_start", on);
+            }
+        });
+        true
+    }
+
+    /// Forgets the desktop profile of `account`; `false` if there was none.
+    pub fn remove_desktop_profile(&mut self, account: &AccountUuid) -> bool {
+        let before = self.config.desktop_profiles.len();
+        self.config
+            .desktop_profiles
+            .retain(|p| &p.account != account);
+        if self.config.desktop_profiles.len() == before {
+            return false;
+        }
+        match self.doc.get_mut(DESKTOP_PROFILES) {
+            Some(Item::ArrayOfTables(tables)) => {
+                tables.retain(|t| !profile_is(t, account));
+                if tables.is_empty() {
+                    self.doc.remove(DESKTOP_PROFILES);
+                }
+            }
+            Some(Item::Value(Value::Array(array))) => array.retain(|value| {
+                !value
+                    .as_inline_table()
+                    .is_some_and(|t| profile_is(t, account))
+            }),
+            _ => {}
+        }
+        true
     }
 
     /// Forgets an instance; `false` if it wasn't registered.
@@ -353,8 +475,16 @@ impl ConfigFile {
     }
 }
 
-fn for_each_instance(doc: &mut DocumentMut, mut f: impl FnMut(&mut dyn TableLike)) {
-    match doc.get_mut("instances") {
+/// The key of the desktop profiles' list.
+const DESKTOP_PROFILES: &str = "desktop_profiles";
+
+fn for_each_instance(doc: &mut DocumentMut, f: impl FnMut(&mut dyn TableLike)) {
+    for_each_entry(doc, "instances", f);
+}
+
+/// Every table in the list `key`, written as `[[key]]` tables or as an inline array.
+fn for_each_entry(doc: &mut DocumentMut, key: &str, mut f: impl FnMut(&mut dyn TableLike)) {
+    match doc.get_mut(key) {
         Some(Item::ArrayOfTables(tables)) => tables.iter_mut().for_each(|t| f(t)),
         Some(Item::Value(Value::Array(array))) => array
             .iter_mut()
@@ -369,6 +499,28 @@ fn entry_is(entry: &dyn TableLike, config_dir: &Path) -> bool {
         .get("path")
         .and_then(Item::as_str)
         .is_some_and(|path| paths::same(Path::new(path), config_dir))
+}
+
+fn profile_is(entry: &dyn TableLike, account: &AccountUuid) -> bool {
+    entry
+        .get("account")
+        .and_then(Item::as_str)
+        .is_some_and(|uuid| uuid.trim() == account.as_str())
+}
+
+/// Sets a boolean key, keeping the comment after an existing value.
+fn set_bool(table: &mut dyn TableLike, key: &str, new: bool) {
+    match table.get_mut(key).and_then(Item::as_value_mut) {
+        Some(value) if value.as_bool() == Some(new) => {}
+        Some(value) => {
+            let decor = value.decor().clone();
+            *value = Value::from(new);
+            *value.decor_mut() = decor;
+        }
+        None => {
+            table.insert(key, toml_edit::value(new));
+        }
+    }
 }
 
 /// Sets (or with `None` removes) a string key, keeping the comment after an existing value.
@@ -400,6 +552,16 @@ struct RawConfig {
     sharing: RawSharing,
     #[serde(default)]
     preferences: RawPreferences,
+    #[serde(default)]
+    desktop_profiles: Vec<RawDesktopProfile>,
+}
+
+#[derive(Deserialize)]
+struct RawDesktopProfile {
+    account: String,
+    data_folder: PathBuf,
+    #[serde(default)]
+    open_at_start: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -491,6 +653,34 @@ impl RawConfig {
             sharing.insert(item, answer);
         }
 
+        let mut desktop_profiles: Vec<DesktopProfileEntry> = Vec::new();
+        for (index, raw) in self.desktop_profiles.into_iter().enumerate() {
+            let at = |field: &str| format!("desktop_profiles[{index}].{field}");
+            let account = raw.account.trim();
+            if account.is_empty() {
+                return Err(format!("{}: an account UUID is required", at("account")));
+            }
+            let account = AccountUuid::new(account);
+            if desktop_profiles.iter().any(|p| p.account == account) {
+                return Err(format!(
+                    "{}: another desktop profile has account {account}; one per account",
+                    at("account")
+                ));
+            }
+            if !raw.data_folder.is_absolute() {
+                return Err(format!(
+                    "{}: {} is not an absolute path",
+                    at("data_folder"),
+                    raw.data_folder.display()
+                ));
+            }
+            desktop_profiles.push(DesktopProfileEntry {
+                account,
+                data_folder: raw.data_folder,
+                open_at_start: raw.open_at_start,
+            });
+        }
+
         let language = self
             .preferences
             .language
@@ -501,6 +691,7 @@ impl RawConfig {
         Ok(Config {
             accounts,
             instances,
+            desktop_profiles,
             sharing,
             language,
             renew_expired_tokens: self.preferences.renew_expired_tokens.unwrap_or(true),

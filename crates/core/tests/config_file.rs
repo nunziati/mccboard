@@ -109,8 +109,9 @@ gsd-core = "link"
     core.register(&b.dir).unwrap();
     core.update_account(
         &AccountUuid::new(UUID_A),
+        // A's color is Claude's orange (the default desktop profile's account): rename it.
         AccountUpdate {
-            color: Some("#16a34a".parse().unwrap()),
+            label: Some("Main".into()),
             ..Default::default()
         },
     )
@@ -126,7 +127,8 @@ gsd-core = "link"
         "# the primary",
         "pinned = true",
         "gsd-core = \"link\"",
-        "#16a34a",
+        "label = \"Main\" # the main one",
+        "#2563eb",
     ] {
         assert!(text.contains(kept), "lost {kept:?} in:\n{text}");
     }

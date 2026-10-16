@@ -127,9 +127,16 @@ fn register_list_and_unregister() {
 
 #[test]
 fn account_set_changes_label_and_color_by_label() {
+    // Not the primary instance's account A: the default desktop profile's account keeps
+    // Claude's orange.
     let home = fixture_home();
+    fs::write(
+        home.path().join(".claude-b").join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"22222222-2222-4222-8222-222222222222"}}"#,
+    )
+    .unwrap();
     assert!(
-        mccboard(home.path(), &["register", "~/.claude"])
+        mccboard(home.path(), &["register", "~/.claude", "~/.claude-b"])
             .status
             .success()
     );
@@ -137,7 +144,7 @@ fn account_set_changes_label_and_color_by_label() {
     let out = mccboard(
         home.path(),
         &[
-            "account", "set", "a", "--label", "Main", "--color", "#16A34A", "--json",
+            "account", "set", "b", "--label", "Main", "--color", "#16A34A", "--json",
         ],
     );
 

@@ -117,6 +117,18 @@ export interface CoreError {
   processes?: ClaudeProcess[] | null
 }
 
+/**
+ * A change saved in config.toml whose Start-menu shortcuts couldn't follow: a warning shown
+ * like an error (its message says the change is saved), never a failed operation.
+ */
+export interface ShortcutsNotSynced extends CoreError {
+  /** The error's English message. */
+  message: string
+}
+
+/** What a change to the accounts or desktop profiles returns, with its shortcut warning. */
+export type Saved<T> = T & { shortcuts_not_synced: ShortcutsNotSynced | null }
+
 export function isCoreError(value: unknown): value is CoreError {
   return typeof value === 'object' && value !== null && typeof (value as CoreError).code === 'string'
 }
@@ -137,8 +149,8 @@ export function unregister(path: string): Promise<void> {
   return invoke<void>('unregister', { path })
 }
 
-export function updateAccount(uuid: string, update: AccountUpdate): Promise<Account> {
-  return invoke<Account>('update_account', { uuid, ...update })
+export function updateAccount(uuid: string, update: AccountUpdate): Promise<Saved<Account>> {
+  return invoke<Saved<Account>>('update_account', { uuid, ...update })
 }
 
 export function launchers(): Promise<LauncherStatus> {
@@ -328,4 +340,95 @@ export function addInstance(label: string, path: string | null): Promise<AddRepo
 /** Opens Claude Code's login in the registered instance in `path`; resolves once it ended. */
 export function loginInstance(path: string): Promise<LoginReport> {
   return invoke<LoginReport>('login_instance', { path })
+}
+
+// Desktop profiles: the Claude desktop app with its own data folder and sign-in, one per account.
+
+/** Something wrong with a desktop profile that the user should see. */
+export type DesktopWarning =
+  | { kind: 'observed_account_differs'; observed: string; observed_label: string | null }
+  | { kind: 'default_profile_not_primary_account'; observed: string; observed_label: string | null }
+  | { kind: 'no_local_instance' }
+
+/** The account a desktop profile is signed in with, from its data folder. */
+export interface DesktopObservation {
+  /** The most recently used account; null: not signed in yet. */
+  account: string | null
+  /** Other accounts signed in before in the same data folder. */
+  others: string[]
+}
+
+export interface DesktopProfile {
+  /** The default desktop profile: the app as it starts normally. It comes first. */
+  default: boolean
+  account: string | null
+  label: string | null
+  /** Claude's orange for the default profile, always. */
+  color: string
+  data_folder: string
+  /** The instance its Code tab uses. */
+  instance: string | null
+  open_at_start: boolean
+  running: boolean
+  observed: DesktopObservation
+  warnings: DesktopWarning[]
+}
+
+export interface DesktopOpening {
+  default: boolean
+  account: string | null
+  label: string | null
+  program: string
+  data_folder: string | null
+  created_folder: boolean
+  /** A profile other than the default one with no account signed in yet. */
+  needs_sign_in: boolean
+  instance: string | null
+  pid: number
+}
+
+export interface DesktopProfileRemoval {
+  account: string
+  data_folder: string
+  folder: FolderOutcome
+}
+
+/** Every desktop profile, the default one first. */
+export function desktopProfiles(): Promise<DesktopProfile[]> {
+  return invoke<DesktopProfile[]>('desktop_profiles')
+}
+
+/** The accounts that can get a desktop profile: with a local instance and no profile yet. */
+export function desktopProfileCandidates(): Promise<Account[]> {
+  return invoke<Account[]>('desktop_profile_candidates')
+}
+
+/** The data folder a new desktop profile for the account `uuid` gets by default. */
+export function desktopProfileFolder(uuid: string): Promise<string> {
+  return invoke<string>('desktop_profile_folder', { uuid })
+}
+
+/** Adds a desktop profile for the account `uuid`, in `folder` or the default one. */
+export function addDesktopProfile(uuid: string, folder: string | null): Promise<Saved<DesktopProfile>> {
+  return invoke<Saved<DesktopProfile>>('add_desktop_profile', { uuid, folder })
+}
+
+export function setDesktopProfileOpenAtStart(uuid: string, openAtStart: boolean): Promise<DesktopProfile> {
+  return invoke<DesktopProfile>('update_desktop_profile', { uuid, openAtStart })
+}
+
+/**
+ * Removes the account's desktop profile from mccboard. With `deleteFolder`, which the user must
+ * have confirmed, also deletes its data folder; refused while the app uses it.
+ */
+export function removeDesktopProfile(
+  uuid: string,
+  deleteFolder: boolean,
+): Promise<Saved<DesktopProfileRemoval>> {
+  return invoke<Saved<DesktopProfileRemoval>>('remove_desktop_profile', { uuid, deleteFolder })
+}
+
+/** Opens the account's desktop profile, or the default one for null; brings an open one to the front. */
+export function openDesktopProfile(uuid: string | null): Promise<DesktopOpening> {
+  return invoke<DesktopOpening>('open_desktop_profile', { uuid })
 }
