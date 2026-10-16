@@ -197,5 +197,8 @@
   "error.desktop_profile_not_found": "This account has no desktop profile.",
   "error.default_desktop_profile": "The default desktop profile is the Claude desktop app as it is: mccboard never removes or changes it.",
   "error.default_profile_color": "This account is the default desktop profile's, which always shows Claude's own orange: its color can't be changed.",
-  "error.desktop_profile_in_use": "The Claude desktop app is using this desktop profile's data folder. Close the profile, then try again. Nothing was changed."
+  "error.desktop_profile_in_use": "The Claude desktop app is using this desktop profile's data folder. Close the profile, then try again. Nothing was changed.",
+  "error.no_icon_source": "The Claude desktop app's logo wasn't found, so this desktop profile can't get its colored icon.",
+  "error.icon_source_unreadable": "The Claude desktop app's logo can't be read, so this desktop profile can't get its colored icon.",
+  "error.icon_unwritable": "The desktop profile's icon can't be written to mccboard's folder."
 }

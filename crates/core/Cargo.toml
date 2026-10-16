@@ -23,6 +23,8 @@ toml_edit.workspace = true
 ureq.workspace = true
 # Listing Claude Code processes for the session guard (environment and working directory).
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# Decoding the desktop app's logos and encoding the 256 px frame of profile icons.
+png = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 # The user PATH (launchers' bin folder) lives in the registry on Windows, and so does the

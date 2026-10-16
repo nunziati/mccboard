@@ -1957,6 +1957,7 @@ dependencies = [
  "junction",
  "mccboard-core",
  "mccboard-shim",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "sysinfo",

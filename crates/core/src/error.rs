@@ -259,6 +259,22 @@ pub enum Error {
         path: PathBuf,
         processes: Vec<DesktopProcess>,
     },
+
+    #[error(
+        "the Claude desktop app's logo wasn't found, so no colored icon can be drawn for this \
+         desktop profile"
+    )]
+    NoIconSource,
+
+    #[error("cannot read the Claude desktop app's logo {}: {detail}", path.display())]
+    IconSourceUnreadable { path: PathBuf, detail: String },
+
+    #[error("cannot write the desktop profile icon {}: {source}", path.display())]
+    IconUnwritable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 fn describe_desktop_processes(processes: &[DesktopProcess]) -> String {
@@ -325,6 +341,9 @@ impl Error {
             Error::DefaultDesktopProfile => "default_desktop_profile",
             Error::DefaultProfileColor { .. } => "default_profile_color",
             Error::DesktopProfileInUse { .. } => "desktop_profile_in_use",
+            Error::NoIconSource => "no_icon_source",
+            Error::IconSourceUnreadable { .. } => "icon_source_unreadable",
+            Error::IconUnwritable { .. } => "icon_unwritable",
         }
     }
 
@@ -354,7 +373,9 @@ impl Error {
             | Error::LoginNeedsTerminal { path }
             | Error::LoginNotOpened { path, .. }
             | Error::DesktopProfileFolderNotAllowed { path }
-            | Error::DesktopProfileInUse { path, .. } => Some(path),
+            | Error::DesktopProfileInUse { path, .. }
+            | Error::IconSourceUnreadable { path, .. }
+            | Error::IconUnwritable { path, .. } => Some(path),
             _ => None,
         }
     }

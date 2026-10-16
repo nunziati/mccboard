@@ -30,8 +30,8 @@ use crate::config::{Config, ConfigFile, DesktopProfileEntry};
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::{
-    Environment, Error, FolderOutcome, OsKind, Paths, RemoveLevel, desktop_app, folder_guard,
-    paths, remove, session_guard,
+    Environment, Error, FolderOutcome, IconCache, OsKind, Paths, RemoveLevel, desktop_app,
+    folder_guard, paths, remove, session_guard,
 };
 
 /// The folder under a data folder whose subfolders are named after the accounts signed in.
@@ -247,6 +247,8 @@ pub(crate) fn remove(
 
     file.remove_desktop_profile(account);
     file.save()?;
+    // Leftover icons are harmless (a new color or profile gets new file names).
+    let _ = IconCache::new(paths).remove(account);
     Ok(DesktopProfileRemoval {
         account: account.clone(),
         data_folder,

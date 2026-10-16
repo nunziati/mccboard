@@ -129,6 +129,12 @@ impl Color {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The color's red, green and blue components.
+    pub fn rgb(&self) -> [u8; 3] {
+        let channel = |i: usize| u8::from_str_radix(&self.0[1 + 2 * i..3 + 2 * i], 16).unwrap_or(0);
+        [channel(0), channel(1), channel(2)]
+    }
 }
 
 impl FromStr for Color {

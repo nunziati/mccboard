@@ -22,6 +22,7 @@ mod doctor;
 mod environment;
 mod error;
 mod folder_guard;
+mod icon;
 mod instance;
 mod language;
 mod launcher;
@@ -57,6 +58,7 @@ pub use environment::{
     LoginTerminal, OsKind, SystemEnvironment,
 };
 pub use error::Error;
+pub use icon::{IconCache, IconSources, Image, PackageLogos, ProfileIcons};
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use language::Language;
 pub use launcher::{
@@ -268,6 +270,9 @@ impl Core {
     ///   while a process of the desktop app uses the folder ([`Error::DesktopProfileInUse`]),
     ///   and for a folder that the rules of [`Core::add_desktop_profile`] wouldn't accept
     ///   ([`Error::FolderNotDeletable`]). Links inside are removed, never followed.
+    ///
+    /// The profile's cached icons go with it ([`IconCache::remove`]); one that can't be
+    /// deleted stays behind without failing the removal.
     ///
     /// The default desktop profile is never removed ([`Error::DefaultDesktopProfile`]).
     pub fn remove_desktop_profile(
