@@ -175,9 +175,11 @@ fn fake_claude(home: &Path) -> std::path::PathBuf {
         )
         .unwrap();
     } else {
-        let script = bin.join("claude");
+        // Written next to it, then copied by `cp`: this process never holds the program open
+        // for writing while other tests start processes (ETXTBSY).
+        let source = home.join("claude.txt");
         fs::write(
-            &script,
+            &source,
             format!(
                 "#!/bin/sh\necho \"${{CLAUDE_CONFIG_DIR-}}|$HOME|$PWD|$*\" >> '{}'\n\
                  echo '{{\"loggedIn\": true, \"email\": \"a@example.com\"}}'\nexit 0\n",
@@ -188,8 +190,14 @@ fn fake_claude(home: &Path) -> std::path::PathBuf {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
         }
+        let copied = Command::new("cp")
+            .arg(&source)
+            .arg(bin.join("claude"))
+            .status()
+            .unwrap();
+        assert!(copied.success());
     }
     bin
 }
