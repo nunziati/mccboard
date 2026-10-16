@@ -55,6 +55,8 @@ mod windows_shell;
 #[cfg(windows)]
 pub mod windows_taskbar;
 #[cfg(windows)]
+pub mod windows_taskbar_widget;
+#[cfg(windows)]
 mod windows_user_path;
 
 use std::path::{Path, PathBuf};

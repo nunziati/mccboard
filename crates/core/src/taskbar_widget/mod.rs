@@ -66,6 +66,20 @@ pub struct TaskbarWidget {
 }
 
 impl TaskbarWidget {
+    /// The widget when usage can't be shown at all (for example a corrupt `config.toml`):
+    /// hidden, so the tray carries the reason.
+    pub fn unavailable(language: Language) -> TaskbarWidget {
+        TaskbarWidget {
+            language,
+            enabled: false,
+            account_labels: false,
+            row_labels: ["5h".to_owned(), "7d".to_owned()],
+            columns: Vec::new(),
+            tooltip: String::new(),
+            redraw_in: REDRAW_AT_MOST_EVERY,
+        }
+    }
+
     /// Whether there is something to show: the preference is on and an account is registered.
     pub fn visible(&self) -> bool {
         self.enabled && !self.columns.is_empty()
