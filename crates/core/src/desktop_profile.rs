@@ -116,6 +116,15 @@ pub struct DesktopProfileRemoval {
     pub folder: FolderOutcome,
 }
 
+/// A desktop profile set to open when mccboard starts, and what opening it did.
+#[derive(Debug)]
+pub struct DesktopStartOpening {
+    pub account: AccountUuid,
+    /// The account's label, when the account is registered.
+    pub label: Option<String>,
+    pub result: Result<DesktopOpening, Error>,
+}
+
 /// What opening a desktop profile did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DesktopOpening {
@@ -238,6 +247,47 @@ fn start(
         },
     );
     Ok(pid)
+}
+
+/// Opens, one after the other, every stored profile set to open at start that isn't running
+/// already. Off Windows, where the app doesn't run, opens nothing.
+pub(crate) fn open_at_start(
+    home: &Path,
+    paths: &Paths,
+    env: &dyn Environment,
+) -> Result<Vec<DesktopStartOpening>, Error> {
+    if env.os() != OsKind::Windows {
+        return Ok(Vec::new());
+    }
+    Ok(list(home, &paths.config_file(), env)?
+        .into_iter()
+        .filter(|p| !p.default && p.open_at_start && !p.running)
+        .filter_map(|p| {
+            let account = p.account?;
+            let result = open(home, paths, env, Some(&account));
+            Some(DesktopStartOpening {
+                account,
+                label: p.label,
+                result,
+            })
+        })
+        .collect())
+}
+
+/// The registered accounts that can get a desktop profile: with a local instance, without a
+/// profile, and not the default profile's. In label order.
+pub(crate) fn candidates(home: &Path, config_file: &Path) -> Result<Vec<Account>, Error> {
+    let config = ConfigFile::load(config_file)?.config;
+    let default_account = config.default_profile_account(home);
+    let mut accounts: Vec<Account> = config
+        .shown_accounts(home)
+        .into_iter()
+        .filter(|a| Some(&a.uuid) != default_account)
+        .filter(|a| config.desktop_profile(&a.uuid).is_none())
+        .filter(|a| local_instance(home, &config, &a.uuid).is_some())
+        .collect();
+    accounts.sort_by_key(|a| (a.label.to_lowercase(), a.uuid.clone()));
+    Ok(accounts)
 }
 
 pub(crate) fn list(

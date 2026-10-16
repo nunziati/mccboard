@@ -57,7 +57,7 @@ pub use desktop_launch::{DesktopLaunch, DesktopPackage, PACKAGE_FAMILY};
 pub use desktop_process::{DesktopDataDir, DesktopProcess, ProcessListing};
 pub use desktop_profile::{
     DesktopObservation, DesktopOpening, DesktopProfile, DesktopProfileRemoval,
-    DesktopProfileUpdate, DesktopWarning,
+    DesktopProfileUpdate, DesktopStartOpening, DesktopWarning,
 };
 pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
@@ -80,6 +80,7 @@ pub use repair::{RepairOutcome, RepairReport, RepairedItem};
 pub use scan::Candidate;
 pub use session_guard::{ClaudeProcess, ProcessConfigDir};
 pub use sharing::{SharingAnswer, SharingQuestion};
+pub use tray::profiles::{TrayProfile, TrayProfiles};
 pub use tray::{
     LanguageChoice, TOOLTIP_MAX_UTF16, TrayAccount, TrayIcon, TrayMenu, TrayView, TrayWindow,
     WindowName,
@@ -219,6 +220,20 @@ impl Core {
     /// folders of the data folders; opens no file in them and writes nothing.
     pub fn desktop_profiles(&self) -> Result<Vec<DesktopProfile>, Error> {
         desktop_profile::list(&self.home, &self.paths().config_file(), self.env.as_ref())
+    }
+
+    /// The registered accounts that can get a desktop profile, in label order: those with a
+    /// local instance and no profile yet, but the default desktop profile's. For front ends
+    /// to offer when adding one.
+    pub fn desktop_profile_candidates(&self) -> Result<Vec<Account>, Error> {
+        desktop_profile::candidates(&self.home, &self.paths().config_file())
+    }
+
+    /// Opens every desktop profile set to open when mccboard starts and not running already,
+    /// for the app to call once at its start. One profile failing doesn't stop the others:
+    /// each opening's result is in the list. Off Windows, opens nothing.
+    pub fn open_desktop_profiles_at_start(&self) -> Result<Vec<DesktopStartOpening>, Error> {
+        desktop_profile::open_at_start(&self.home, &self.paths(), self.env.as_ref())
     }
 
     /// The data folder a new desktop profile for `account` gets unless told otherwise:
@@ -546,6 +561,16 @@ impl Core {
             tz,
             self.env.now(),
         ))
+    }
+
+    /// The tray's "Open profile" submenu in `language`: every desktop profile, the default one
+    /// first, with its account's color and whether it still needs its first sign-in. Empty
+    /// off Windows, where the app doesn't run. Lists the desktop app's processes.
+    pub fn tray_profiles(&self, language: Language) -> Result<TrayProfiles, Error> {
+        if self.env.os() != OsKind::Windows {
+            return Ok(tray::profiles::view(Vec::new(), language));
+        }
+        Ok(tray::profiles::view(self.desktop_profiles()?, language))
     }
 
     /// Aligns the linked instance in `config_dir` (absolute, or starting with `~`) with the
