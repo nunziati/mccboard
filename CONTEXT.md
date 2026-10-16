@@ -90,3 +90,15 @@ _Avoid_: snapshot, usage data, stats
 **Stale**:
 Said of a usage reading too old to trust as current; it is still shown, marked as such.
 _Avoid_: expired, outdated
+
+**Time to reset**:
+How long until a usage window resets, counted in days, hours and minutes, and in seconds during its last minute.
+_Avoid_: countdown, remaining time
+
+**Pace**:
+How much of a usage window's time has already passed. An account whose utilization runs ahead of its pace will reach the limit before the window resets.
+_Avoid_: burn rate, elapsed
+
+**Taskbar widget**:
+A strip on the Windows taskbar, outside the notification area, that shows each account's session and weekly windows at a glance, in the account's color, with their pace and time to reset.
+_Avoid_: deskband, tray widget, overlay
