@@ -21,6 +21,7 @@ mod desktop_identity;
 mod desktop_launch;
 mod desktop_process;
 mod desktop_profile;
+mod desktop_tray;
 mod desktop_watch;
 mod doctor;
 mod environment;
@@ -46,6 +47,8 @@ mod usage;
 #[cfg(windows)]
 mod windows_desktop_app;
 #[cfg(windows)]
+pub mod windows_profile_tray;
+#[cfg(windows)]
 mod windows_shell;
 #[cfg(windows)]
 pub mod windows_taskbar;
@@ -67,6 +70,11 @@ pub use desktop_process::{DesktopDataDir, DesktopProcess, ProcessListing};
 pub use desktop_profile::{
     DesktopObservation, DesktopOpening, DesktopProfile, DesktopProfileRemoval,
     DesktopProfileUpdate, DesktopStartOpening, DesktopWarning,
+};
+pub use desktop_tray::{
+    IconAddress, PROFILE_TRAY_AFTER_TASKBAR_CREATED, PROFILE_TRAY_REAPPLY_EVERY, ProfileTrayIcon,
+    ProfileTrayKeeper, ProfileTrayRepaint, RepaintOutcome, profile_tray_icons,
+    profile_tray_tooltip,
 };
 pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};

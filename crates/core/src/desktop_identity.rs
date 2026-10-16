@@ -166,6 +166,9 @@ pub struct RunningProfile {
     /// Every process of the app running it, the main one and its helpers, by pid. Electron
     /// opens its windows in the main process; helpers are listed too, which costs nothing.
     pub pids: Vec<u32>,
+    /// The main one among `pids` (the one without Chromium's `--type=`), which owns the app's
+    /// notification-area icon; `None` when none of them can be told to be it.
+    pub main_pid: Option<u32>,
     /// Its cached icons; `None` when they can't be drawn.
     pub icons: Option<ProfileIcons>,
     pub identity: WindowIdentity,
@@ -201,11 +204,9 @@ pub(crate) fn running(
     let mut running = Vec::new();
     for profile in profiles(home, &config) {
         let account = &profile.entry.account;
-        let pids: Vec<u32> =
-            desktop_process::using_folder(&processes, home, &profile.entry.data_folder)
-                .iter()
-                .map(|p| p.pid)
-                .collect();
+        let using = desktop_process::using_folder(&processes, home, &profile.entry.data_folder);
+        let pids: Vec<u32> = using.iter().map(|p| p.pid).collect();
+        let main_pid = using.iter().find(|p| p.is_main()).map(|p| p.pid);
         if pids.is_empty() {
             continue;
         }
@@ -226,6 +227,7 @@ pub(crate) fn running(
             label: profile.label,
             color: profile.color,
             pids,
+            main_pid,
             icons,
             identity,
         });
