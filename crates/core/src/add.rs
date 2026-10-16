@@ -4,7 +4,7 @@
 //! 1. checks, before anything changes: the folder isn't the primary instance's (or a link to
 //!    it), a file, a protected folder ([`crate::folder_guard`]: one holding the home, the
 //!    primary or mccboard's files, one inside them, or a link) or in the Claude desktop app's
-//!    data folder; it doesn't belong to an account with another label; file links can be
+//!    data folder or a desktop profile's; it doesn't belong to an account with another label; file links can be
 //!    made (Developer Mode on Windows) when one is missing (the doctor's link drift); no
 //!    Claude Code session uses the folder;
 //! 2. creates the folder (`~/.claude-<label>` by default);
@@ -282,7 +282,10 @@ impl Core {
                 path: config_dir.to_path_buf(),
             });
         }
-        if desktop_app::contains(&self.home, config_dir) {
+        let profile_folders = ConfigFile::load(&self.paths().config_file())?
+            .config
+            .desktop_profile_folders();
+        if desktop_app::contains(&self.home, &profile_folders, config_dir) {
             return Err(Error::DesktopAppFolder {
                 path: config_dir.to_path_buf(),
             });

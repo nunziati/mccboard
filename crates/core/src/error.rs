@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::ClaudeProcess;
+use crate::{ClaudeProcess, DesktopProcess};
 
 /// Errors from core operations. Front ends translate them by [`Error::code`]; messages carry
 /// paths and mccboard's own settings only, never the contents of Claude Code's files, so no
@@ -177,7 +177,7 @@ pub enum Error {
         requested: String,
     },
 
-    #[error("{label:?} gives no folder name; choose the instance's folder yourself")]
+    #[error("{label:?} gives no folder name; choose the folder yourself")]
     NoDefaultFolder { label: String },
 
     #[error("cannot create {}: {source}", path.display())]
@@ -208,6 +208,65 @@ pub enum Error {
 
     #[error("cannot open Claude Code's login for {}: {reason}", path.display())]
     LoginNotOpened { path: PathBuf, reason: String },
+
+    #[error(
+        "account {label:?} has no local instance, which a desktop profile needs for its Code \
+         sessions: add one first (`mccboard add {label}`). Nothing was changed"
+    )]
+    NoLocalInstance { label: String },
+
+    #[error(
+        "account {label:?} already has a desktop profile: one per account. Nothing was changed"
+    )]
+    DesktopProfileExists { label: String },
+
+    #[error(
+        "account {label:?} is the primary instance's, so the default desktop profile (the app \
+         as it starts normally) is its desktop profile already. Nothing was changed"
+    )]
+    DefaultDesktopProfileAccount { label: String },
+
+    #[error(
+        "{} is inside a Claude Code instance, mccboard's own files, the Claude desktop app's \
+         data or another desktop profile's folder, holds one of them, or is a link; choose \
+         another data folder for the desktop profile. Nothing was changed",
+        path.display()
+    )]
+    DesktopProfileFolderNotAllowed { path: PathBuf },
+
+    #[error("account {label:?} has no desktop profile")]
+    DesktopProfileNotFound { label: String },
+
+    #[error(
+        "the default desktop profile is the Claude desktop app as it is: mccboard never removes \
+         or changes it"
+    )]
+    DefaultDesktopProfile,
+
+    #[error(
+        "account {label:?} is the default desktop profile's, which always shows Claude's own \
+         orange; its color can't be changed"
+    )]
+    DefaultProfileColor { label: String },
+
+    #[error(
+        "{} is in use by the Claude desktop app ({}); close that desktop profile and try again. \
+         Nothing was changed",
+        path.display(),
+        describe_desktop_processes(processes)
+    )]
+    DesktopProfileInUse {
+        path: PathBuf,
+        processes: Vec<DesktopProcess>,
+    },
+}
+
+fn describe_desktop_processes(processes: &[DesktopProcess]) -> String {
+    processes
+        .iter()
+        .map(|p| format!("{} pid {}", p.name, p.pid))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn describe_processes(processes: &[ClaudeProcess]) -> String {
@@ -258,6 +317,14 @@ impl Error {
             Error::InstanceFolderMissing { .. } => "instance_folder_missing",
             Error::LoginNeedsTerminal { .. } => "login_needs_terminal",
             Error::LoginNotOpened { .. } => "login_not_opened",
+            Error::NoLocalInstance { .. } => "no_local_instance",
+            Error::DesktopProfileExists { .. } => "desktop_profile_exists",
+            Error::DefaultDesktopProfileAccount { .. } => "default_desktop_profile_account",
+            Error::DesktopProfileFolderNotAllowed { .. } => "desktop_profile_folder_not_allowed",
+            Error::DesktopProfileNotFound { .. } => "desktop_profile_not_found",
+            Error::DefaultDesktopProfile => "default_desktop_profile",
+            Error::DefaultProfileColor { .. } => "default_profile_color",
+            Error::DesktopProfileInUse { .. } => "desktop_profile_in_use",
         }
     }
 
@@ -285,7 +352,18 @@ impl Error {
             | Error::FolderNotCreated { path, .. }
             | Error::InstanceFolderMissing { path }
             | Error::LoginNeedsTerminal { path }
-            | Error::LoginNotOpened { path, .. } => Some(path),
+            | Error::LoginNotOpened { path, .. }
+            | Error::DesktopProfileFolderNotAllowed { path }
+            | Error::DesktopProfileInUse { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The Claude desktop app's processes that keep a desktop profile's data folder from being
+    /// deleted, for [`Error::DesktopProfileInUse`].
+    pub fn desktop_processes(&self) -> Option<&[DesktopProcess]> {
+        match self {
+            Error::DesktopProfileInUse { processes, .. } => Some(processes),
             _ => None,
         }
     }
@@ -302,11 +380,17 @@ impl Error {
     /// Where `config.toml` is wrong (line and reason, from mccboard's own settings), for
     /// [`Error::ConfigCorrupt`]; why the login couldn't open (an OS error), for
     /// [`Error::LoginNotOpened`]; the label of the account the folder belongs to, for
-    /// [`Error::FolderHasAnotherAccount`].
+    /// [`Error::FolderHasAnotherAccount`]; the account's label, for the desktop profile
+    /// errors about an account.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Error::ConfigCorrupt { detail, .. } => Some(detail),
-            Error::FolderHasAnotherAccount { label, .. } => Some(label),
+            Error::FolderHasAnotherAccount { label, .. }
+            | Error::NoLocalInstance { label }
+            | Error::DesktopProfileExists { label }
+            | Error::DefaultDesktopProfileAccount { label }
+            | Error::DesktopProfileNotFound { label }
+            | Error::DefaultProfileColor { label } => Some(label),
             Error::LoginNotOpened { reason, .. } => Some(reason),
             _ => None,
         }

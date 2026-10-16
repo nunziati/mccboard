@@ -10,8 +10,8 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, EndpointReply, Environment,
-    InstanceKind, LoginExit, LoginInvocation, OsKind,
+    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopProcess, EndpointReply,
+    Environment, InstanceKind, LoginExit, LoginInvocation, OsKind,
 };
 
 /// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
@@ -44,6 +44,7 @@ struct State {
     user_path_fails: bool,
     launcher_shim: Option<Vec<u8>>,
     processes: Vec<ClaudeProcess>,
+    desktop_processes: Vec<DesktopProcess>,
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
     claude_handler: ClaudeHandler,
@@ -91,6 +92,7 @@ impl FakeEnvironment {
                 user_path_fails: false,
                 launcher_shim: Some(FAKE_LAUNCHER_SHIM.to_vec()),
                 processes: Vec::new(),
+                desktop_processes: Vec::new(),
                 developer_mode: true,
                 claude_invocations: Vec::new(),
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
@@ -166,6 +168,11 @@ impl FakeEnvironment {
     /// Starts one more Claude Code process.
     pub fn add_process(&self, process: ClaudeProcess) {
         self.state().processes.push(process);
+    }
+
+    /// Replaces the running processes of the Claude desktop app.
+    pub fn set_desktop_processes(&self, processes: Vec<DesktopProcess>) {
+        self.state().desktop_processes = processes;
     }
 
     /// Sets the launcher shim mccboard ships: other bytes, as after an upgrade of mccboard, or
@@ -327,6 +334,10 @@ impl Environment for FakeEnvironment {
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {
         self.state().processes.clone()
+    }
+
+    fn desktop_processes(&self) -> Vec<DesktopProcess> {
+        self.state().desktop_processes.clone()
     }
 
     fn file_links_allowed(&self) -> bool {

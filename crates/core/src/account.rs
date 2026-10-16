@@ -154,6 +154,14 @@ impl std::fmt::Display for Color {
     }
 }
 
+/// Claude's own orange: the color of the default desktop profile's account in every view
+/// model, matching the app's icon, which mccboard leaves alone. It can't be edited.
+pub const CLAUDE_ORANGE: &str = "#d97757";
+
+pub(crate) fn claude_orange() -> Color {
+    Color(CLAUDE_ORANGE.to_owned())
+}
+
 /// Colors suggested for new accounts, in order: distinct, and readable on light and dark.
 const PALETTE: [&str; 8] = [
     "#2563eb", // blue

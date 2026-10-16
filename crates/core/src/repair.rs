@@ -2,7 +2,7 @@
 //!
 //! Before changing anything a repair checks, in order:
 //! 1. the instance is registered and linked (the primary instance is never relinked);
-//! 2. no link would land in the Claude desktop app's data folder;
+//! 2. no link would land in the Claude desktop app's data folder or a desktop profile's;
 //! 3. file links can be made (Developer Mode on Windows, ADR 0006);
 //! 4. no Claude Code process uses the instance (the session guard), unless the only items
 //!    are launchers, which live outside the instance's folder.
@@ -14,7 +14,6 @@
 //! own `claude plugin` commands. Private items are never touched: repairs act only on the
 //! items the doctor reports, which are never private.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,7 +22,7 @@ use serde::Serialize;
 
 use crate::alignment::{self, PluginRun};
 use crate::backup::Backup;
-use crate::config::ConfigFile;
+use crate::config::{Config, ConfigFile};
 use crate::doctor::{self, DriftItem, InstanceDrift, Repair};
 use crate::instance::{self, InstanceKind};
 use crate::links::{self, Entry};
@@ -100,7 +99,7 @@ pub(crate) fn repair(
         paths,
         env,
         config_dir,
-        &config.sharing,
+        &config,
         select,
         launchers,
         sync_launchers,
@@ -118,13 +117,13 @@ pub(crate) fn align(
     sync_launchers: &dyn Fn() -> Result<LauncherSync, Error>,
 ) -> Result<RepairReport, Error> {
     let config_dir = paths::resolve(home, config_dir)?;
-    let answers = ConfigFile::load(&paths.config_file())?.config.sharing;
+    let config = ConfigFile::load(&paths.config_file())?.config;
     run(
         home,
         paths,
         env,
         config_dir,
-        &answers,
+        &config,
         Select::Aligned,
         launchers,
         sync_launchers,
@@ -146,7 +145,7 @@ fn run(
     paths: &Paths,
     env: &dyn Environment,
     config_dir: PathBuf,
-    answers: &BTreeMap<String, sharing::SharingAnswer>,
+    config: &Config,
     select: Select,
     launchers: &dyn Fn() -> Option<LauncherStatus>,
     sync_launchers: &dyn Fn() -> Result<LauncherSync, Error>,
@@ -154,6 +153,7 @@ fn run(
     if !config_dir.is_dir() {
         return Err(Error::NotADirectory { path: config_dir });
     }
+    let answers = &config.sharing;
     let drift = doctor::drift(home, &config_dir, answers, launchers().as_ref());
 
     let selected: Vec<&DriftItem> = match select {
@@ -186,7 +186,7 @@ fn run(
                 .filter(|i| i.repair != Repair::SyncLaunchers)
                 .map(|i| i.path.as_path()),
         )
-        .any(|path| desktop_app::contains(home, path));
+        .any(|path| desktop_app::contains(home, &config.desktop_profile_folders(), path));
     if into_desktop_app {
         return Err(Error::DesktopAppFolder { path: config_dir });
     }

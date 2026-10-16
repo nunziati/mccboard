@@ -5,6 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::AccessToken;
+use crate::desktop_profile::DesktopProcess;
 use crate::instance::InstanceKind;
 use crate::session_guard::ClaudeProcess;
 
@@ -44,6 +45,12 @@ pub trait Environment: Send + Sync {
     /// Every running Claude Code process on this machine, each with the config directory it
     /// uses. The core matches them to instances (the session guard).
     fn claude_processes(&self) -> Vec<ClaudeProcess>;
+
+    /// Every running process of the Claude desktop app on this machine (its main process and
+    /// its helpers), each with the data directory it was started with (`--user-data-dir`).
+    /// The core matches them to desktop profiles: a profile's data folder is never deleted
+    /// while one uses it.
+    fn desktop_processes(&self) -> Vec<DesktopProcess>;
 
     /// Whether file links (symlinks to files) can be created without elevation: on Windows,
     /// whether Developer Mode is on (ADR 0006); elsewhere always.
@@ -231,6 +238,10 @@ impl Environment for SystemEnvironment {
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {
         crate::system::claude_processes()
+    }
+
+    fn desktop_processes(&self) -> Vec<DesktopProcess> {
+        crate::system::desktop_processes()
     }
 
     fn file_links_allowed(&self) -> bool {

@@ -189,5 +189,13 @@
   "error.claude_not_installed": "Claude Code (claude) non è installato o non è nel PATH. Installalo, poi riprova: il resto è già fatto.",
   "error.instance_folder_missing": "La cartella di questa istanza non esiste più, quindi non c'è nulla su cui accedere. Aggiungi di nuovo l'istanza, oppure rimuovila.",
   "error.login_needs_terminal": "Qui mccboard non è riuscito ad aprire una finestra di terminale per il login. Apri un terminale ed esegui “mccboard login” con questa cartella; il resto è già fatto.",
-  "error.login_not_opened": "mccboard non è riuscito ad aprire il login di Claude Code. Il resto è già fatto: riprova con “Accedi”."
+  "error.login_not_opened": "mccboard non è riuscito ad aprire il login di Claude Code. Il resto è già fatto: riprova con “Accedi”.",
+  "error.no_local_instance": "Questo account non ha un'istanza locale, che serve a un profilo desktop per le sessioni di Code. Aggiungi prima un'istanza per l'account. Non è stato cambiato nulla.",
+  "error.desktop_profile_exists": "Questo account ha già un profilo desktop: uno per account. Non è stato cambiato nulla.",
+  "error.default_desktop_profile_account": "Questo è l'account dell'istanza primaria: il suo profilo desktop è già quello predefinito, l'app come si avvia normalmente. Non è stato cambiato nulla.",
+  "error.desktop_profile_folder_not_allowed": "Questa cartella è dentro un'istanza di Claude Code, i file di mccboard, i dati dell'app desktop di Claude o la cartella di un altro profilo desktop, ne contiene una, oppure è un collegamento. Scegli un'altra cartella dati. Non è stato cambiato nulla.",
+  "error.desktop_profile_not_found": "Questo account non ha un profilo desktop.",
+  "error.default_desktop_profile": "Il profilo desktop predefinito è l'app desktop di Claude così com'è: mccboard non lo rimuove né lo modifica mai.",
+  "error.default_profile_color": "Questo è l'account del profilo desktop predefinito, che mostra sempre l'arancione di Claude: il suo colore non si può cambiare.",
+  "error.desktop_profile_in_use": "L'app desktop di Claude sta usando la cartella dati di questo profilo desktop. Chiudi il profilo, poi riprova. Non è stato cambiato nulla."
 }

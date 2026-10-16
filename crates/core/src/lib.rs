@@ -17,6 +17,7 @@ mod claude_cli;
 mod claude_files;
 mod config;
 mod desktop_app;
+mod desktop_profile;
 mod doctor;
 mod environment;
 mod error;
@@ -43,9 +44,13 @@ mod windows_user_path;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub use account::{Account, AccountUpdate, AccountUuid, Color, ObservedAccount};
+pub use account::{Account, AccountUpdate, AccountUuid, CLAUDE_ORANGE, Color, ObservedAccount};
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
+pub use desktop_profile::{
+    DesktopDataDir, DesktopObservation, DesktopProcess, DesktopProfile, DesktopProfileRemoval,
+    DesktopProfileUpdate, DesktopWarning,
+};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
     ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
@@ -180,15 +185,112 @@ impl Core {
     }
 
     /// Changes an account's label, color or launcher name override. The launchers of its
-    /// linked instances follow the new name.
+    /// linked instances follow the new name. The default desktop profile's account (the
+    /// primary instance's) always shows Claude's orange: a new color for it is refused
+    /// ([`Error::DefaultProfileColor`]).
     pub fn update_account(
         &self,
         uuid: &AccountUuid,
         update: AccountUpdate,
     ) -> Result<Account, Error> {
-        let account = registry::update_account(&self.paths().config_file(), uuid, update)?;
+        let account =
+            registry::update_account(&self.home, &self.paths().config_file(), uuid, update)?;
         self.sync_launchers()?;
         Ok(account)
+    }
+
+    /// Every desktop profile, the default one first, then the others by label: each with its
+    /// account, color, data folder, instance, observed account and warnings. The default
+    /// desktop profile is implicit (the app's own data directory, the primary instance) and
+    /// shows Claude's orange. Reads `config.toml` and lists the `claude-code-sessions`
+    /// folders of the data folders; opens no file in them and writes nothing.
+    pub fn desktop_profiles(&self) -> Result<Vec<DesktopProfile>, Error> {
+        desktop_profile::list(&self.home, &self.paths().config_file(), self.env.as_ref())
+    }
+
+    /// The data folder a new desktop profile for `account` gets unless told otherwise:
+    /// `%LOCALAPPDATA%\Claude-<label>` on Windows (`~/.config/Claude-<label>` elsewhere, where
+    /// it is never used). For front ends to show before adding.
+    pub fn desktop_profile_folder(&self, account: &AccountUuid) -> Result<PathBuf, Error> {
+        desktop_profile::default_folder(
+            &self.home,
+            &self.paths().config_file(),
+            self.env.as_ref(),
+            account,
+        )
+    }
+
+    /// Adds a desktop profile for the registered `account`, with its data folder in
+    /// `data_folder` (absolute, or starting with `~`), or in the default one
+    /// ([`Core::desktop_profile_folder`]). Its Code tab will use the account's local
+    /// instance. Only `config.toml` changes: the folder is created when the profile first
+    /// opens. Refuses, before changing anything, an account with no local instance
+    /// ([`Error::NoLocalInstance`]), one that has a profile already
+    /// ([`Error::DesktopProfileExists`]) or is the primary instance's, whose profile is the
+    /// default one ([`Error::DefaultDesktopProfileAccount`]), and a data folder inside or
+    /// holding an instance, mccboard's files, the app's own data or another profile's folder,
+    /// or that is a link ([`Error::DesktopProfileFolderNotAllowed`]).
+    pub fn add_desktop_profile(
+        &self,
+        account: &AccountUuid,
+        data_folder: Option<&Path>,
+    ) -> Result<DesktopProfile, Error> {
+        desktop_profile::add(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            account,
+            data_folder,
+        )
+    }
+
+    /// Changes `account`'s desktop profile (whether it opens when mccboard starts), keeping
+    /// everything else in `config.toml`. The default desktop profile is never changed
+    /// ([`Error::DefaultDesktopProfile`]).
+    pub fn update_desktop_profile(
+        &self,
+        account: &AccountUuid,
+        update: DesktopProfileUpdate,
+    ) -> Result<DesktopProfile, Error> {
+        desktop_profile::update(
+            &self.home,
+            &self.paths().config_file(),
+            self.env.as_ref(),
+            account,
+            update,
+        )
+    }
+
+    /// Removes `account`'s desktop profile:
+    /// - [`RemoveLevel::FromMccboard`] forgets it; its data folder stays as it is;
+    /// - [`RemoveLevel::WithFolder`] also deletes its data folder, and with it the profile's
+    ///   sign-in on this machine. Front ends confirm this with the user first. It refuses
+    ///   while a process of the desktop app uses the folder ([`Error::DesktopProfileInUse`]),
+    ///   and for a folder that the rules of [`Core::add_desktop_profile`] wouldn't accept
+    ///   ([`Error::FolderNotDeletable`]). Links inside are removed, never followed.
+    ///
+    /// The default desktop profile is never removed ([`Error::DefaultDesktopProfile`]).
+    pub fn remove_desktop_profile(
+        &self,
+        account: &AccountUuid,
+        level: RemoveLevel,
+    ) -> Result<DesktopProfileRemoval, Error> {
+        desktop_profile::remove(&self.home, &self.paths(), self.env.as_ref(), account, level)
+    }
+
+    /// The processes of the Claude desktop app using the data folder `data_folder`
+    /// (absolute, or starting with `~`): a desktop profile running. While there are any, its
+    /// folder isn't deleted.
+    pub fn desktop_processes_using(
+        &self,
+        data_folder: &Path,
+    ) -> Result<Vec<DesktopProcess>, Error> {
+        let data_folder = paths::resolve(&self.home, data_folder)?;
+        Ok(desktop_profile::processes_using(
+            &self.home,
+            self.env.as_ref(),
+            &data_folder,
+        ))
     }
 
     /// The launchers as they are, against what the registered linked instances need: one per

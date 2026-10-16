@@ -1,5 +1,6 @@
-//! What [`crate::SystemEnvironment`] asks the operating system: running Claude Code processes,
-//! where the launcher shim is and, on Windows, whether Developer Mode is on.
+//! What [`crate::SystemEnvironment`] asks the operating system: running Claude Code processes
+//! and Claude desktop app processes, where the launcher shim is and, on Windows, whether
+//! Developer Mode is on.
 
 use std::ffi::OsStr;
 use std::io;
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use sysinfo::{Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
+use crate::desktop_profile::{DesktopDataDir, DesktopProcess};
 use crate::session_guard::{ClaudeProcess, ProcessConfigDir};
 
 const CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
@@ -46,6 +48,87 @@ pub(crate) fn claude_processes() -> Vec<ClaudeProcess> {
             cwd: p.cwd().map(Path::to_path_buf),
         })
         .collect()
+}
+
+/// Every running process of the Claude desktop app that mccboard can see: a program named
+/// `Claude` (`Claude.exe`) started with `--user-data-dir`, as every desktop profile and each of
+/// its helper processes is, or running from the app's install folder (the MSIX package under
+/// `WindowsApps`, or the old `AnthropicClaude`) without it: the default desktop profile.
+pub(crate) fn desktop_processes() -> Vec<DesktopProcess> {
+    let mut system = System::new();
+    let refresh = ProcessRefreshKind::nothing()
+        .without_tasks()
+        .with_exe(UpdateKind::OnlyIfNotSet)
+        .with_cmd(UpdateKind::OnlyIfNotSet);
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+    system
+        .processes()
+        .values()
+        .filter(|p| p.thread_kind().is_none())
+        .filter_map(|p| {
+            Some(DesktopProcess {
+                pid: p.pid().as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                data_dir: desktop_data_dir(p)?,
+            })
+        })
+        .collect()
+}
+
+/// The data directory of a desktop app process; `None` for any other program, Claude Code's
+/// `claude.exe` included.
+fn desktop_data_dir(p: &Process) -> Option<DesktopDataDir> {
+    let stem = |path: &Path| {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    };
+    let named_claude =
+        stem(Path::new(p.name())) == "claude" || p.exe().is_some_and(|exe| stem(exe) == "claude");
+    if !named_claude {
+        return None;
+    }
+    let args: Vec<String> = p
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    if let Some(dir) = user_data_dir(&args) {
+        return Some(if dir.is_absolute() {
+            DesktopDataDir::Dir {
+                path: crate::paths::normalize(&dir),
+            }
+        } else {
+            DesktopDataDir::Unknown
+        });
+    }
+    let exe = p
+        .exe()
+        .map(|exe| exe.to_string_lossy().replace('\\', "/").to_lowercase())
+        .unwrap_or_default();
+    let installed = exe.contains("/windowsapps/claude_") || exe.contains("/anthropicclaude/");
+    match (installed, args.is_empty()) {
+        (false, _) => None,
+        (true, true) => Some(DesktopDataDir::Unknown),
+        (true, false) => Some(DesktopDataDir::Default),
+    }
+}
+
+/// The value of `--user-data-dir=<dir>` or `--user-data-dir <dir>` in a command line.
+fn user_data_dir(args: &[String]) -> Option<PathBuf> {
+    const FLAG: &str = "--user-data-dir";
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let value = match arg.strip_prefix(FLAG) {
+            Some("") => args.next().map(String::as_str),
+            Some(rest) => rest.strip_prefix('='),
+            None => None,
+        };
+        if let Some(value) = value.map(|v| v.trim_matches('"')).filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(value));
+        }
+    }
+    None
 }
 
 /// The native build runs as `claude` (`claude.exe`); an npm install runs `node` on Claude
@@ -140,4 +223,46 @@ pub(crate) fn file_links_allowed() -> bool {
 #[cfg(not(windows))]
 pub(crate) fn file_links_allowed() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_data_directory_is_read_from_either_spelling_of_the_flag() {
+        assert_eq!(
+            user_data_dir(&args(&[
+                "Claude.exe",
+                r"--user-data-dir=C:\Users\me\Claude-B"
+            ])),
+            Some(PathBuf::from(r"C:\Users\me\Claude-B"))
+        );
+        assert_eq!(
+            user_data_dir(&args(&[
+                "Claude.exe",
+                "--type=renderer",
+                "--user-data-dir",
+                "/p/b"
+            ])),
+            Some(PathBuf::from("/p/b"))
+        );
+        assert_eq!(
+            user_data_dir(&args(&["Claude.exe", "--user-data-dir=\"/p/b\""])),
+            Some(PathBuf::from("/p/b"))
+        );
+        assert_eq!(user_data_dir(&args(&["Claude.exe"])), None);
+        assert_eq!(
+            user_data_dir(&args(&["Claude.exe", "--user-data-dir"])),
+            None
+        );
+        assert_eq!(
+            user_data_dir(&args(&["Claude.exe", "--user-data-directory=/x"])),
+            None
+        );
+    }
 }

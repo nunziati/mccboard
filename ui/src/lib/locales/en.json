@@ -189,5 +189,13 @@
   "error.claude_not_installed": "Claude Code (claude) isn't installed or isn't on the PATH. Install it, then try again: everything else is done.",
   "error.instance_folder_missing": "This instance's folder doesn't exist any more, so there is nothing to log in to. Add the instance again, or remove it.",
   "error.login_needs_terminal": "mccboard couldn't open a terminal window for the login here. Open a terminal and run “mccboard login” with this folder; everything else is done.",
-  "error.login_not_opened": "mccboard couldn't open Claude Code's login. Everything else is done: try “Log in” again."
+  "error.login_not_opened": "mccboard couldn't open Claude Code's login. Everything else is done: try “Log in” again.",
+  "error.no_local_instance": "This account has no local instance, which a desktop profile needs for its Code sessions. Add an instance for it first. Nothing was changed.",
+  "error.desktop_profile_exists": "This account already has a desktop profile: one per account. Nothing was changed.",
+  "error.default_desktop_profile_account": "This is the primary instance's account: the default desktop profile, the app as it starts normally, is its desktop profile already. Nothing was changed.",
+  "error.desktop_profile_folder_not_allowed": "This folder is inside a Claude Code instance, mccboard's own files, the Claude desktop app's data or another desktop profile's folder, holds one of them, or is a link. Choose another data folder. Nothing was changed.",
+  "error.desktop_profile_not_found": "This account has no desktop profile.",
+  "error.default_desktop_profile": "The default desktop profile is the Claude desktop app as it is: mccboard never removes or changes it.",
+  "error.default_profile_color": "This account is the default desktop profile's, which always shows Claude's own orange: its color can't be changed.",
+  "error.desktop_profile_in_use": "The Claude desktop app is using this desktop profile's data folder. Close the profile, then try again. Nothing was changed."
 }
