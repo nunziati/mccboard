@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use common::{TempHome, UUID_A, UUID_B, UUID_C};
 use mccboard_core::testing::{FAKE_LAUNCHER_SHIM, FakeEnvironment};
 use mccboard_core::{
-    AccountUpdate, AccountUuid, ClaudeProcess, Core, DriftItem, Error, Launcher, LauncherPlace,
-    LauncherState, OsKind, Problem, ProcessConfigDir, Repair, RepairOutcome, UserPathChange,
+    AccountUpdate, AccountUuid, ClaudeProcess, CliInstall, Core, DriftItem, Error, Launcher,
+    LauncherPlace, LauncherState, OsKind, Problem, ProcessConfigDir, Repair, RepairOutcome,
+    UserPathChange,
 };
 
 const BEGIN: &str = "# >>> mccboard launchers >>>";
@@ -1119,5 +1120,213 @@ fn no_token_reaches_a_launcher() {
         }
         let json = serde_json::to_string(&core.launchers().unwrap()).unwrap();
         assert!(!json.contains("FIXTURE"));
+    }
+}
+
+// --- Windows: mccboard's own CLI, `mccboard.exe`, copied into the bin folder ---
+
+const CLI_V1: &[u8] = b"MZ fake mccboard.exe, version 1";
+const CLI_V2: &[u8] = b"MZ fake mccboard.exe, version 2";
+
+/// Ships `bytes` as mccboard's CLI, in a folder of the temporary home playing the app's
+/// install folder, and returns that folder.
+fn ship_cli(home: &TempHome, env: &FakeEnvironment, bytes: &[u8]) -> PathBuf {
+    let folder = home.path().join("Programs").join("mccboard");
+    fs::create_dir_all(&folder).unwrap();
+    let cli = folder.join("mccboard.exe");
+    fs::write(&cli, bytes).unwrap();
+    env.set_shipped_cli(Some(&cli));
+    folder
+}
+
+#[test]
+fn on_windows_sync_copies_the_shipped_cli_into_the_bin_folder_and_only_when_it_differs() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    let folder = ship_cli(&home, &env, CLI_V1);
+
+    let sync = core.sync_launchers().unwrap();
+
+    assert_eq!(sync.cli, Some(CliInstall::Copied));
+    let copy = bin(&home).join("mccboard.exe");
+    assert_eq!(fs::read(&copy).unwrap(), CLI_V1);
+    // Beside it, the folder it came from: where the copy finds the app and the shim.
+    assert_eq!(
+        read(&bin(&home).join("mccboard.origin")).trim_end(),
+        folder.display().to_string()
+    );
+    assert_eq!(
+        bin_files(&home),
+        vec![
+            "claude-b.exe",
+            "claude-b.shim",
+            "mccboard.exe",
+            "mccboard.origin"
+        ]
+    );
+    // The CLI is no launcher: nothing to fix, nothing orphaned.
+    let status = core.launchers().unwrap();
+    assert!(status.orphans.is_empty());
+    assert_eq!(status.drift_count(), 0);
+
+    // Identical: left alone, not even rewritten.
+    let long_ago = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+    fs::File::options()
+        .write(true)
+        .open(&copy)
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    let sync = core.sync_launchers().unwrap();
+    assert_eq!(sync.cli, Some(CliInstall::UpToDate));
+    assert_eq!(fs::metadata(&copy).unwrap().modified().unwrap(), long_ago);
+
+    // An upgrade ships another CLI: the next sync rewrites the copy.
+    ship_cli(&home, &env, CLI_V2);
+    let sync = core.sync_launchers().unwrap();
+    assert_eq!(sync.cli, Some(CliInstall::Copied));
+    assert_eq!(fs::read(&copy).unwrap(), CLI_V2);
+    assert!(sync.created.is_empty() && sync.updated.is_empty() && sync.removed.is_empty());
+}
+
+#[test]
+fn on_windows_a_copy_of_the_cli_changed_by_hand_is_rewritten() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    ship_cli(&home, &env, CLI_V1);
+    fs::write(bin(&home).join("mccboard.exe"), "MZ something else").unwrap();
+
+    assert_eq!(core.sync_launchers().unwrap().cli, Some(CliInstall::Copied));
+    assert_eq!(fs::read(bin(&home).join("mccboard.exe")).unwrap(), CLI_V1);
+}
+
+/// A program without the CLI next to it (a development build of the app alone): the sync
+/// still does its work, and the bin folder's copy, if any, stays as it is.
+#[test]
+fn on_windows_a_cli_not_shipped_leaves_the_copy_alone_and_the_sync_works() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    fs::write(bin(&home).join("mccboard.exe"), CLI_V1).unwrap();
+    env.set_shipped_cli(None);
+    fs::remove_file(bin(&home).join("claude-b.exe")).unwrap();
+
+    let sync = core.sync_launchers().unwrap();
+
+    assert!(
+        matches!(sync.cli, Some(CliInstall::NotCopied { .. })),
+        "{sync:?}"
+    );
+    assert_eq!(sync.updated.len(), 1);
+    assert_eq!(fs::read(bin(&home).join("mccboard.exe")).unwrap(), CLI_V1);
+}
+
+/// The copy in the bin folder, running the sync itself without knowing where it came from:
+/// it is the CLI to install, so nothing is copied.
+#[test]
+fn on_windows_the_copy_in_the_bin_folder_is_never_copied_onto_itself() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    let copy = bin(&home).join("mccboard.exe");
+    fs::write(&copy, CLI_V1).unwrap();
+    env.set_shipped_cli(Some(&copy));
+
+    assert_eq!(
+        core.sync_launchers().unwrap().cli,
+        Some(CliInstall::UpToDate)
+    );
+    assert_eq!(fs::read(&copy).unwrap(), CLI_V1);
+    assert!(!bin(&home).join("mccboard.origin").exists());
+}
+
+/// A running `mccboard.exe` can't be overwritten or deleted: it is moved aside, as a running
+/// launcher is, and a later sync deletes the copy moved aside.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_running_cli_is_moved_aside_and_a_later_sync_deletes_it() {
+    use std::process::{Command, Stdio};
+
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    // A real program, kept running while its stdin stays open.
+    let copy = bin(&home).join("mccboard.exe");
+    let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+    fs::copy(Path::new(&system).join("System32").join("cmd.exe"), &copy).unwrap();
+    let mut running = Command::new(&copy)
+        .arg("/q")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(
+        fs::remove_file(&copy).is_err(),
+        "a running program can't be deleted"
+    );
+    ship_cli(&home, &env, CLI_V1);
+
+    let sync = core.sync_launchers();
+
+    // Before any assertion, so a failure doesn't leave the program running.
+    running.kill().unwrap();
+    running.wait().unwrap();
+    assert_eq!(sync.unwrap().cli, Some(CliInstall::Copied));
+    assert_eq!(fs::read(&copy).unwrap(), CLI_V1);
+    assert!(bin(&home).join("mccboard.exe.old").is_file());
+
+    core.sync_launchers().unwrap();
+    assert!(!bin(&home).join("mccboard.exe.old").exists());
+    assert_eq!(fs::read(&copy).unwrap(), CLI_V1);
+}
+
+/// The app copies the CLI when it starts, so an update of the app refreshes it, and deletes
+/// what earlier syncs moved aside. The launchers are left to the sync.
+#[test]
+fn on_windows_installing_the_cli_copies_it_without_touching_the_launchers() {
+    let (home, core, env) = home_with_b(OsKind::Windows);
+    fs::remove_file(bin(&home).join("claude-b.exe")).unwrap();
+    fs::write(bin(&home).join("mccboard.exe.old"), "MZ").unwrap();
+    ship_cli(&home, &env, CLI_V1);
+
+    assert_eq!(core.install_cli(), Some(CliInstall::Copied));
+    assert_eq!(core.install_cli(), Some(CliInstall::UpToDate));
+
+    assert_eq!(
+        bin_files(&home),
+        vec!["claude-b.shim", "mccboard.exe", "mccboard.origin"]
+    );
+}
+
+/// The bin folder is made for the CLI even when no launcher needs it yet.
+#[test]
+fn on_windows_installing_the_cli_creates_the_bin_folder() {
+    let home = TempHome::new();
+    let (core, env) = home.core();
+    env.set_os(OsKind::Windows);
+    ship_cli(&home, &env, CLI_V1);
+
+    assert_eq!(core.install_cli(), Some(CliInstall::Copied));
+    assert_eq!(bin_files(&home), vec!["mccboard.exe", "mccboard.origin"]);
+}
+
+#[test]
+fn on_linux_the_cli_is_not_copied_anywhere() {
+    let (home, core, env) = home_with_b(OsKind::Linux);
+    ship_cli(&home, &env, CLI_V1);
+
+    assert_eq!(core.install_cli(), None);
+    assert_eq!(core.sync_launchers().unwrap().cli, None);
+    assert!(!bin(&home).exists());
+}
+
+/// `mccboard` is the CLI's name in the bin folder: no launcher may take it.
+#[test]
+fn mccboard_is_refused_as_a_launcher_name() {
+    let (_home, core, _env) = home_with_b(OsKind::Windows);
+    for name in ["mccboard", "MccBoard"] {
+        let error = core
+            .update_account(
+                &uuid(UUID_B),
+                AccountUpdate {
+                    launcher: Some(Some(name.into())),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid_launcher", "{name:?}");
     }
 }

@@ -91,8 +91,8 @@ pub use icon::{IconCache, IconSources, Image, PackageLogos, ProfileIcons};
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use language::Language;
 pub use launcher::{
-    InstanceLauncher, Launcher, LauncherPlace, LauncherState, LauncherStatus, LauncherSync,
-    UserPathChange,
+    CliInstall, InstanceLauncher, Launcher, LauncherPlace, LauncherState, LauncherStatus,
+    LauncherSync, UserPathChange,
 };
 pub use paths::Paths;
 pub use registry::{AccountStatus, InstanceStatus, Registration, Registry};
@@ -472,6 +472,16 @@ impl Core {
     /// mccboard's bin folder (Windows). Running it again changes nothing.
     pub fn sync_launchers(&self) -> Result<LauncherSync, Error> {
         launcher::sync(&self.home, &self.paths(), self.env.as_ref())
+    }
+
+    /// On Windows, puts mccboard's CLI on the PATH: copies the CLI shipped with mccboard
+    /// (`mccboard.exe`, next to the app) into the bin folder when it is missing there or
+    /// differs, moving a running copy aside, and deletes what earlier syncs moved aside. The
+    /// app calls it when it starts, so an update of the app refreshes the CLI; every
+    /// [`Core::sync_launchers`] does it too. Never fails: what went wrong is in the result.
+    /// `None` on Linux, where the CLI isn't copied anywhere.
+    pub fn install_cli(&self) -> Option<CliInstall> {
+        launcher::install_cli(&self.paths(), self.env.as_ref())
     }
 
     /// Observes the account and login state of the instance whose config directory is

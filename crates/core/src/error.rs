@@ -58,7 +58,7 @@ pub enum Error {
 
     #[error(
         "{name:?} is not a valid launcher name: use letters, digits, '-', '_' and '.', \
-         and not \"claude\""
+         and not \"claude\" or \"mccboard\""
     )]
     InvalidLauncher { name: String },
 
