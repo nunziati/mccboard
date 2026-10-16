@@ -192,6 +192,8 @@ struct CollisionCheck {
 struct Placement {
     taskbar: isize,
     taskbar_rect: (i32, i32, i32, i32),
+    /// The taskbar's client height: the strip's.
+    height: i32,
     tray_left: i32,
     dpi: u32,
     theme: TaskbarTheme,
@@ -201,6 +203,10 @@ struct State {
     events: WidgetEvents,
     pending: Arc<Mutex<Option<TaskbarWidget>>>,
     view: Option<TaskbarWidget>,
+    /// Counts the views received, so an unchanged one isn't drawn again.
+    view_seq: u64,
+    /// What the window holds: drawn for this placement, view and hover, this wide.
+    drawn: Option<(Placement, u64, bool, i32)>,
     host: HWND,
     /// The docked window; null until docked, and again after Explorer destroyed it.
     hwnd: HWND,
@@ -268,6 +274,8 @@ fn run(
                 events,
                 pending,
                 view: None,
+                view_seq: 0,
+                drawn: None,
                 host,
                 hwnd: null_mut(),
                 tooltip: null_mut(),
@@ -378,6 +386,7 @@ unsafe extern "system" fn host_procedure(
             let view = s.pending.lock().unwrap_or_else(|p| p.into_inner()).take();
             if let Some(view) = view {
                 s.view = Some(view);
+                s.view_seq = s.view_seq.wrapping_add(1);
             }
             s.layout(false);
         }),
@@ -501,16 +510,32 @@ impl State {
             return;
         }
         self.placement = Some(placement);
-        let Some(frame) = self.render() else {
-            self.hide();
-            return;
+        // The watchdog comes by every few seconds: draw only when something changed.
+        let unchanged = self
+            .drawn
+            .filter(|&(p, seq, hover, _)| {
+                p == placement && seq == self.view_seq && hover == self.hover
+            })
+            .map(|(_, _, _, width)| width);
+        let (frame, width) = match unchanged {
+            Some(width) => (None, width),
+            None => match self.render() {
+                Some(frame) => {
+                    let width = frame.width;
+                    (Some(frame), width)
+                }
+                None => {
+                    self.hide();
+                    return;
+                }
+            },
         };
-        let (left, top, _, bottom) = placement.taskbar_rect;
+        let (left, top, _, _) = placement.taskbar_rect;
         let rect = RECT {
-            left: placement.tray_left - frame.width,
+            left: placement.tray_left - width,
             top,
             right: placement.tray_left,
-            bottom,
+            bottom: top + placement.height,
         };
         if self.rect.as_ref().map(corners) != Some(corners(&rect)) {
             self.rect = Some(rect);
@@ -540,12 +565,15 @@ impl State {
                 HWND_TOP,
                 origin.x,
                 origin.y,
-                frame.width,
-                frame.height,
+                width,
+                placement.height,
                 SWP_NOACTIVATE,
             );
         }
-        self.present(&frame);
+        if let Some(frame) = frame {
+            self.present(&frame);
+            self.drawn = Some((placement, self.view_seq, self.hover, width));
+        }
         self.update_tooltip();
         if !self.shown {
             unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
@@ -630,6 +658,7 @@ impl State {
             }
             self.tooltip = null_mut();
             self.shown = false;
+            self.drawn = None;
             let class = wide(WIDGET_CLASS);
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
@@ -701,23 +730,12 @@ impl State {
     fn render(&self) -> Option<Frame> {
         let view = self.view.as_ref()?;
         let placement = self.placement?;
-        let mut client = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        unsafe { GetClientRect(placement.taskbar as HWND, &mut client) };
-        let height = client.bottom - client.top;
-        if height <= 0 {
-            return None;
-        }
         Some(Frame::draw(
             view,
             placement.theme,
             self.hover,
             placement.dpi,
-            height,
+            placement.height,
         ))
     }
 
@@ -726,8 +744,9 @@ impl State {
         if !self.shown {
             return;
         }
-        if let Some(frame) = self.render() {
+        if let (Some(frame), Some(placement)) = (self.render(), self.placement) {
             self.present(&frame);
+            self.drawn = Some((placement, self.view_seq, self.hover, frame.width));
         }
     }
 
@@ -803,6 +822,12 @@ fn find_placement() -> Option<Placement> {
         }
         let mut tray_rect = std::mem::zeroed::<RECT>();
         GetWindowRect(tray, &mut tray_rect);
+        let mut client = std::mem::zeroed::<RECT>();
+        GetClientRect(taskbar, &mut client);
+        let height = client.bottom - client.top;
+        if height <= 0 {
+            return None;
+        }
         let dpi = match GetDpiForWindow(taskbar) {
             0 => 96,
             dpi => dpi,
@@ -810,6 +835,7 @@ fn find_placement() -> Option<Placement> {
         Some(Placement {
             taskbar: taskbar as isize,
             taskbar_rect: (rect.left, rect.top, rect.right, rect.bottom),
+            height,
             tray_left: tray_rect.left,
             dpi,
             theme: taskbar_theme(),
@@ -889,6 +915,8 @@ fn collision_worker(requests: Receiver<CollisionCheck>, host: isize) {
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
 
     unsafe {
+        // Pixels, like the widget's thread: UI Automation scales rectangles for other callers.
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let automation: Option<IUIAutomation> =
             CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok();

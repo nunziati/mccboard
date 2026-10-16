@@ -9,7 +9,7 @@ The window reserves no space on the taskbar, so mccboard keeps the rules narrow:
 - It never calls `SHAppBarMessage`. That call is a synchronous send to Explorer, and in other tools it deadlocked with it. The taskbar's rectangles come from `GetWindowRect`.
 - A restart of Explorer destroys the child window. mccboard notices and docks a new one.
 
-How it is done follows CodeZeno/Claude-Code-Usage-Monitor (commit d0ab8b7), the tool used before mccboard: `SetParent` with `WS_CHILD`, the reset of `WS_EX_LAYERED` that Windows 11 needs after reparenting, `UpdateLayeredWindow` drawing, the WinEvent hook on the taskbar's thread, and the watchdog.
+How it is done follows CodeZeno/Claude-Code-Usage-Monitor (commit d0ab8b7), the tool used before mccboard: `SetParent` with `WS_CHILD`, the reset of `WS_EX_LAYERED` that Windows 11 needs after reparenting, `UpdateLayeredWindow` drawing, the WinEvent hook on the taskbar's thread, and the watchdog. A layered window can be a child only in an app whose manifest declares Windows 8 or later, so the app embeds its own manifest (`src-tauri/windows-app-manifest.xml`, Tauri's default plus the supported Windows versions); without it the widget docks but never shows.
 
 ## Considered Options
 
