@@ -1,5 +1,6 @@
 //! The Tauri binding: exposes core operations as commands. No logic lives here (ADR 0004).
 
+mod desktop;
 mod settings;
 mod tray;
 mod usage;
@@ -152,10 +153,8 @@ fn open_desktop_profile(
     core: tauri::State<'_, Core>,
     uuid: Option<String>,
 ) -> Result<DesktopOpening, CommandError> {
-    Ok(match uuid {
-        Some(uuid) => core.open_desktop_profile(&AccountUuid::new(uuid))?,
-        None => core.open_default_desktop_profile()?,
-    })
+    let account = uuid.map(AccountUuid::new);
+    Ok(desktop::open(&core, account.as_ref())?)
 }
 
 /// The folder a linked instance for `label` gets by default (`~/.claude-<label>`).
@@ -252,6 +251,12 @@ pub fn run() {
             add_instance,
             login_instance,
             open_desktop_profile,
+            desktop::desktop_profiles,
+            desktop::desktop_profile_candidates,
+            desktop::desktop_profile_folder,
+            desktop::add_desktop_profile,
+            desktop::update_desktop_profile,
+            desktop::remove_desktop_profile,
             settings::language,
             settings::set_language
         ])
@@ -262,6 +267,7 @@ pub fn run() {
             if let Err(error) = watch_config(app, &core) {
                 eprintln!("mccboard: cannot watch config.toml: {error}");
             }
+            desktop::open_at_start(&core);
             Ok(())
         })
         .build(tauri::generate_context!())

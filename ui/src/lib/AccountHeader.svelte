@@ -3,7 +3,16 @@
   import { updateAccount, type Account } from './core'
   import { t } from './i18n.svelte'
 
-  let { account, onerror }: { account: Account; onerror: (error: unknown) => void } = $props()
+  let {
+    account,
+    colorLocked = false,
+    onerror,
+  }: {
+    account: Account
+    /** The default desktop profile's account: always Claude's orange, not editable. */
+    colorLocked?: boolean
+    onerror: (error: unknown) => void
+  } = $props()
 
   let editing = $state(false)
   let saving = $state(false)
@@ -24,7 +33,7 @@
     try {
       await updateAccount(account.uuid, {
         label: label === account.label ? undefined : label,
-        color: color === account.color ? undefined : color,
+        color: colorLocked || color === account.color ? undefined : color,
         launcher: launcher === (account.launcher ?? '') ? undefined : launcher.trim(),
       })
       editing = false
@@ -44,7 +53,12 @@
     </label>
     <label>
       {t('account.field.color')}
-      <input type="color" bind:value={color} />
+      <input
+        type="color"
+        bind:value={color}
+        disabled={colorLocked}
+        title={colorLocked ? t('account.color_locked') : undefined}
+      />
     </label>
     <label>
       {t('account.field.launcher')}
