@@ -388,6 +388,7 @@ impl Core {
         Ok(tray::view(
             report,
             config.instances.is_empty(),
+            config.renew_expired_tokens,
             language,
             tz,
             self.env.now(),

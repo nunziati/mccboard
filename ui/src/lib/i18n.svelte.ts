@@ -64,6 +64,16 @@ export function formatTime(iso: string): string {
   return new Intl.DateTimeFormat(current, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
 }
 
+/** A time of day ("14:32"), with the date when it isn't today, in the current language. */
+export function formatClock(iso: string): string {
+  const date = new Date(iso)
+  const today = new Date().toDateString() === date.toDateString()
+  const options: Intl.DateTimeFormatOptions = today
+    ? { timeStyle: 'short' }
+    : { dateStyle: 'short', timeStyle: 'short' }
+  return new Intl.DateTimeFormat(current, options).format(date)
+}
+
 /** The translated message for a core error code. */
 export function errorMessage(code: string): string {
   const key = `error.${code}`

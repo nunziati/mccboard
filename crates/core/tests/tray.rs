@@ -746,3 +746,25 @@ fn with_renewal_off_the_tray_says_nothing_about_it() {
         view.accounts[0].lines
     );
 }
+
+#[test]
+fn the_settings_menu_offers_the_renewal_checked_as_saved() {
+    let (_home, core, _env) = home_with_a();
+
+    let view = english(&core, &core.usage().unwrap());
+    assert_eq!(
+        view.menu.renew_tokens,
+        "Let Claude Code renew an expired token"
+    );
+    assert!(view.menu.renew_tokens_on);
+
+    core.set_renew_expired_tokens(false).unwrap();
+    let view = core
+        .tray_view(&core.usage().unwrap(), Language::Italian, &TimeZone::UTC)
+        .unwrap();
+    assert_eq!(
+        view.menu.renew_tokens,
+        "Lascia che Claude Code rinnovi un token scaduto"
+    );
+    assert!(!view.menu.renew_tokens_on);
+}

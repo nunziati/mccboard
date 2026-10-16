@@ -3,7 +3,8 @@
 //! One background thread is the app's only caller of [`Core::refresh_usage`]: it refreshes
 //! every 60 seconds and when the user asks from the menu. The core applies the rate limits to
 //! both, so neither can call the endpoint more often than they allow. Between refreshes the
-//! thread redraws from the last readings when the language or `config.toml` changes.
+//! thread redraws from the last readings when the language or `config.toml` changes. After
+//! each refresh it tells the windows, since Claude Code may have renewed a token.
 
 mod icon;
 
@@ -17,7 +18,7 @@ use tauri::menu::{
     CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
 };
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const TRAY_ID: &str = "main";
 /// How often the background thread asks for a refresh. The core skips accounts whose rate
@@ -27,6 +28,7 @@ const REFRESH_EVERY: Duration = Duration::from_secs(60);
 const OPEN: &str = "open";
 const REFRESH: &str = "refresh";
 const QUIT: &str = "quit";
+const RENEW_TOKENS: &str = "renew-tokens";
 const LANGUAGE_PREFIX: &str = "language:";
 
 /// What wakes the background thread.
@@ -118,7 +120,9 @@ fn run(app: &AppHandle, core: &Core, wakes: &Receiver<Wake>) {
         };
         let report = if refresh {
             next_refresh = Instant::now() + REFRESH_EVERY;
-            core.refresh_usage()
+            let report = core.refresh_usage();
+            let _ = app.emit(crate::USAGE_CHANGED, ());
+            report
         } else {
             core.usage()
         };
@@ -182,7 +186,20 @@ fn menu(app: &AppHandle, view: &TrayView) -> tauri::Result<Menu<tauri::Wry>> {
     let languages: Vec<&dyn IsMenuItem<tauri::Wry>> =
         languages.iter().map(|item| item as _).collect();
     let language = Submenu::with_items(app, escape(&texts.language), true, &languages)?;
-    let settings = Submenu::with_items(app, escape(&texts.settings), true, &[&language])?;
+    let renew_tokens = CheckMenuItem::with_id(
+        app,
+        RENEW_TOKENS,
+        escape(&texts.renew_tokens),
+        true,
+        texts.renew_tokens_on,
+        None::<&str>,
+    )?;
+    let settings = Submenu::with_items(
+        app,
+        escape(&texts.settings),
+        true,
+        &[&language, &renew_tokens],
+    )?;
 
     menu.append_items(&[
         &MenuItem::with_id(app, OPEN, escape(&texts.open_instances), true, None::<&str>)?,
@@ -204,6 +221,15 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         OPEN => open_instances(app),
         REFRESH => wake(app, Wake::Refresh),
         QUIT => app.exit(0),
+        RENEW_TOKENS => {
+            let core = app.state::<Core>();
+            let on = !core.renew_expired_tokens().unwrap_or(true);
+            if let Err(error) = core.set_renew_expired_tokens(on) {
+                eprintln!("mccboard: cannot save the renewal preference: {error}");
+            }
+            // The config watcher tells the windows; the tray redraws now, its check included.
+            redraw(app);
+        }
         id => {
             let Some(code) = id.strip_prefix(LANGUAGE_PREFIX) else {
                 return;

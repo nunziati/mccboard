@@ -20,6 +20,9 @@ use tauri::{Emitter, Manager};
 /// a text editor, this app).
 const CONFIG_CHANGED: &str = "config-changed";
 
+/// Emitted to the windows after each usage refresh, which may have renewed a token.
+const USAGE_CHANGED: &str = "usage-changed";
+
 /// The label of the Instances window in `tauri.conf.json`.
 const INSTANCES_WINDOW: &str = "instances";
 
@@ -239,7 +242,9 @@ pub fn run() {
             add_instance,
             login_instance,
             settings::language,
-            settings::set_language
+            settings::set_language,
+            settings::renew_expired_tokens,
+            settings::set_renew_expired_tokens
         ])
         .setup(move |app| {
             tray::setup(app, &core)?;

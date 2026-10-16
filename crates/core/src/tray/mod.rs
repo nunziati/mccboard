@@ -122,6 +122,10 @@ pub struct TrayMenu {
     pub settings: String,
     pub language: String,
     pub languages: Vec<LanguageChoice>,
+    /// The settings item that lets Claude Code renew an expired token (#30).
+    pub renew_tokens: String,
+    /// Whether that preference is on, so the item shows checked.
+    pub renew_tokens_on: bool,
     pub quit: String,
 }
 
@@ -154,7 +158,8 @@ impl TrayView {
             notice: Some(message),
             accounts: Vec::new(),
             no_instances: false,
-            menu: texts.menu(),
+            // The preference can't be read either; the item shows as the default.
+            menu: texts.menu(true),
         }
     }
 }
@@ -164,6 +169,7 @@ impl TrayView {
 pub(crate) fn view(
     report: &UsageReport,
     no_instances: bool,
+    renew_tokens_on: bool,
     language: Language,
     tz: &TimeZone,
     now: Timestamp,
@@ -224,7 +230,7 @@ pub(crate) fn view(
         notice,
         accounts: if no_instances { Vec::new() } else { accounts },
         no_instances,
-        menu: texts.menu(),
+        menu: texts.menu(renew_tokens_on),
     }
 }
 

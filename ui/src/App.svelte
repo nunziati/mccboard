@@ -8,6 +8,7 @@
   import Launchers from './lib/Launchers.svelte'
   import Login from './lib/Login.svelte'
   import RemoveInstance from './lib/RemoveInstance.svelte'
+  import Renewal from './lib/Renewal.svelte'
   import RepairResult from './lib/RepairResult.svelte'
   import SharingQuestions from './lib/SharingQuestions.svelte'
   import {
@@ -45,6 +46,13 @@
     t,
     type Lang,
   } from './lib/i18n.svelte'
+  import {
+    onUsageChanged,
+    renewExpiredTokens,
+    setRenewExpiredTokens,
+    usage as loadUsage,
+    type UsageReport,
+  } from './lib/usage'
 
   /** Instances shown under one heading: an account, an account missing from config.toml, or none. */
   interface Group {
@@ -73,6 +81,10 @@
   let repairReport = $state<RepairReport | null>(null)
   /** Shown while Claude Code's login is open, until it ends. */
   let waiting = $state<string | null>(null)
+  /** The last usage report, for each instance's token renewal. Null until loaded or if it can't be. */
+  let usageReport = $state<UsageReport | null>(null)
+  /** Whether mccboard lets Claude Code renew an expired token (config.toml). */
+  let renewTokens = $state(true)
 
   /** What a login did, in words: the account it registered the instance under, and warnings. */
   function loginNotice(report: LoginReport): string {
@@ -143,6 +155,31 @@
     })
   }
 
+  /** Claude Code renewing this instance's token, when the usage report has it. */
+  function renewalOf(instance: InstanceStatus) {
+    return usageReport?.accounts.find((a) => a.renewal?.config_dir === instance.config_dir)
+      ?.renewal
+  }
+
+  /** The usage report and the renewal preference. They don't hold up the rest of the window:
+   * a refresh in progress (a renewal can take a while) makes the report wait. */
+  async function reloadUsage() {
+    try {
+      renewTokens = await renewExpiredTokens()
+      usageReport = await loadUsage()
+    } catch {
+      usageReport = null
+    }
+  }
+
+  function chooseRenewal(on: boolean) {
+    renewTokens = on
+    setRenewExpiredTokens(on).catch((error: unknown) => {
+      actionError = asCoreError(error)
+      reloadUsage()
+    })
+  }
+
   function driftOf(instance: InstanceStatus) {
     return doctor?.instances.find((d) => d.config_dir === instance.config_dir)
   }
@@ -201,6 +238,7 @@
     } catch (e) {
       loadError = asCoreError(e)
     }
+    reloadUsage()
     try {
       launcherStatus = await loadLaunchers()
       launcherError = null
@@ -301,8 +339,18 @@
       loadLanguage()
       reload()
     })
+    // A refresh may have had Claude Code renew a token: the login state changes too.
+    const unlistenUsage = onUsageChanged(async () => {
+      try {
+        registry = await loadRegistry()
+      } catch {
+        // Kept as it was; the next full reload shows the error.
+      }
+      reloadUsage()
+    })
     return () => {
       unlisten.then((stop) => stop())
+      unlistenUsage.then((stop) => stop())
     }
   })
 </script>
@@ -347,6 +395,14 @@
             <option value={lang}>{LANGUAGE_NAMES[lang]}</option>
           {/each}
         </select>
+      </label>
+      <label title={t('settings.renew_tokens_hint')}>
+        <input
+          type="checkbox"
+          checked={renewTokens}
+          onchange={(e) => chooseRenewal((e.currentTarget as HTMLInputElement).checked)}
+        />
+        {t('settings.renew_tokens')}
       </label>
       <button onclick={reload} disabled={busy}>{t('instances.rescan')}</button>
     </div>
@@ -403,11 +459,15 @@
               <tbody>
                 {#each group.instances as instance (instance.config_dir)}
                   {@const drift = driftOf(instance)}
+                  {@const renewal = renewalOf(instance)}
                   <tr>
                     <td><code>{instance.config_dir}</code></td>
                     <td>{instance.kind === 'primary' ? t('kind.primary') : t('kind.linked')}</td>
                     <td>
                       <Login observation={instance} />
+                      {#if renewal}
+                        <Renewal {renewal} expired={instance.login.state === 'expired'} />
+                      {/if}
                       {#if instance.account_status.status === 'changed'}
                         <div class="warning small">
                           {t('status.changed', {

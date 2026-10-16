@@ -43,7 +43,7 @@ impl Texts {
         }
     }
 
-    pub fn menu(&self) -> TrayMenu {
+    pub fn menu(&self, renew_tokens_on: bool) -> TrayMenu {
         TrayMenu {
             open_instances: self.pick("Open Instances", "Apri Istanze").to_owned(),
             refresh: self.pick("Refresh usage", "Aggiorna l'utilizzo").to_owned(),
@@ -57,6 +57,13 @@ impl Texts {
                     selected: language == self.language,
                 })
                 .collect(),
+            renew_tokens: self
+                .pick(
+                    "Let Claude Code renew an expired token",
+                    "Lascia che Claude Code rinnovi un token scaduto",
+                )
+                .to_owned(),
+            renew_tokens_on,
             quit: self.pick("Quit", "Esci").to_owned(),
         }
     }
