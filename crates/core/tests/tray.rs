@@ -9,8 +9,11 @@ mod common;
 use common::{TempHome, UUID_A, UUID_B, now};
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
+use mccboard_core::Environment as _;
 use mccboard_core::testing::FakeEnvironment;
-use mccboard_core::{AccountUuid, Core, EndpointReply, Error, Language, TrayView, UsageReport};
+use mccboard_core::{
+    AccountUuid, Core, EndpointReply, Error, Language, RenewalExit, TrayView, UsageReport,
+};
 use serde_json::json;
 
 const TOKEN_A: &str = "sk-ant-oat01-FIXTURE-A-must-never-leak-aaaaaaaaaaaa";
@@ -542,4 +545,204 @@ fn no_token_reaches_the_tray() {
     let text = format!("{view:?}");
     assert!(!text.contains(TOKEN_A) && !text.contains(TOKEN_B));
     assert!(!text.contains(common::FIXTURE_REFRESH));
+}
+
+// --- Claude Code renewing an expired token (#30) ------------------------------------------
+
+/// A home with A in the primary instance, its token expired a minute ago, registered.
+fn home_with_expired_a() -> (TempHome, Core, FakeEnvironment) {
+    let home = TempHome::new();
+    let primary = home.primary();
+    primary
+        .logged_in_as(UUID_A, "a@example.com")
+        .credentials_with_token(TOKEN_A, now() - secs(60));
+    let (core, env) = home.core();
+    core.register(&primary.dir).unwrap();
+    (home, core, env)
+}
+
+/// Makes the fake's renewal play Claude Code renewing the token for 8 hours.
+fn renews(env: &FakeEnvironment) {
+    let clock = env.clone();
+    env.on_renewal(move |renewal| {
+        let expires_at = clock.now() + hours(8);
+        std::fs::write(
+            renewal.config_dir.join(".credentials.json"),
+            json!({"claudeAiOauth": {"accessToken": TOKEN_A,
+                                     "expiresAt": expires_at.as_millisecond()}})
+            .to_string(),
+        )?;
+        Ok(RenewalExit { exit_code: Some(0) })
+    });
+}
+
+fn claude_not_found(env: &FakeEnvironment) {
+    env.on_renewal(|_| Err(std::io::ErrorKind::NotFound.into()));
+}
+
+#[test]
+fn a_renewed_token_says_when_in_the_menu_and_the_tooltip() {
+    let (_home, core, env) = home_with_expired_a();
+    renews(&env);
+    env.push_usage_reply(ok(35.0, 14.0, &[]));
+    let report = core.refresh_usage().unwrap();
+
+    let view = english(&core, &report);
+
+    assert!(!view.icon.token_expired);
+    let lines = &view.accounts[0].lines;
+    assert!(
+        lines.contains(&"Token renewed at 12:00".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        view.tooltip.contains("Token renewed at 12:00"),
+        "{}",
+        view.tooltip
+    );
+
+    let italian = core
+        .tray_view(&report, Language::Italian, &TimeZone::UTC)
+        .unwrap();
+    let lines = &italian.accounts[0].lines;
+    assert!(
+        lines.contains(&"Token rinnovato alle 12:00".to_owned()),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_failed_renewal_says_why_and_when_it_tries_again() {
+    let (_home, core, env) = home_with_expired_a();
+    claude_not_found(&env);
+    let report = core.refresh_usage().unwrap();
+
+    let view = english(&core, &report);
+
+    assert!(view.icon.token_expired);
+    assert_eq!(view.accounts[0].title, "A · token expired");
+    let lines = &view.accounts[0].lines;
+    assert!(
+        lines.contains(&"Renewal failed (Claude Code not found), next try at 12:30".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        view.tooltip.contains("Renewal failed, retry 12:30"),
+        "{}",
+        view.tooltip
+    );
+
+    let italian = core
+        .tray_view(&report, Language::Italian, &TimeZone::UTC)
+        .unwrap();
+    let lines = &italian.accounts[0].lines;
+    assert!(
+        lines.contains(
+            &"Rinnovo non riuscito (Claude Code non trovato), nuovo tentativo alle 12:30"
+                .to_owned()
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        italian.tooltip.contains("Rinnovo fallito, riprovo 12:30"),
+        "{}",
+        italian.tooltip
+    );
+}
+
+#[test]
+fn every_renewal_failure_has_a_reason_in_both_languages() {
+    type Setup = fn(&FakeEnvironment);
+    let failures: [(Setup, &str, &str); 5] = [
+        (
+            |env| env.on_renewal(|_| Ok(RenewalExit { exit_code: Some(0) })),
+            "token still expired",
+            "token ancora scaduto",
+        ),
+        (
+            |env| env.on_renewal(|_| Ok(RenewalExit { exit_code: Some(3) })),
+            "Claude Code exited with code 3",
+            "Claude Code è uscito con codice 3",
+        ),
+        (
+            |env| env.on_renewal(|_| Ok(RenewalExit { exit_code: None })),
+            "Claude Code was stopped",
+            "Claude Code è stato interrotto",
+        ),
+        (
+            |env| env.on_renewal(|_| Err(std::io::ErrorKind::TimedOut.into())),
+            "Claude Code took too long",
+            "Claude Code ci ha messo troppo",
+        ),
+        (
+            |env| env.on_renewal(|_| Err(std::io::ErrorKind::PermissionDenied.into())),
+            "Claude Code couldn't start",
+            "Claude Code non è partito",
+        ),
+    ];
+    for (setup, english_reason, italian_reason) in failures {
+        let (_home, core, env) = home_with_expired_a();
+        setup(&env);
+        let report = core.refresh_usage().unwrap();
+        let lines = english(&core, &report).accounts[0].lines.join("\n");
+        assert!(lines.contains(english_reason), "{lines}");
+        let lines = core
+            .tray_view(&report, Language::Italian, &TimeZone::UTC)
+            .unwrap()
+            .accounts[0]
+            .lines
+            .join("\n");
+        assert!(lines.contains(italian_reason), "{lines}");
+    }
+}
+
+#[test]
+fn among_several_accounts_the_renewal_note_is_short_and_dropped_first() {
+    let (home, core, env) = home_with_a_and_b();
+    home.linked(".claude-b")
+        .credentials_with_token(TOKEN_B, now() - secs(60));
+    claude_not_found(&env);
+    env.push_usage_reply(ok(35.0, 14.0, &[]));
+
+    let view = english(&core, &core.refresh_usage().unwrap());
+
+    assert!(
+        view.tooltip
+            .contains("B: token expired · renewal failed, retry 12:30"),
+        "{}",
+        view.tooltip
+    );
+
+    // With many model windows, the note goes before anything else.
+    env.advance(SignedDuration::from_mins(2));
+    env.push_usage_reply(ok(
+        35.0,
+        14.0,
+        &[("Fable", 50.0), ("Sonnet", 20.0), ("Haiku", 10.0)],
+    ));
+    let view = english(&core, &core.refresh_usage().unwrap());
+    assert!(utf16_len(&view.tooltip) <= TOOLTIP_LIMIT);
+    assert!(!view.tooltip.contains("retry"), "{}", view.tooltip);
+    assert!(
+        view.tooltip.contains("B: token expired"),
+        "{}",
+        view.tooltip
+    );
+}
+
+#[test]
+fn with_renewal_off_the_tray_says_nothing_about_it() {
+    let (_home, core, env) = home_with_expired_a();
+    core.set_renew_expired_tokens(false).unwrap();
+    claude_not_found(&env);
+
+    let view = english(&core, &core.refresh_usage().unwrap());
+
+    assert!(env.renewal_invocations().is_empty());
+    assert_eq!(view.tooltip, "Token expired");
+    assert!(
+        view.accounts[0].lines.is_empty(),
+        "{:?}",
+        view.accounts[0].lines
+    );
 }

@@ -57,7 +57,9 @@ pub struct RenewalAttempt {
 pub enum RenewalOutcome {
     /// The token was valid afterwards.
     Renewed,
-    Failed { failure: RenewalFailure },
+    Failed {
+        failure: RenewalFailure,
+    },
 }
 
 /// Why a renewal didn't leave a valid token. Never carries anything Claude Code printed.

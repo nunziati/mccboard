@@ -282,9 +282,7 @@ pub(crate) fn report(
                 .unwrap_or_default();
             let called = due.contains(&index);
             let renewal = renewal_on
-                .then(|| {
-                    renewal::view(&state, found.expired_in(), &found.dirs, &renewed_in, now)
-                })
+                .then(|| renewal::view(&state, found.expired_in(), &found.dirs, &renewed_in, now))
                 .flatten();
             AccountUsage {
                 renewal,

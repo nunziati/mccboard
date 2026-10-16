@@ -393,7 +393,10 @@ fn failure_after(setup: impl FnOnce(&FakeEnvironment)) -> RenewalFailure {
 
 #[test]
 fn why_a_renewal_failed_is_reported() {
-    assert_eq!(failure_after(|env| exits(env, 0)), RenewalFailure::StillExpired);
+    assert_eq!(
+        failure_after(|env| exits(env, 0)),
+        RenewalFailure::StillExpired
+    );
     assert_eq!(
         failure_after(|env| exits(env, 2)),
         RenewalFailure::Exited { code: Some(2) }
@@ -431,7 +434,14 @@ fn a_token_valid_afterwards_counts_as_renewed_whatever_the_exit_code() {
     let usage = only(&report);
     assert_eq!(usage.status, UsageStatus::Ok);
     assert_eq!(
-        usage.renewal.as_ref().unwrap().last.as_ref().unwrap().outcome,
+        usage
+            .renewal
+            .as_ref()
+            .unwrap()
+            .last
+            .as_ref()
+            .unwrap()
+            .outcome,
         RenewalOutcome::Renewed
     );
 }
@@ -464,7 +474,10 @@ fn the_last_renewal_stays_known_while_the_token_is_valid() {
     assert!(!renewal.attempted);
     assert_eq!(renewal.config_dir, b.dir);
     assert_eq!(renewal.last.as_ref().unwrap().at, now());
-    assert_eq!(renewal.last.as_ref().unwrap().outcome, RenewalOutcome::Renewed);
+    assert_eq!(
+        renewal.last.as_ref().unwrap().outcome,
+        RenewalOutcome::Renewed
+    );
 }
 
 #[test]
