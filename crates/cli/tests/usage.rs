@@ -287,3 +287,33 @@ fn with_renewal_off_claude_code_is_not_run() {
     let settings: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(settings["renew_expired_tokens"], false);
 }
+
+// --- The taskbar widget's preferences (#45) ---------------------------------------------------
+
+#[test]
+fn the_taskbar_widget_preferences_are_shown_and_changed() {
+    let home = registered_home(true);
+
+    let shown = mccboard(home.path(), &["settings"]);
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(text.contains("taskbar-widget: on"), "{text}");
+    assert!(text.contains("taskbar-widget-labels: off"), "{text}");
+
+    let set = mccboard(
+        home.path(),
+        &[
+            "settings",
+            "--taskbar-widget",
+            "off",
+            "--taskbar-widget-labels",
+            "on",
+            "--json",
+        ],
+    );
+    assert!(set.status.success(), "{set:?}");
+    let settings: serde_json::Value = serde_json::from_slice(&set.stdout).unwrap();
+    assert_eq!(settings["taskbar_widget"], false);
+    assert_eq!(settings["taskbar_widget_labels"], true);
+    let config = std::fs::read_to_string(home.path().join(".mccboard/config.toml")).unwrap();
+    assert!(config.contains("taskbar_widget = false"), "{config}");
+}
