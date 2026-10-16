@@ -580,8 +580,8 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
              then reinstalled with Claude Code's own `claude plugin` commands."
             .to_owned(),
         Repair::Unlink { target } => format!(
-            "Remove the link to {}, leaving it as it is; Claude Code then creates this \
-             instance's own {item}.",
+            "Remove the link to {}, leaving what it leads to as it is; Claude Code then creates \
+             this instance's own {item}.",
             target.display()
         ),
         Repair::SyncLaunchers => {

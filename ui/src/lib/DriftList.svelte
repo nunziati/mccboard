@@ -26,6 +26,10 @@
         return problem.target === null ? 'drift.problem.broken_link_unreadable' : 'drift.problem.broken_link'
       case 'whole_folder_link':
         return `drift.problem.whole_folder_link.${item.item}`
+      case 'linked_private_item':
+        return problem.ignored_answer
+          ? 'drift.problem.linked_private_item_ignored_answer'
+          : 'drift.problem.linked_private_item'
       case 'stale_launcher':
         return problem.found === null ? 'drift.problem.stale_launcher' : 'drift.problem.stale_launcher_found'
       case 'misaligned_key':
@@ -50,6 +54,7 @@
         break
       case 'wrong_target':
       case 'link_chain':
+      case 'linked_private_item':
         vars.target = problem.target
         break
       case 'stale_launcher':
@@ -81,6 +86,7 @@
       case 'create_link':
       case 'replace_link':
       case 'backup_and_link':
+      case 'unlink':
         vars.target = repair.target
         break
       case 'migrate_skills':
