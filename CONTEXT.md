@@ -24,7 +24,7 @@ A Claude Code config directory on a machine. Its account is observed, not owned:
 _Avoid_: install, setup, environment
 
 **Expired token**:
-An instance whose OAuth access token is past its expiry while its credentials are still there. Claude Code renews it the next time it runs in that instance; mccboard never does. It is still logged in: not logged in means no credentials, or ones Claude Code emptied on logout.
+An instance whose OAuth access token is past its expiry while its credentials are still there. Claude Code renews it the next time it runs in that instance, or when mccboard runs it there for that purpose (a token renewal); mccboard itself never does. It is still logged in: not logged in means no credentials, or ones Claude Code emptied on logout.
 _Avoid_: login expired, logged out
 
 **Primary instance**:
