@@ -11,7 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopLaunch, DesktopPackage,
-    EndpointReply, Environment, InstanceKind, LoginExit, LoginInvocation, OsKind, ProcessListing,
+    EndpointReply, Environment, Image, InstanceKind, LoginExit, LoginInvocation, OsKind,
+    ProcessListing, Shortcut,
 };
 
 /// The first pid a fake launch of the desktop app returns; each launch gets the next one.
@@ -20,6 +21,9 @@ pub const FIRST_FAKE_DESKTOP_PID: u32 = 4000;
 /// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
 /// mccboard produces may contain it.
 pub const FAKE_LOGIN_TOKEN: &str = "sk-ant-oat01-FAKE-LOGIN-TOKEN-never-shown-by-mccboard";
+
+/// mccboard's app as [`FakeEnvironment`] finds it unless told otherwise.
+pub const FAKE_MCCBOARD_APP: &str = r"C:\Program Files\mccboard\mccboard.exe";
 
 /// The launcher shim [`FakeEnvironment`] ships unless told otherwise.
 pub const FAKE_LAUNCHER_SHIM: &[u8] = b"MZ fake mccboard-shim.exe, version 1";
@@ -54,6 +58,11 @@ struct State {
     desktop_lookups: Vec<Vec<String>>,
     desktop_launches: Vec<DesktopLaunch>,
     desktop_launch_handler: DesktopLaunchHandler,
+    program_icon: Option<Image>,
+    start_menu: Option<PathBuf>,
+    mccboard_app: Option<PathBuf>,
+    shortcuts_written: Vec<Shortcut>,
+    shortcut_error: Option<String>,
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
     claude_handler: ClaudeHandler,
@@ -120,6 +129,11 @@ impl FakeEnvironment {
                 desktop_lookups: Vec::new(),
                 desktop_launches: Vec::new(),
                 desktop_launch_handler: DesktopLaunchHandler(None),
+                program_icon: None,
+                start_menu: None,
+                mccboard_app: Some(PathBuf::from(FAKE_MCCBOARD_APP)),
+                shortcuts_written: Vec::new(),
+                shortcut_error: None,
                 developer_mode: true,
                 claude_invocations: Vec::new(),
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
@@ -233,6 +247,33 @@ impl FakeEnvironment {
     /// Every launch of the desktop app so far, in order.
     pub fn desktop_launches(&self) -> Vec<DesktopLaunch> {
         self.state().desktop_launches.clone()
+    }
+
+    /// Gives the desktop app's program an icon, the fallback logo when its package has none;
+    /// none by default.
+    pub fn set_program_icon(&self, icon: Option<Image>) {
+        self.state().program_icon = icon;
+    }
+
+    /// Sets the Start menu's Programs folder; `None` (the default): it can't be found.
+    pub fn set_start_menu(&self, folder: Option<&Path>) {
+        self.state().start_menu = folder.map(Path::to_path_buf);
+    }
+
+    /// Sets where mccboard's app is; `None`: it can't be found. [`FAKE_MCCBOARD_APP`] by
+    /// default.
+    pub fn set_mccboard_app(&self, program: Option<&Path>) {
+        self.state().mccboard_app = program.map(Path::to_path_buf);
+    }
+
+    /// Makes writing a shortcut fail with `message`; `None` undoes it.
+    pub fn set_shortcut_error(&self, message: Option<&str>) {
+        self.state().shortcut_error = message.map(str::to_owned);
+    }
+
+    /// Every shortcut written so far, in order.
+    pub fn shortcuts_written(&self) -> Vec<Shortcut> {
+        self.state().shortcuts_written.clone()
     }
 
     /// Sets the launcher shim mccboard ships: other bytes, as after an upgrade of mccboard, or
@@ -423,6 +464,42 @@ impl Environment for FakeEnvironment {
             Some(handler) => handler(launch),
             None => Ok(FIRST_FAKE_DESKTOP_PID + count - 1),
         }
+    }
+
+    fn program_icon(&self, _program: &Path) -> io::Result<Image> {
+        self.state()
+            .program_icon
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no program icon"))
+    }
+
+    fn start_menu_programs(&self) -> io::Result<PathBuf> {
+        self.state()
+            .start_menu
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no Start menu"))
+    }
+
+    fn mccboard_app(&self) -> io::Result<PathBuf> {
+        self.state()
+            .mccboard_app
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no mccboard app"))
+    }
+
+    /// Records the shortcut and writes a placeholder file at its path (its parent folders
+    /// created), so tests see it on disk as Windows would leave it.
+    fn write_shortcut(&self, shortcut: &Shortcut) -> io::Result<()> {
+        let mut state = self.state();
+        if let Some(message) = &state.shortcut_error {
+            return Err(io::Error::other(format!("fake: {message}")));
+        }
+        if let Some(parent) = shortcut.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&shortcut.path, format!("fake shell link: {shortcut:?}"))?;
+        state.shortcuts_written.push(shortcut.clone());
+        Ok(())
     }
 
     fn file_links_allowed(&self) -> bool {

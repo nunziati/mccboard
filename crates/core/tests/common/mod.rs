@@ -36,10 +36,24 @@ impl TempHome {
         self.dir.path()
     }
 
-    /// A core over this home, with a fake environment whose clock reads [`NOW`].
+    /// A core over this home, with a fake environment whose clock reads [`NOW`] and whose
+    /// Start menu is [`TempHome::start_menu`] (used when the fake plays Windows).
     pub fn core(&self) -> (Core, FakeEnvironment) {
         let env = FakeEnvironment::new(now());
+        env.set_start_menu(Some(&self.start_menu()));
         (Core::new(self.path(), env.clone()), env)
+    }
+
+    /// The Start menu's Programs folder of the fake Windows user, under this home (not
+    /// created: the first shortcut creates it).
+    pub fn start_menu(&self) -> PathBuf {
+        self.path()
+            .join("AppData")
+            .join("Roaming")
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
     }
 
     /// Creates `~/.claude`, the primary instance's config directory.

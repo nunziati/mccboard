@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use sysinfo::{Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -25,6 +26,34 @@ pub(crate) fn launcher_shim() -> io::Result<Vec<u8>> {
     );
     let path = std::env::current_exe()?.with_file_name(file);
     std::fs::read(&path).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+
+/// mccboard's app program, when the running program is the app ([`set_app_program`]).
+static APP_PROGRAM: OnceLock<PathBuf> = OnceLock::new();
+
+/// The cargo name of mccboard's app program, as `cargo build` puts it next to the CLI.
+const APP_PROGRAM_NAME: &str = "mccboard-app";
+
+pub(crate) fn set_app_program(program: PathBuf) {
+    let _ = APP_PROGRAM.set(program);
+}
+
+/// mccboard's app: the running program if it said it is the app, else `mccboard-app` next to
+/// the running program (the CLI in a `cargo build` folder or next to the app).
+pub(crate) fn mccboard_app() -> io::Result<PathBuf> {
+    if let Some(program) = APP_PROGRAM.get() {
+        return Ok(program.clone());
+    }
+    let file = format!("{APP_PROGRAM_NAME}{}", std::env::consts::EXE_SUFFIX);
+    let path = std::env::current_exe()?.with_file_name(file);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} isn't there", path.display()),
+        ))
+    }
 }
 
 /// Every running Claude Code process of this machine that mccboard can see, mccboard's own

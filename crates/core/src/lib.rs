@@ -17,6 +17,7 @@ mod claude_cli;
 mod claude_files;
 mod config;
 mod desktop_app;
+mod desktop_identity;
 mod desktop_launch;
 mod desktop_process;
 mod desktop_profile;
@@ -44,6 +45,10 @@ mod usage;
 #[cfg(windows)]
 mod windows_desktop_app;
 #[cfg(windows)]
+mod windows_shell;
+#[cfg(windows)]
+pub mod windows_taskbar;
+#[cfg(windows)]
 mod windows_user_path;
 
 use std::path::{Path, PathBuf};
@@ -52,6 +57,10 @@ use std::sync::{Arc, Mutex};
 pub use account::{Account, AccountUpdate, AccountUuid, CLAUDE_ORANGE, Color, ObservedAccount};
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
+pub use desktop_identity::{
+    AppArgs, OPEN_PROFILE_ARG, RunningProfile, Shortcut, ShortcutSync, ShortcutWarning,
+    WindowIdentity, app_user_model_id, command_line, open_profile_args, shortcut_file_name,
+};
 pub use desktop_launch::{DesktopLaunch, DesktopPackage, PACKAGE_FAMILY};
 pub use desktop_process::{DesktopDataDir, DesktopProcess, ProcessListing};
 pub use desktop_profile::{
@@ -194,9 +203,11 @@ impl Core {
     }
 
     /// Changes an account's label, color or launcher name override. The launchers of its
-    /// linked instances follow the new name. The default desktop profile's account (the
-    /// primary instance's) always shows Claude's orange: a new color for it is refused
-    /// ([`Error::DefaultProfileColor`]).
+    /// linked instances follow the new name, and its desktop profile's Start-menu shortcut
+    /// and icon the new label and color ([`Core::sync_desktop_shortcuts`]). The default
+    /// desktop profile's account (the primary instance's) always shows Claude's orange: a new
+    /// color for it is refused ([`Error::DefaultProfileColor`]). If the launchers or the
+    /// shortcut can't be written, the error says so; the account is changed all the same.
     pub fn update_account(
         &self,
         uuid: &AccountUuid,
@@ -205,6 +216,7 @@ impl Core {
         let account =
             registry::update_account(&self.home, &self.paths().config_file(), uuid, update)?;
         self.sync_launchers()?;
+        self.sync_desktop_shortcuts()?;
         Ok(account)
     }
 
@@ -253,18 +265,23 @@ impl Core {
     /// default one ([`Error::DefaultDesktopProfileAccount`]), and a data folder inside or
     /// holding an instance, mccboard's files, the app's own data or another profile's folder,
     /// or that is a link ([`Error::DesktopProfileFolderNotAllowed`]).
+    ///
+    /// On Windows the profile gets its Start-menu shortcut ([`Core::sync_desktop_shortcuts`]);
+    /// if it can't be written, the error says so and the profile is added all the same.
     pub fn add_desktop_profile(
         &self,
         account: &AccountUuid,
         data_folder: Option<&Path>,
     ) -> Result<DesktopProfile, Error> {
-        desktop_profile::add(
+        let profile = desktop_profile::add(
             &self.home,
             &self.paths(),
             self.env.as_ref(),
             account,
             data_folder,
-        )
+        )?;
+        self.sync_desktop_shortcuts()?;
+        Ok(profile)
     }
 
     /// Changes `account`'s desktop profile (whether it opens when mccboard starts), keeping
@@ -292,8 +309,10 @@ impl Core {
     ///   and for a folder that the rules of [`Core::add_desktop_profile`] wouldn't accept
     ///   ([`Error::FolderNotDeletable`]). Links inside are removed, never followed.
     ///
-    /// The profile's cached icons go with it ([`IconCache::remove`]); one that can't be
-    /// deleted stays behind without failing the removal.
+    /// Its Start-menu shortcut goes with it ([`Core::sync_desktop_shortcuts`]; if that
+    /// fails, the error says so and the profile is removed all the same), then its cached
+    /// icons ([`IconCache::remove`]); one that can't be deleted stays behind without failing
+    /// the removal.
     ///
     /// The default desktop profile is never removed ([`Error::DefaultDesktopProfile`]).
     pub fn remove_desktop_profile(
@@ -301,7 +320,40 @@ impl Core {
         account: &AccountUuid,
         level: RemoveLevel,
     ) -> Result<DesktopProfileRemoval, Error> {
-        desktop_profile::remove(&self.home, &self.paths(), self.env.as_ref(), account, level)
+        desktop_profile::remove(
+            &self.home,
+            &self.paths(),
+            self.env.as_ref(),
+            account,
+            level,
+            &|| self.sync_desktop_shortcuts(),
+        )
+    }
+
+    /// Makes the desktop profiles' Start-menu shortcuts match the stored profiles, on Windows
+    /// (elsewhere it does nothing): `Claude <label>.lnk` in the Start menu's Programs folder,
+    /// starting mccboard's app with `--open-profile <uuid>` ([`AppArgs`]), with the profile's
+    /// AppUserModelID ([`app_user_model_id`]) and colored icon, drawn and cached as needed. A
+    /// shortcut whose label, color or target changed is rewritten (renamed: the new one
+    /// written, the old one deleted); the shortcuts mccboard made that no profile needs are
+    /// deleted; files it didn't make are never touched. Pinning stays the user's.
+    ///
+    /// Adding, changing and removing profiles and accounts call it; the app also calls it when
+    /// it starts and when `config.toml` changes. Running it again changes nothing. Fails when
+    /// the Start menu ([`Error::StartMenuNotFound`]) or mccboard's app
+    /// ([`Error::AppProgramNotFound`]) can't be found, or a shortcut can't be written
+    /// ([`Error::ShortcutNotWritten`]); an icon that can't be drawn is only a warning.
+    pub fn sync_desktop_shortcuts(&self) -> Result<ShortcutSync, Error> {
+        desktop_identity::sync(&self.home, &self.paths(), self.env.as_ref())
+    }
+
+    /// The desktop profiles running now, the default one never among them, each with every
+    /// process of the app running it and what their windows are tagged with: the profile's
+    /// AppUserModelID, `Claude <label>`, mccboard's relaunch command and its colored icon,
+    /// drawn and cached as needed. For the app's taskbar watcher (Windows), which calls it
+    /// whenever processes may have changed. Lists the desktop app's processes.
+    pub fn running_desktop_profiles(&self) -> Result<Vec<RunningProfile>, Error> {
+        desktop_identity::running(&self.home, &self.paths(), self.env.as_ref())
     }
 
     /// Opens `account`'s desktop profile on Windows, or the default desktop profile when

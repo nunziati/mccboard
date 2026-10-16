@@ -249,5 +249,8 @@
   "desktop.guide.why": "Why: the link that opens Claude would go to the default profile, not to this one.",
   "desktop.guide.closes": "This guide closes by itself once the profile is signed in.",
   "action.open": "Open",
-  "account.color_locked": "The default desktop profile's account always shows Claude's orange."
+  "account.color_locked": "The default desktop profile's account always shows Claude's orange.",
+  "error.start_menu_not_found": "The Start menu's Programs folder wasn't found, so the desktop profile's shortcut couldn't be made. The change is saved all the same.",
+  "error.app_program_not_found": "mccboard's app wasn't found, so the desktop profile's Start-menu shortcut has nothing to start. The change is saved all the same.",
+  "error.shortcut_not_written": "The desktop profile's Start-menu shortcut couldn't be written. The change is saved all the same."
 }

@@ -37,8 +37,8 @@ use crate::desktop_process::{self, DesktopProcess};
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::{
-    Environment, Error, FolderOutcome, IconCache, OsKind, Paths, RemoveLevel, desktop_app,
-    folder_guard, paths, remove,
+    Environment, Error, FolderOutcome, IconCache, OsKind, Paths, RemoveLevel, ShortcutSync,
+    desktop_app, folder_guard, paths, remove,
 };
 
 /// The folder under a data folder whose subfolders are named after the accounts signed in.
@@ -351,6 +351,7 @@ pub(crate) fn remove(
     env: &dyn Environment,
     account: &AccountUuid,
     level: RemoveLevel,
+    sync_shortcuts: &dyn Fn() -> Result<ShortcutSync, Error>,
 ) -> Result<DesktopProfileRemoval, Error> {
     let mut file = ConfigFile::load(&paths.config_file())?;
     let entry = stored(home, &file.config, account)?.clone();
@@ -384,8 +385,11 @@ pub(crate) fn remove(
 
     file.remove_desktop_profile(account);
     file.save()?;
+    // The shortcut first: it shows the icon.
+    let synced = sync_shortcuts();
     // Leftover icons are harmless (a new color or profile gets new file names).
     let _ = IconCache::new(paths).remove(account);
+    synced?;
     Ok(DesktopProfileRemoval {
         account: account.clone(),
         data_folder,

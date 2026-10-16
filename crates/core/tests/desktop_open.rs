@@ -145,6 +145,8 @@ fn opening_again_launches_again_without_waiting_and_keeps_the_folder() {
 #[test]
 fn the_app_is_looked_up_at_every_launch_and_the_newest_package_wins() {
     let (home, core, env) = setup();
+    // Adding the profile looked the app up for its shortcut's icon.
+    let before = env.desktop_app_lookups().len();
     core.open_desktop_profile(&uuid(UUID_B)).unwrap();
 
     // An update installs a newer version beside the old one, then the old one goes.
@@ -158,7 +160,7 @@ fn the_app_is_looked_up_at_every_launch_and_the_newest_package_wins() {
 
     assert_eq!(during.program, program(&new));
     assert_eq!(after.program, program(&new));
-    let lookups = env.desktop_app_lookups();
+    let lookups = env.desktop_app_lookups().split_off(before);
     assert_eq!(lookups.len(), 3, "one lookup per launch");
     assert!(lookups.iter().all(|families| families[0] == PACKAGE_FAMILY));
 }
@@ -187,11 +189,12 @@ fn other_claude_package_families_are_looked_up_from_their_data_folders() {
     ] {
         fs::create_dir_all(packages.join(name)).unwrap();
     }
+    let before = env.desktop_app_lookups().len();
 
     core.open_desktop_profile(&uuid(UUID_B)).unwrap();
 
     assert_eq!(
-        env.desktop_app_lookups(),
+        env.desktop_app_lookups().split_off(before),
         [vec![
             PACKAGE_FAMILY.to_owned(),
             "Claude_otherpublisher1".to_owned()
@@ -264,6 +267,7 @@ fn assert_nothing_done(home: &TempHome, env: &FakeEnvironment) {
 fn off_windows_nothing_opens() {
     let (home, core, env) = setup();
     env.set_os(OsKind::Linux);
+    let before = env.desktop_app_lookups().len();
 
     for result in [
         core.open_desktop_profile(&uuid(UUID_B)),
@@ -273,7 +277,7 @@ fn off_windows_nothing_opens() {
         assert!(matches!(error, Error::DesktopAppNeedsWindows), "{error:?}");
         assert_eq!(error.code(), "desktop_app_needs_windows");
     }
-    assert!(env.desktop_app_lookups().is_empty());
+    assert_eq!(env.desktop_app_lookups().len(), before);
     assert_nothing_done(&home, &env);
 }
 

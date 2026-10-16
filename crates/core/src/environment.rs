@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
-use crate::AccessToken;
+use crate::desktop_identity::Shortcut;
 use crate::desktop_launch::{DesktopLaunch, DesktopPackage};
 use crate::desktop_process::ProcessListing;
 use crate::instance::InstanceKind;
 use crate::session_guard::ClaudeProcess;
+use crate::{AccessToken, Image};
 
 /// The port through which the core reaches everything outside the filesystem.
 ///
@@ -61,6 +62,24 @@ pub trait Environment: Send + Sync {
     /// Starts the desktop app as `launch` says, with no input or output and no console window,
     /// and returns its process id without waiting for it.
     fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32>;
+
+    /// The icon of the program `program` (the desktop app's `Claude.exe`) at its largest size:
+    /// the logo a desktop profile's icon is drawn from when its package has none. Errors when
+    /// it has no icon or can't be read, and with `Unsupported` off Windows.
+    fn program_icon(&self, program: &Path) -> io::Result<Image>;
+
+    /// The current user's Start-menu Programs folder, where desktop profiles' shortcuts go
+    /// (`%APPDATA%\Microsoft\Windows\Start Menu\Programs`). `Unsupported` off Windows.
+    fn start_menu_programs(&self) -> io::Result<PathBuf>;
+
+    /// mccboard's app, the program a desktop profile's shortcut starts: the running program
+    /// when it is the app, else the app next to it (the CLI's folder). Errors when it isn't
+    /// there.
+    fn mccboard_app(&self) -> io::Result<PathBuf>;
+
+    /// Writes the shell link `shortcut.path` as `shortcut` says, its AppUserModelID included,
+    /// replacing a file already there. `Unsupported` off Windows.
+    fn write_shortcut(&self, shortcut: &Shortcut) -> io::Result<()>;
 
     /// Whether file links (symlinks to files) can be created without elevation: on Windows,
     /// whether Developer Mode is on (ADR 0006); elsewhere always.
@@ -184,6 +203,15 @@ pub enum OsKind {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemEnvironment;
 
+impl SystemEnvironment {
+    /// Tells the environment that the running program is mccboard's app, `program`
+    /// (`std::env::current_exe()`): the program desktop profiles' shortcuts start. The app
+    /// calls it once when it starts; the CLI never does, and finds the app next to itself.
+    pub fn set_app_program(program: PathBuf) {
+        crate::system::set_app_program(program);
+    }
+}
+
 impl Environment for SystemEnvironment {
     fn now(&self) -> Timestamp {
         Timestamp::now()
@@ -269,6 +297,49 @@ impl Environment for SystemEnvironment {
 
     fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32> {
         crate::system::launch_desktop_app(launch)
+    }
+
+    #[cfg(windows)]
+    fn program_icon(&self, program: &Path) -> io::Result<Image> {
+        crate::windows_shell::program_icon(program)
+    }
+
+    #[cfg(not(windows))]
+    fn program_icon(&self, _program: &Path) -> io::Result<Image> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "program icons are read on Windows only",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn start_menu_programs(&self) -> io::Result<PathBuf> {
+        crate::windows_shell::start_menu_programs()
+    }
+
+    #[cfg(not(windows))]
+    fn start_menu_programs(&self) -> io::Result<PathBuf> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the Start menu exists on Windows only",
+        ))
+    }
+
+    fn mccboard_app(&self) -> io::Result<PathBuf> {
+        crate::system::mccboard_app()
+    }
+
+    #[cfg(windows)]
+    fn write_shortcut(&self, shortcut: &Shortcut) -> io::Result<()> {
+        crate::windows_shell::write_shortcut(shortcut)
+    }
+
+    #[cfg(not(windows))]
+    fn write_shortcut(&self, _shortcut: &Shortcut) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Start-menu shortcuts are written on Windows only",
+        ))
     }
 
     fn file_links_allowed(&self) -> bool {

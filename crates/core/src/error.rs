@@ -294,6 +294,18 @@ pub enum Error {
 
     #[error("cannot open the Claude desktop app: {reason}")]
     DesktopAppNotOpened { reason: String },
+
+    #[error("the Start menu's Programs folder wasn't found: {reason}")]
+    StartMenuNotFound { reason: String },
+
+    #[error(
+        "mccboard's app wasn't found, so a desktop profile's Start-menu shortcut has nothing to \
+         start: {reason}"
+    )]
+    AppProgramNotFound { reason: String },
+
+    #[error("cannot write the Start-menu shortcut {}: {reason}", path.display())]
+    ShortcutNotWritten { path: PathBuf, reason: String },
 }
 
 fn describe_desktop_processes(processes: &[DesktopProcess]) -> String {
@@ -367,6 +379,9 @@ impl Error {
             Error::DesktopAppNotInstalled => "desktop_app_not_installed",
             Error::DesktopAppNotMsix { .. } => "desktop_app_not_msix",
             Error::DesktopAppNotOpened { .. } => "desktop_app_not_opened",
+            Error::StartMenuNotFound { .. } => "start_menu_not_found",
+            Error::AppProgramNotFound { .. } => "app_program_not_found",
+            Error::ShortcutNotWritten { .. } => "shortcut_not_written",
         }
     }
 
@@ -399,7 +414,8 @@ impl Error {
             | Error::DesktopProfileInUse { path, .. }
             | Error::IconSourceUnreadable { path, .. }
             | Error::IconUnwritable { path, .. }
-            | Error::DesktopAppNotMsix { path } => Some(path),
+            | Error::DesktopAppNotMsix { path }
+            | Error::ShortcutNotWritten { path, .. } => Some(path),
             _ => None,
         }
     }
@@ -424,7 +440,8 @@ impl Error {
 
     /// Where `config.toml` is wrong (line and reason, from mccboard's own settings), for
     /// [`Error::ConfigCorrupt`]; why the login or the desktop app couldn't open (an OS
-    /// error), for [`Error::LoginNotOpened`] and [`Error::DesktopAppNotOpened`]; the label of
+    /// error), for [`Error::LoginNotOpened`] and [`Error::DesktopAppNotOpened`], and why a
+    /// Start-menu shortcut couldn't be written, for the shortcut errors; the label of
     /// the account the folder belongs to, for [`Error::FolderHasAnotherAccount`]; the
     /// account's label, for the desktop profile errors about an account.
     pub fn detail(&self) -> Option<&str> {
@@ -436,9 +453,11 @@ impl Error {
             | Error::DefaultDesktopProfileAccount { label }
             | Error::DesktopProfileNotFound { label }
             | Error::DefaultProfileColor { label } => Some(label),
-            Error::LoginNotOpened { reason, .. } | Error::DesktopAppNotOpened { reason } => {
-                Some(reason)
-            }
+            Error::LoginNotOpened { reason, .. }
+            | Error::DesktopAppNotOpened { reason }
+            | Error::StartMenuNotFound { reason }
+            | Error::AppProgramNotFound { reason }
+            | Error::ShortcutNotWritten { reason, .. } => Some(reason),
             _ => None,
         }
     }

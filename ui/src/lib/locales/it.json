@@ -249,5 +249,8 @@
   "desktop.guide.why": "Perché: il link che apre Claude andrebbe al profilo predefinito, non a questo.",
   "desktop.guide.closes": "Questa guida si chiude da sola quando il profilo ha effettuato l'accesso.",
   "action.open": "Apri",
-  "account.color_locked": "L'account del profilo desktop predefinito mostra sempre l'arancione di Claude."
+  "account.color_locked": "L'account del profilo desktop predefinito mostra sempre l'arancione di Claude.",
+  "error.start_menu_not_found": "La cartella Programmi del menu Start non è stata trovata, quindi il collegamento del profilo desktop non è stato creato. La modifica è comunque salvata.",
+  "error.app_program_not_found": "L'app di mccboard non è stata trovata, quindi il collegamento del profilo desktop nel menu Start non ha niente da avviare. La modifica è comunque salvata.",
+  "error.shortcut_not_written": "Non è stato possibile scrivere il collegamento del profilo desktop nel menu Start. La modifica è comunque salvata."
 }
