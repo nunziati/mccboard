@@ -1,0 +1,558 @@
+<title>Widget barra mccboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!-- PROTOTYPE, throwaway: taskbar widget, tray icon and logo variants (round 2). Not shipped.
+     Once the variants are picked this file moves to a throwaway branch. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a working bench. Controls on top, the taskbar as Giacomo has it in the middle,
+   comparison strips below, on a quiet blue-grey page so the taskbars carry the color. */
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --fg: #171a21; --muted: #5a6272; --line: #dde2ea;
+  --accent: #2f5bd3; --accent-ink: #ffffff; --note: #fff6dc; --note-line: #ecd48b;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-win: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101318; --panel: #171b22; --fg: #e7eaf0; --muted: #9aa2b1; --line: #2a303b;
+    --accent: #7c9cf5; --accent-ink: #0e1220; --note: #2c2615; --note-line: #5e5126; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101318; --panel: #171b22; --fg: #e7eaf0; --muted: #9aa2b1; --line: #2a303b;
+  --accent: #7c9cf5; --accent-ink: #0e1220; --note: #2c2615; --note-line: #5e5126; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px 96px;
+}
+.page { max-width: 1340px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.page > * { min-width: 0; }
+header h1 { font-size: 26px; font-weight: 600; margin: 0 0 4px; text-wrap: balance; letter-spacing: -0.01em; }
+header p { margin: 0; color: var(--muted); max-width: 72ch; }
+.tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h2 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+section > p.lead { margin: 0 0 12px; color: var(--muted); max-width: 78ch; }
+code { font-family: var(--font-mono); font-size: .92em; }
+
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 22px; align-items: start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.ctl { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.ctl > span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-start; }
+.seg button { font: inherit; font-size: 13px; padding: 4px 9px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+.seg button:hover { border-color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:focus-visible, .strip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.done { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; }
+.done b { color: var(--fg); font-weight: 500; }
+
+.scroller { overflow-x: auto; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
+.stack { display: grid; width: max-content; }
+.strips { display: grid; gap: 10px; }
+.strip { display: grid; grid-template-columns: 200px max-content max-content; gap: 12px; align-items: center; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; width: max-content; }
+.strip[aria-current="true"] { outline: 2px solid var(--accent); outline-offset: -1px; }
+.strip .name { font-weight: 500; }
+.strip .name small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; max-width: 26ch; line-height: 1.35; }
+.striphost { overflow-x: auto; padding-bottom: 4px; }
+
+/* ---------- Windows 11 taskbar mock: fixed palettes, it depicts both taskbars at once ---------- */
+.tb { --tb-bg: rgba(238,241,246,.93); --tb-fg: #1b1b1b; --tb-dim: #5f646c; --tb-track: rgba(0,0,0,.13);
+  --tb-hover: rgba(0,0,0,.055); --tb-tip-bg: #f9f9f9; --tb-tip-line: #dcdcdc; --tb-border: rgba(0,0,0,.08);
+  --wall: linear-gradient(140deg, #8fb8f2 0%, #c9dcf8 45%, #eef3fc 100%);
+  font-family: var(--font-win); color: var(--tb-fg); position: relative; zoom: var(--zoom, 1); }
+.tb.dark { --tb-bg: rgba(30,32,36,.93); --tb-fg: #ffffff; --tb-dim: #a7acb4; --tb-track: rgba(255,255,255,.17);
+  --tb-hover: rgba(255,255,255,.07); --tb-tip-bg: #2b2b2b; --tb-tip-line: #3d3d3d; --tb-border: rgba(255,255,255,.06);
+  --wall: linear-gradient(140deg, #0b1630 0%, #17305f 55%, #2b4c86 100%); }
+.tb .wall { height: 110px; background: var(--wall); }
+.tb .bar { position: relative; height: 48px; width: 1440px; background: var(--tb-bg); border-top: 1px solid var(--tb-border);
+  display: flex; align-items: center; justify-content: flex-end; }
+.tb.crop .bar { width: auto; padding-left: 8px; justify-content: flex-start; }
+.apps { position: absolute; left: 12px; display: flex; align-items: center; gap: 4px; height: 100%; }
+.tb.centered .apps { left: 50%; transform: translateX(-50%); }
+.app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; position: relative; }
+.app:hover { background: var(--tb-hover); }
+.app.on::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 16px; margin-left: -8px; height: 3px; border-radius: 2px; background: #5b9bf0; }
+.app.run::after { content: ""; position: absolute; bottom: 2px; left: 50%; width: 6px; margin-left: -3px; height: 3px; border-radius: 2px; background: var(--tb-dim); }
+.app canvas { width: 24px; height: 24px; }
+.search { height: 32px; width: 180px; border-radius: 16px; background: var(--tb-hover); border: 1px solid var(--tb-border);
+  display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--tb-dim); font-size: 13px; margin: 0 4px; }
+.right { display: flex; align-items: center; height: 100%; gap: 2px; padding-right: 6px; }
+.tray { display: flex; align-items: center; height: 40px; }
+.tray .ic { width: 28px; height: 40px; display: grid; place-items: center; border-radius: 4px; color: var(--tb-fg); }
+.tray .ic:hover { background: var(--tb-hover); }
+.tray canvas { width: 16px; height: 16px; }
+.sys { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px; border-radius: 4px; }
+.sys:hover, .clock:hover { background: var(--tb-hover); }
+.clock { display: grid; text-align: right; font-size: 12px; line-height: 16px; padding: 0 8px; height: 40px; align-content: center; border-radius: 4px; }
+.peek { width: 8px; height: 100%; border-left: 1px solid var(--tb-border); margin-left: 4px; }
+
+/* Widget */
+.wslot { position: relative; display: flex; align-items: center; height: 100%; margin-right: 6px; }
+.w { display: flex; align-items: center; height: 40px; gap: 10px; padding: 0 9px; border-radius: 4px;
+  color: var(--tb-fg); font: 12px/1 var(--font-win); font-variant-numeric: tabular-nums; cursor: default; }
+.w:hover { background: var(--tb-hover); }
+.rowlabels { display: grid; grid-auto-rows: 15px; row-gap: 4px; font-size: 10px; color: var(--tb-dim); }
+.rowlabels span { display: flex; align-items: center; }
+.col { display: flex; align-items: center; gap: 6px; }
+.col.stale { opacity: .42; }
+.alabel { font-weight: 700; font-size: 12px; color: var(--acct); min-width: 8px; text-align: center; }
+.rows { display: grid; grid-auto-rows: 15px; row-gap: 4px; align-items: center; column-gap: 7px; grid-template-columns: auto auto; }
+.rows.only { grid-template-columns: auto; }
+.row { display: contents; }
+.ph { grid-column: 1 / -1; color: var(--tb-dim); letter-spacing: 2px; }
+.na { color: var(--tb-dim); }
+.sep { width: 1px; height: 28px; background: var(--tb-track); }
+/* time to reset: each number keeps a two-digit slot so units line up from row to row */
+.rst { white-space: nowrap; justify-self: end; display: inline-flex; gap: .3em; }
+.u .n { display: inline-block; min-width: 2ch; text-align: right; }
+.u .n.d1 { min-width: 1ch; }
+/* bar types */
+.gauge { position: relative; display: block; width: 52px; height: 11px; }
+.gauge .tr { position: absolute; inset: 0; background: var(--tb-track); border-radius: 2px; }
+.gauge .fi { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accb); border-radius: 2px; }
+.gauge.thin { height: 4px; width: 60px; }
+.gauge.thin .tr, .gauge.thin .fi { border-radius: 2px; }
+.gauge.outline .tr { background: transparent; border: 1px solid var(--accb); }
+.gauge.outline .fi { top: 2px; bottom: 2px; left: 2px; border-radius: 1px; }
+.gauge.round { height: 9px; }
+.gauge.round .tr, .gauge.round .fi { border-radius: 5px; }
+.segs { display: inline-flex; gap: 1px; }
+.segs i { width: 4px; height: 11px; border-radius: 1px; background: var(--tb-track); }
+.segs i.on { background: var(--accb); }
+.mixb { position: relative; display: inline-flex; line-height: 0; }
+.segs.o i { background: transparent; box-shadow: inset 0 0 0 1px var(--accb); }
+.segs.o i.on { background: var(--accb); }
+.mixb.m2 { padding: 1px; border: 1px solid var(--accb); border-radius: 3px; }
+.mixb.m2 .segs i { height: 7px; }
+.mixb .dot { position: absolute; bottom: -4px; width: 3px; height: 3px; margin-left: -1.5px; border-radius: 50%; background: var(--tb-fg); }
+.pace { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--tb-fg); border-radius: 1px; opacity: .85; }
+.vbars { display: flex; gap: 3px; align-items: flex-end; height: 34px; }
+.vbars .vb { position: relative; width: 7px; height: 34px; border-radius: 2px; background: var(--tb-track); overflow: hidden; }
+.vbars .vb i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accb); }
+
+.tip { position: absolute; bottom: 52px; right: 0; min-width: 300px; background: var(--tb-tip-bg); border: 1px solid var(--tb-tip-line);
+  border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 18px; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.18);
+  display: none; z-index: 5; color: var(--tb-fg); }
+.wslot:hover .tip { display: block; }
+.tip b { color: var(--acct); }
+
+/* time-to-reset rules table */
+.rules { border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.rules th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 12px; font-family: var(--font-mono); font-size: 11px; }
+.rules td { padding: 5px 12px; border-top: 1px solid var(--line); }
+.rules td.in { font-family: var(--font-mono); color: var(--muted); white-space: nowrap; }
+.rules td.out { background: var(--tb-bg); color: var(--tb-fg); font: 12px var(--font-win); font-variant-numeric: tabular-nums; }
+.rules td.out .rst { display: flex; justify-content: flex-end; min-width: 80px; }
+.rules td.why { color: var(--muted); }
+
+/* icon tables */
+.icontable { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.icontable caption { text-align: left; padding: 8px 8px 0; }
+.icontable th { font-weight: 500; color: var(--muted); padding: 6px 8px; text-align: center; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.icontable th.rowh { text-align: left; color: var(--fg); font-family: var(--font-body); font-size: 12px; cursor: pointer; }
+.icontable td { padding: 8px; text-align: center; vertical-align: middle; }
+.icontable td.lt { background: rgba(238,241,246,1); }
+.icontable td.dk { background: rgb(30,32,36); }
+.icontable td.wall { background: linear-gradient(140deg, #17305f, #2b4c86); }
+.icontable canvas { display: block; margin: 0 auto; }
+.icontable canvas.px { image-rendering: pixelated; }
+.icontable tr[aria-current="true"] th.rowh { color: var(--accent); }
+.themes { display: grid; gap: 14px; }
+
+.switcher { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 6px; background: #111; color: #fff; border-radius: 999px; padding: 6px 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); font: 500 13px var(--font-body); z-index: 20; }
+.switcher button { width: 30px; height: 30px; border-radius: 50%; border: 0; background: #2a2a2a; color: #fff; font-size: 16px; cursor: pointer; }
+.switcher button:hover { background: #3a3a3a; }
+.switcher span { min-width: 190px; text-align: center; }
+</style>
+
+<div class="page">
+  <header>
+    <div class="tag">Prototipo · secondo giro · da buttare dopo la scelta</div>
+    <h1>Widget sulla barra delle applicazioni</h1>
+    <p>La barra è ricostruita come la tua: 1440 px logici, icone a sinistra, prima quella scura. Il layout scelto è "solo barre": qui ne provi sei tipi, con le frecce in basso o ← e → da tastiera. Sotto trovi le regole del tempo al reset e le proposte di logo, che diventano l'icona fissa del tray e l'icona dell'app. Passa il mouse sul widget per il tooltip.</p>
+  </header>
+
+  <div class="done" aria-label="Già scelto"><span>Già scelto:</span><b>layout solo barre</b><b>tempo 3d 4h 7m</b><b>etichetta account no (configurabile)</b><b>icona a numeri: quadrato pieno</b><b>sessione inattiva: 0% e trattino</b><b>logo L4 (per ora)</b><b>barra: un mix di segmenti, contorno e ritmo</b></div>
+
+  <div class="controls" id="controls"></div>
+
+  <section>
+    <h2>La barra intera</h2>
+    <p class="lead">Grandezza reale al 100% di scala. Su Windows vedi il carattere vero, Segoe UI; altrove il più simile disponibile.</p>
+    <div class="scroller"><div class="stack" id="stage"></div></div>
+  </section>
+
+  <section>
+    <h2>Tipi di barra</h2>
+    <p class="lead">Stessi valori, solo la parte destra della barra. Clic su una riga per sceglierla.</p>
+    <div class="striphost"><div class="strips" id="bars"></div></div>
+  </section>
+
+  <section>
+    <h2>Tempo al reset: le regole</h2>
+    <p class="lead">Niente zeri iniziali nei numeri; l'unità più a sinistra sparisce finché vale 0; ogni numero tiene lo spazio di due cifre, così ore e minuti restano in colonna da una riga all'altra. La colonna "Nel widget" è allineata a destra come nel widget.</p>
+    <div class="scroller"><table class="rules tb dark" id="rules" style="--zoom:1"></table></div>
+  </section>
+
+  <section>
+    <h2>Logo</h2>
+    <p class="lead">Cinque monogrammi. Per ognuno: l'icona dell'app (riquadro colorato, su sfondo scrivania) e l'icona del tray, monocromatica come le altre icone di sistema, a 16, 20, 24 e 32 px su barra scura e chiara, più il 16 px ingrandito ×4. Clic su una riga per metterlo nella barra qui sopra.</p>
+    <div class="scroller"><table class="icontable" id="logos"></table></div>
+  </section>
+
+  <section>
+    <h2>Icona a numeri (widget spento)</h2>
+    <p class="lead">Quadrato pieno, già scelto: la percentuale settimanale dell'account messo peggio, nel suo colore. Qui per riferimento a tutte le dimensioni.</p>
+    <div class="themes" id="numeric"></div>
+  </section>
+</div>
+
+<div class="switcher" role="group" aria-label="Tipo di barra">
+  <button id="prev" aria-label="Barra precedente">‹</button>
+  <span id="swlabel"></span>
+  <button id="next" aria-label="Barra successiva">›</button>
+</div>
+
+<script>
+(function () {
+  var NOW = new Date(2026, 9, 17, 9, 24);
+  var BASE = [
+    { id: 'A', color: '#2563eb', session: { u: 7, mins: 106, len: 300 }, weekly: { u: 23, mins: 5 * 1440 + 11 * 60 + 36, len: 10080 }, models: [['Fable', 0]] },
+    { id: 'B', color: '#0ce938', session: { u: 31, mins: 4 * 60 + 3, len: 300 }, weekly: { u: 12, mins: 6 * 1440 + 0 * 60 + 41, len: 10080 }, models: [] },
+    { id: 'C', color: '#facc15', session: { u: 64, mins: 38, len: 300 }, weekly: { u: 88, mins: 1 * 1440 + 7 * 60 + 5, len: 10080 }, models: [] }
+  ];
+  var BARS = [
+    { k: 'mix1', name: 'Mix 1', note: 'segmenti con contorno, tacca del ritmo che li attraversa' },
+    { k: 'mix2', name: 'Mix 2', note: 'contorno unico attorno ai segmenti, tacca del ritmo' },
+    { k: 'mix3', name: 'Mix 3', note: 'segmenti con contorno, ritmo come puntino sotto la barra' },
+    { k: 'solid', name: 'Piena', note: 'quella del primo giro' },
+    { k: 'seg', name: 'A segmenti', note: '10 tacche da 10%, come il tool di prima' },
+    { k: 'thin', name: 'Linea sottile', note: 'più lunga e bassa, meno peso visivo' },
+    { k: 'round', name: 'Arrotondata', note: 'pillola, angoli tondi' },
+    { k: 'outline', name: 'Con contorno', note: 'bordo nel colore: si vede anche a 0% e con i colori chiari' },
+    { k: 'pace', name: 'Con ritmo', note: 'tacca bianca = tempo già passato della finestra: se la barra la supera, stai consumando più in fretta del tempo' },
+    { k: 'vert', name: 'Verticali', note: 'per account due colonnine, sessione e settimana, con i reset accanto' }
+  ];
+  var SCENARIOS = [
+    { k: 'ok', name: 'Tutto normale' }, { k: 'stale', name: 'B: lettura vecchia' }, { k: 'renew', name: 'B: token in rinnovo' },
+    { k: 'none', name: 'B: nessuna lettura' }, { k: 'idle', name: 'B: sessione inattiva' }
+  ];
+  var LOGOS = [
+    { k: 'L1', name: 'm geometrica', note: 'tre aste e due archi, spessore pieno' },
+    { k: 'L2', name: 'm a quadranti', note: 'gli archi sono due quadranti con la lancetta' },
+    { k: 'L3', name: 'm nel riquadro', note: 'm in negativo dentro un riquadro pieno' },
+    { k: 'L4', name: 'm che si riempie', note: 'la m come una barra: piena fino a un livello' },
+    { k: 'L5', name: 'mc', note: 'm e c legate, multi Claude' }
+  ];
+  var TILES = [{ k: 'graphite', name: 'Grafite', c: '#1f2430' }, { k: 'indigo', name: 'Indaco', c: '#3446c7' }, { k: 'ab', name: 'A e B', c: '' }];
+
+  var S = { bar: 'mix1', label: 'no', count: '2', scenario: 'ok', widget: 'on', logo: 'L4', tile: 'graphite', align: 'left', zoom: '1' };
+  var KEY = 'mccboard-widget-proto-3';
+  try { var saved = JSON.parse(localStorage.getItem(KEY) || '{}'); for (var k in saved) if (k in S) S[k] = saved[k]; } catch (e) {}
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+  // colour helpers
+  function rgb(h) { var n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+  function hex(c) { return '#' + c.map(function (v) { return Math.round(v).toString(16).padStart(2, '0'); }).join(''); }
+  function mix(a, b, t) { var x = rgb(a), y = rgb(b); return hex([0, 1, 2].map(function (i) { return x[i] + (y[i] - x[i]) * t; })); }
+  function lum(h) { var c = rgb(h).map(function (v) { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }); return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]; }
+  function textColor(c, theme) { if (theme === 'dark') return lum(c) < .25 ? mix(c, '#ffffff', .38) : c; return lum(c) > .45 ? mix(c, '#000000', .42) : c; }
+  function barColor(c, theme) { return theme === 'light' && lum(c) > .6 ? mix(c, '#000000', .12) : c; }
+
+  function accounts() {
+    var list = BASE.slice(0, +S.count).map(function (a) { return JSON.parse(JSON.stringify(a)); });
+    var b = list[1];
+    if (S.scenario === 'stale') b.stale = true;
+    if (S.scenario === 'renew') b.state = 'renew';
+    if (S.scenario === 'none') b.state = 'none';
+    if (S.scenario === 'idle') b.session = { u: 0, mins: null, len: 300 };
+    return list;
+  }
+
+  // ---------- time to reset: no leading zeros, leading zero units dropped, two-digit slots ----------
+  function parts(mins) {
+    var p = [[Math.floor(mins / 1440), 'd'], [Math.floor(mins % 1440 / 60), 'h'], [mins % 60, 'm']];
+    while (p.length > 1 && p[0][0] === 0) p.shift();
+    return p;
+  }
+  function fmt(mins) {
+    if (mins == null) return '<span class="rst"><span class="na">—</span></span>';
+    return '<span class="rst">' + parts(mins).map(function (x) {
+      return '<span class="u"><span class="n' + (x[1] === 'd' ? ' d1' : '') + '">' + x[0] + '</span>' + x[1] + '</span>';
+    }).join('') + '</span>';
+  }
+  function plain(mins) { return parts(mins).map(function (x) { return x[0] + x[1]; }).join(' '); }
+
+  // ---------- widget ----------
+  function bar(w, kind) {
+    var u = w.u;
+    if (kind.indexOf('mix') === 0) {
+      var lit = u > 0 ? Math.max(1, Math.round(u / 10)) : 0, sg = '<span class="segs' + (kind === 'mix2' ? '' : ' o') + '">';
+      for (var j = 0; j < 10; j++) sg += '<i class="' + (j < lit ? 'on' : '') + '"></i>';
+      sg += '</span>';
+      var at = w.mins == null ? null : Math.round((1 - w.mins / w.len) * 100), mark = '';
+      if (at != null) mark = kind === 'mix3' ? '<span class="dot" style="left:' + at + '%"></span>' : '<span class="pace" style="left:' + at + '%"></span>';
+      return '<span class="mixb ' + (kind === 'mix2' ? 'm2' : '') + '">' + sg + mark + '</span>';
+    }
+    if (kind === 'seg') {
+      var on = u > 0 ? Math.max(1, Math.round(u / 10)) : 0, s = '<span class="segs">';
+      for (var i = 0; i < 10; i++) s += '<i class="' + (i < on ? 'on' : '') + '"></i>';
+      return s + '</span>';
+    }
+    var cls = kind === 'thin' ? 'gauge thin' : kind === 'outline' ? 'gauge outline' : kind === 'round' ? 'gauge round' : 'gauge';
+    var fill = kind === 'outline' ? 'calc((100% - 4px) * ' + u / 100 + ')' : u + '%';
+    var pace = '';
+    if (kind === 'pace' && w.mins != null) pace = '<span class="pace" style="left:' + Math.round((1 - w.mins / w.len) * 100) + '%"></span>';
+    return '<span class="' + cls + '"><span class="tr"></span><span class="fi" style="width:' + fill + '"></span>' + pace + '</span>';
+  }
+  function widget(list, theme, kind) {
+    var cols = list.map(function (a) {
+      var tc = textColor(a.color, theme), bc = barColor(a.color, theme), head = S.label === 'yes' ? '<span class="alabel">' + a.id + '</span>' : '';
+      var vert = kind === 'vert';
+      var rows = [a.session, a.weekly].map(function (w) {
+        if (a.state === 'renew') return '<div class="row"><span class="ph">···</span></div>';
+        if (a.state === 'none') return '<div class="row"><span class="ph">—</span></div>';
+        return '<div class="row">' + (vert ? '' : bar(w, kind)) + fmt(w.mins) + '</div>';
+      }).join('');
+      var vb = '';
+      if (vert) vb = '<span class="vbars">' + [a.session, a.weekly].map(function (w) {
+        return '<span class="vb"><i style="height:' + (a.state ? 0 : w.u) + '%"></i></span>'; }).join('') + '</span>';
+      return '<div class="col' + (a.stale ? ' stale' : '') + '" style="--acct:' + tc + ';--accb:' + bc + '">' + head + vb +
+        '<div class="rows' + (vert ? ' only' : '') + '">' + rows + '</div></div>';
+    }).join('<span class="sep"></span>');
+    return '<div class="w"><div class="rowlabels"><span>5h</span><span>7d</span></div>' + cols + '</div>';
+  }
+  function at(mins) {
+    var t = new Date(NOW.getTime() + mins * 60000), hm = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+    return mins < 1440 ? hm : t.toLocaleDateString('it-IT', { weekday: 'short' }) + ' ' + hm;
+  }
+  function tooltip(list, theme) {
+    return '<div class="tip">' + list.map(function (a) {
+      var tc = textColor(a.color, theme), name = '<b style="--acct:' + tc + '">' + a.id + '</b>';
+      if (a.state === 'renew') return '<div>' + name + ' · token scaduto: Claude Code lo sta rinnovando</div>';
+      if (a.state === 'none') return '<div>' + name + ' · nessuna lettura</div>';
+      var s = a.session.mins == null ? 'sessione inattiva' : 'sessione ' + a.session.u + '%, reset alle ' + at(a.session.mins);
+      var m = a.models.map(function (x) { return x[0] + ' ' + x[1] + '%'; }).join(', ');
+      return '<div>' + name + ' · ' + s + ' · settimanale ' + a.weekly.u + '%, reset ' + at(a.weekly.mins) + (m ? ' · ' + m : '') + (a.stale ? ' · <i>letta 9 min fa</i>' : '') + '</div>';
+    }).join('') + '</div>';
+  }
+
+  // ---------- logos ----------
+  var M = 'M4 20V10a4 4 0 0 1 8 0v10M12 10a4 4 0 0 1 8 0v10';
+  function tileFill(ctx, size, tile) {
+    if (tile === 'ab') { var g = ctx.createLinearGradient(0, 0, size, size); g.addColorStop(0, '#2563eb'); g.addColorStop(.5, '#2563eb'); g.addColorStop(.5, '#0bbf2e'); g.addColorStop(1, '#0bbf2e'); return g; }
+    return TILES.filter(function (t) { return t.k === tile; })[0].c;
+  }
+  function rr(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  // Draws logo `k` as a glyph of colour `ink` in a size×size box, inset by `pad` (0..1 of size).
+  function glyph(ctx, k, size, ink, pad, track) {
+    var s = size * (1 - 2 * pad) / 24, o = size * pad;
+    ctx.save(); ctx.translate(o, o); ctx.scale(s, s);
+    ctx.strokeStyle = ink; ctx.fillStyle = ink; ctx.lineJoin = 'round';
+    var w = size <= 20 ? 3.9 : 3.4;
+    if (k === 'L1') { ctx.lineWidth = w; ctx.lineCap = 'butt'; ctx.stroke(new Path2D(M)); }
+    if (k === 'L2') {
+      ctx.lineWidth = w * .82; ctx.lineCap = 'butt'; ctx.stroke(new Path2D(M));
+      ctx.lineWidth = size <= 20 ? 2.2 : 1.7; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(8, 11.5); ctx.lineTo(10.2, 8.6); ctx.moveTo(16, 11.5); ctx.lineTo(13.8, 9.2); ctx.stroke();
+    }
+    if (k === 'L3') {
+      ctx.restore(); ctx.save();
+      rr(ctx, o, o, size - 2 * o, size - 2 * o, (size - 2 * o) * .24); ctx.fillStyle = ink; ctx.fill();
+      ctx.globalCompositeOperation = 'destination-out';
+      var s3 = (size - 2 * o) * .74 / 24, o3 = o + (size - 2 * o) * .13;
+      ctx.translate(o3, o3 + (size - 2 * o) * .02); ctx.scale(s3, s3); ctx.lineWidth = size <= 20 ? 4.4 : 3.8; ctx.strokeStyle = '#000'; ctx.stroke(new Path2D(M));
+    }
+    if (k === 'L4') {
+      ctx.lineWidth = w; ctx.lineCap = 'butt';
+      ctx.strokeStyle = track; ctx.stroke(new Path2D(M));
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 12.5, 24, 12); ctx.clip(); ctx.strokeStyle = ink; ctx.stroke(new Path2D(M)); ctx.restore();
+    }
+    if (k === 'L5') {
+      ctx.lineWidth = w * .92; ctx.lineCap = 'butt';
+      ctx.stroke(new Path2D('M2.5 20V11a2.9 2.9 0 0 1 5.8 0v9M8.3 11a2.9 2.9 0 0 1 5.8 0v9'));
+      ctx.beginPath(); ctx.arc(18.6, 14, 4.5, -0.32 * Math.PI, 0.32 * Math.PI, true); ctx.lineCap = 'round'; ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawLogo(cv, spec) {
+    var size = spec.size, dpr = spec.crisp ? 1 : Math.min(2, window.devicePixelRatio || 1);
+    cv.width = size * dpr; cv.height = size * dpr;
+    var ctx = cv.getContext('2d'); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, size, size);
+    if (spec.mode === 'app') {
+      rr(ctx, size * .06, size * .06, size * .88, size * .88, size * .22); ctx.fillStyle = tileFill(ctx, size, spec.tile); ctx.fill();
+      glyph(ctx, spec.logo, size, '#ffffff', .2, 'rgba(255,255,255,.35)');
+    } else {
+      var ink = spec.theme === 'dark' ? '#ffffff' : '#1b1b1b', track = spec.theme === 'dark' ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.3)';
+      glyph(ctx, spec.logo, size, ink, size <= 20 ? .02 : .06, track);
+    }
+  }
+
+  // ---------- numeric tray icon (chosen: filled square) ----------
+  var FONT = { '0': ['111', '101', '101', '101', '111'], '1': ['010', '110', '010', '010', '111'], '2': ['111', '001', '111', '100', '111'],
+    '3': ['111', '001', '111', '001', '111'], '4': ['101', '101', '111', '001', '001'], '5': ['111', '100', '111', '001', '111'],
+    '6': ['111', '100', '111', '101', '111'], '7': ['111', '001', '001', '001', '001'], '8': ['111', '101', '111', '101', '111'], '9': ['111', '101', '111', '001', '111'] };
+  function digits(ctx, text, size, color) {
+    var n = text.length, s, maxW = size - 2;
+    for (s = 8; s > 1; s--) if (n * 3 * s + (n - 1) * s <= maxW && 5 * s <= maxW) break;
+    var w = n * 3 * s + (n - 1) * s, x0 = Math.round(size / 2 - w / 2), y0 = Math.round(size / 2 - 5 * s / 2);
+    ctx.fillStyle = color;
+    for (var i = 0; i < n; i++) { var g = FONT[text[i]]; for (var r = 0; r < 5; r++) for (var c = 0; c < 3; c++) if (g[r][c] === '1') ctx.fillRect(x0 + i * 4 * s + c * s, y0 + r * s, s, s); }
+  }
+  function drawNumeric(cv, spec) {
+    var size = spec.size; cv.width = size; cv.height = size;
+    var ctx = cv.getContext('2d'); ctx.clearRect(0, 0, size, size);
+    if (spec.state === 'stale') ctx.globalAlpha = .45;
+    rr(ctx, 0, 0, size, size, Math.max(2, Math.round(size * .22))); ctx.fillStyle = spec.color; ctx.fill();
+    var ink = lum(spec.color) > .45 ? '#141414' : '#ffffff', u = Math.max(2, Math.round(size / 8));
+    ctx.fillStyle = ink;
+    if (spec.state === 'renew') { var x = Math.round((size - 5 * u) / 2), y = Math.round((size - u) / 2); for (var i = 0; i < 3; i++) ctx.fillRect(x + i * 2 * u, y, u, u); }
+    else if (spec.state === 'none') { var w = Math.round(size * .5); ctx.fillRect(Math.round((size - w) / 2), Math.round((size - u) / 2), w, u); }
+    else digits(ctx, String(spec.value), size, ink);
+  }
+  function paint(root) {
+    root.querySelectorAll('canvas[data-spec]').forEach(function (cv) {
+      var spec = JSON.parse(cv.getAttribute('data-spec'));
+      if (spec.kind === 'num') drawNumeric(cv, spec); else drawLogo(cv, spec);
+      var show = spec.show || spec.size; cv.style.width = show + 'px'; cv.style.height = show + 'px';
+      if (spec.show && spec.show !== spec.size) cv.classList.add('px');
+    });
+  }
+  function canvas(spec) { return '<canvas data-spec=\'' + JSON.stringify(spec) + '\'></canvas>'; }
+
+  // ---------- taskbar ----------
+  var SVG = {
+    start: '<svg width="20" height="20" viewBox="0 0 20 20"><rect x="1" y="1" width="8.4" height="8.4" rx="1" fill="#2b7fe0"/><rect x="10.6" y="1" width="8.4" height="8.4" rx="1" fill="#3a8ef0"/><rect x="1" y="10.6" width="8.4" height="8.4" rx="1" fill="#1f6fd0"/><rect x="10.6" y="10.6" width="8.4" height="8.4" rx="1" fill="#2b7fe0"/></svg>',
+    folder: '<svg width="24" height="24" viewBox="0 0 24 24"><path d="M2 6.5A1.5 1.5 0 0 1 3.5 5h5l2 2h10A1.5 1.5 0 0 1 22 8.5v10A1.5 1.5 0 0 1 20.5 20h-17A1.5 1.5 0 0 1 2 18.5z" fill="#f2b51d"/><path d="M2 9h20v9.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 2 18.5z" fill="#ffd255"/></svg>',
+    globe: '<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1aa6c8"/><path d="M5 9c4-5 13-4 15 3-3-3-8-3-10 1s1 7 5 7c-6 1-12-4-10-11z" fill="#54e08a"/></svg>',
+    term: '<svg width="24" height="24" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3" fill="#2d2f36"/><path d="M6 9l3 3-3 3" stroke="#e8e8e8" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 15.5h6" stroke="#e8e8e8" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    claude: '<svg width="24" height="24" viewBox="0 0 24 24"><g stroke="#d97757" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6 5.6 18.4"/></g></svg>',
+    claudeB: '<svg width="24" height="24" viewBox="0 0 24 24"><g stroke="#0ce938" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6 5.6 18.4"/></g></svg>',
+    code: '<svg width="24" height="24" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4" fill="#1f7fd6"/><path d="M9 8l-4 4 4 4M15 8l4 4-4 4" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    search: '<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    chevron: '<svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 10l4-4 4 4" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    wifi: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M1.5 6a9.5 9.5 0 0 1 13 0"/><path d="M3.8 8.5a6.2 6.2 0 0 1 8.4 0"/><path d="M6.1 11a3 3 0 0 1 3.8 0"/><circle cx="8" cy="13.2" r=".6" fill="currentColor"/></svg>',
+    vol: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"><path d="M2 6h2.5L8 3v10L4.5 10H2z"/><path d="M10.5 5.5a3.5 3.5 0 0 1 0 5"/><path d="M12.5 3.5a6.3 6.3 0 0 1 0 9"/></svg>',
+    batt: '<svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="4.5" width="13.5" height="7" rx="1.6"/><rect x="2.8" y="6.2" width="7.5" height="3.6" rx=".6" fill="currentColor" stroke="none"/><path d="M16 7v2" stroke-linecap="round"/></svg>'
+  };
+  function worst(list) { var w = null; list.forEach(function (a) { if (!w || (a.state ? -1 : a.weekly.u) > (w.state ? -1 : w.weekly.u)) w = a; }); return w; }
+  function trayIcon(list, theme) {
+    if (S.widget === 'on') return canvas({ mode: 'tray', logo: S.logo, theme: theme, size: 16 });
+    var w = worst(list);
+    return canvas({ kind: 'num', size: 16, color: w.color, value: w.weekly.u, state: w.state || (w.stale ? 'stale' : '') });
+  }
+  function rightPart(list, theme, kind) {
+    return '<div class="right">' +
+      (S.widget === 'on' ? '<div class="wslot">' + widget(list, theme, kind) + tooltip(list, theme) + '</div>' : '') +
+      '<div class="tray"><span class="ic">' + SVG.chevron + '</span><span class="ic" title="mccboard">' + trayIcon(list, theme) + '</span></div>' +
+      '<div class="sys">' + SVG.wifi + SVG.vol + SVG.batt + '</div>' +
+      '<div class="clock"><span>09:24</span><span>17/10/2026</span></div><span class="peek"></span></div>';
+  }
+  function taskbar(theme) {
+    var list = accounts();
+    return '<div class="tb ' + theme + (S.align === 'center' ? ' centered' : '') + '" style="--zoom:' + S.zoom + '"><div class="wall"></div><div class="bar">' +
+      '<div class="apps"><span class="app">' + SVG.start + '</span><span class="search">' + SVG.search + 'Cerca</span>' +
+      '<span class="app run">' + SVG.folder + '</span><span class="app run">' + SVG.globe + '</span><span class="app on">' + SVG.term + '</span>' +
+      '<span class="app run">' + SVG.claude + '</span><span class="app run">' + SVG.claudeB + '</span><span class="app">' + SVG.code + '</span>' +
+      '<span class="app run" title="mccboard">' + canvas({ mode: 'app', logo: S.logo, tile: S.tile, size: 24 }) + '</span></div>' +
+      rightPart(list, theme, S.bar) + '</div></div>';
+  }
+  function crop(theme, kind) { return '<div class="tb crop ' + theme + '"><div class="bar">' + rightPart(accounts(), theme, kind) + '</div></div>'; }
+
+  // ---------- sections ----------
+  var CASES = [
+    [3 * 1440 + 4 * 60 + 7, 'nessuno zero davanti ai numeri'],
+    [6 * 1440 + 23 * 60 + 59, 'numeri a due cifre: stessa larghezza delle righe sopra e sotto'],
+    [3 * 1440 + 0 * 60 + 7, 'lo zero in mezzo resta'],
+    [3 * 1440 + 4 * 60 + 0, 'lo zero in fondo resta'],
+    [5 * 60 + 3, 'giorni a 0: spariscono'],
+    [0 * 60 + 42, 'giorni e ore a 0: resta solo m (da confermare)'],
+    [0, 'meno di un minuto (da confermare)']
+  ];
+  function rulesHTML() {
+    return '<tr><th>Mancano</th><th>Nel widget</th><th>Perché</th></tr>' + CASES.map(function (c) {
+      var m = c[0], d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60;
+      return '<tr><td class="in">' + d + 'd ' + String(h).padStart(2, '0') + 'h ' + String(mm).padStart(2, '0') + 'm</td><td class="out">' + fmt(m) + '</td><td class="why">' + c[1] + '</td></tr>';
+    }).join('');
+  }
+  function logosHTML() {
+    var head = '<tr><th></th><th>App 64</th><th>App 32</th><th>Tray scura 16</th><th>20</th><th>24</th><th>32</th><th>16 ×4</th><th>Tray chiara 16</th><th>20</th><th>24</th><th>32</th><th>16 ×4</th></tr>';
+    return '<caption class="tag">Riquadro dell\'app: ' + TILES.filter(function (t) { return t.k === S.tile; })[0].name + '</caption>' + head + LOGOS.map(function (l) {
+      var row = '<tr data-k="logo" data-v="' + l.k + '" aria-current="' + (l.k === S.logo) + '"><th class="rowh">' + l.k + ' · ' + l.name + '<br><span style="color:var(--muted);font-weight:400">' + l.note + '</span></th>';
+      row += '<td class="wall">' + canvas({ mode: 'app', logo: l.k, tile: S.tile, size: 64 }) + '</td><td class="wall">' + canvas({ mode: 'app', logo: l.k, tile: S.tile, size: 32 }) + '</td>';
+      ['dark', 'light'].forEach(function (theme) {
+        var cls = theme === 'dark' ? 'dk' : 'lt';
+        [16, 20, 24, 32].forEach(function (sz) { row += '<td class="' + cls + '">' + canvas({ mode: 'tray', logo: l.k, theme: theme, size: sz, crisp: true }) + '</td>'; });
+        row += '<td class="' + cls + '">' + canvas({ mode: 'tray', logo: l.k, theme: theme, size: 16, show: 64, crisp: true }) + '</td>';
+      });
+      return row + '</tr>';
+    }).join('');
+  }
+  var SAMPLES = [
+    { t: '7 · blu', color: '#2563eb', value: 7 }, { t: '42 · verde B', color: '#0ce938', value: 42 }, { t: '88 · arancio', color: '#d97757', value: 88 },
+    { t: '42 · giallo', color: '#facc15', value: 42 }, { t: '100 · blu', color: '#2563eb', value: 100 },
+    { t: 'vecchia', color: '#2563eb', value: 42, state: 'stale' }, { t: 'rinnovo', color: '#2563eb', value: 0, state: 'renew' }, { t: 'nessuna', color: '#2563eb', value: 0, state: 'none' }
+  ];
+  function numericHTML() {
+    return '<div class="scroller"><table class="icontable"><tr><th></th>' + SAMPLES.map(function (s) { return '<th>' + s.t + '</th>'; }).join('') + '</tr>' +
+      [16, 20, 24, 32].map(function (sz) {
+        return '<tr><th class="rowh" style="cursor:default">' + sz + ' px</th>' + SAMPLES.map(function (s) {
+          return '<td class="dk">' + canvas({ kind: 'num', size: sz, color: s.color, value: s.value, state: s.state || '' }) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</table></div>';
+  }
+
+  var GROUPS = [
+    { key: 'bar', label: 'Tipo di barra', opts: BARS.map(function (b) { return [b.k, b.name]; }) },
+    { key: 'label', label: 'Etichetta account', opts: [['no', 'No'], ['yes', 'Sì']] },
+    { key: 'count', label: 'Account', opts: [['2', 'A e B'], ['3', 'A, B e C']] },
+    { key: 'scenario', label: 'Situazione', opts: SCENARIOS.map(function (s) { return [s.k, s.name]; }) },
+    { key: 'widget', label: 'Widget', opts: [['on', 'Acceso (icona fissa)'], ['off', 'Spento (icona a numeri)']] },
+    { key: 'logo', label: 'Logo', opts: LOGOS.map(function (l) { return [l.k, l.k + ' · ' + l.name]; }) },
+    { key: 'tile', label: 'Riquadro dell\'app', opts: TILES.map(function (t) { return [t.k, t.name]; }) },
+    { key: 'align', label: 'Icone della barra', opts: [['left', 'A sinistra (come le tue)'], ['center', 'Centrate']] },
+    { key: 'zoom', label: 'Zoom della barra', opts: [['1', '1×'], ['2', '2×']] }
+  ];
+  function controlsHTML() {
+    return GROUPS.map(function (g) {
+      return '<div class="ctl"><span id="lbl-' + g.key + '">' + g.label + '</span><div class="seg" role="group" aria-labelledby="lbl-' + g.key + '">' +
+        g.opts.map(function (o) { return '<button type="button" id="b-' + g.key + '-' + o[0] + '" data-k="' + g.key + '" data-v="' + o[0] + '" aria-pressed="' + (S[g.key] === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div>';
+    }).join('');
+  }
+
+  function render() {
+    document.getElementById('controls').innerHTML = controlsHTML();
+    document.getElementById('stage').innerHTML = taskbar('dark') + taskbar('light');
+    document.getElementById('bars').innerHTML = BARS.map(function (b) {
+      return '<div class="strip" role="button" tabindex="0" data-k="bar" data-v="' + b.k + '" aria-current="' + (b.k === S.bar) + '"><div class="name">' + b.name + '<small>' + b.note + '</small></div>' +
+        crop('dark', b.k) + crop('light', b.k) + '</div>';
+    }).join('');
+    document.getElementById('rules').innerHTML = rulesHTML();
+    document.getElementById('logos').innerHTML = logosHTML();
+    document.getElementById('numeric').innerHTML = numericHTML();
+    paint(document);
+    document.getElementById('swlabel').textContent = BARS.filter(function (b) { return b.k === S.bar; })[0].name;
+  }
+  function set(k, v) { S[k] = v; save(); render(); }
+  document.addEventListener('click', function (e) { var t = e.target.closest('[data-k]'); if (t) set(t.getAttribute('data-k'), t.getAttribute('data-v')); });
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t && t.matches && t.matches('input, textarea, [contenteditable]')) return;
+    if ((e.key === 'Enter' || e.key === ' ') && t.matches && t.matches('.strip')) { e.preventDefault(); set(t.getAttribute('data-k'), t.getAttribute('data-v')); return; }
+    if (e.key === 'ArrowRight') cycle(1);
+    if (e.key === 'ArrowLeft') cycle(-1);
+  });
+  function cycle(d) { var i = BARS.findIndex(function (b) { return b.k === S.bar; }); set('bar', BARS[(i + d + BARS.length) % BARS.length].k); }
+  document.getElementById('prev').addEventListener('click', function (e) { e.stopPropagation(); cycle(-1); });
+  document.getElementById('next').addEventListener('click', function (e) { e.stopPropagation(); cycle(1); });
+  render();
+})();
+</script>
