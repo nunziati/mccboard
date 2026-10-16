@@ -81,6 +81,14 @@ pub(crate) fn desktop_processes(listed: Vec<ProcessListing>) -> Vec<DesktopProce
     listed.into_iter().filter_map(interpret).collect()
 }
 
+/// Whether `listing` is one of the desktop app's processes (its main process or a helper),
+/// rather than Claude Code. The session guard leaves these out: the app's `Claude.exe` stays
+/// open in the tray, and would otherwise hold its instance "in use" all day. The sessions of
+/// its Code tab are Claude Code processes of their own and still count.
+pub(crate) fn is_desktop_app(listing: &ProcessListing) -> bool {
+    interpret(listing.clone()).is_some()
+}
+
 /// The desktop app's process `listing` is, or `None` for any other program.
 pub(crate) fn interpret(listing: ProcessListing) -> Option<DesktopProcess> {
     let data_folder = user_data_dir(&listing.args);
@@ -243,6 +251,45 @@ mod tests {
             name: "Claude.exe".into(),
             exe: exe.map(PathBuf::from),
             args: args.iter().map(|a| (*a).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_desktop_app_is_not_a_claude_code_session() {
+        let code_tab_session = r"C:\Users\me\AppData\Roaming\Claude\claude-code\2.1.0\claude.exe";
+        let native = r"C:\Users\me\.local\bin\claude.exe";
+        let app = [
+            listing(10, Some(EXE), &[EXE]),
+            listing(11, Some(EXE), &[EXE, "--type=renderer"]),
+            listing(
+                12,
+                Some(EXE),
+                &[EXE, r"--user-data-dir=C:\Users\me\AppData\Local\Claude-B"],
+            ),
+            listing(
+                13,
+                None,
+                &[
+                    "Claude.exe",
+                    r"--user-data-dir=C:\Users\me\AppData\Local\Claude-B",
+                ],
+            ),
+        ];
+        for process in &app {
+            assert!(is_desktop_app(process), "{process:?}");
+        }
+        let claude_code = [
+            listing(20, Some(native), &[native]),
+            listing(21, Some(native), &[native, "--resume"]),
+            listing(
+                22,
+                Some(code_tab_session),
+                &[code_tab_session, "--output-format", "stream-json"],
+            ),
+            listing(23, None, &[]),
+        ];
+        for process in &claude_code {
+            assert!(!is_desktop_app(process), "{process:?}");
         }
     }
 

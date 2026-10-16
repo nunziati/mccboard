@@ -26,6 +26,10 @@ use std::time::{Duration, Instant};
 use crate::{AccountUuid, Language, RunningProfile, TOOLTIP_MAX_UTF16};
 
 /// How often a profile's icon is applied again while nothing says it changed.
+///
+/// To settle on the laptop: ADR 0008 says the app doesn't reset properties set from outside,
+/// ticket #38 expects it resets its tray icon on notifications. If B's icon never turns white
+/// again, drop this periodic repaint (keep `TaskbarCreated`); if it does, update ADR 0008.
 pub const PROFILE_TRAY_REAPPLY_EVERY: Duration = Duration::from_secs(10);
 
 /// How long after Explorer restarts every look applies the icons again.

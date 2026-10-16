@@ -57,7 +57,7 @@ pub(crate) fn mccboard_app() -> io::Result<PathBuf> {
 }
 
 /// Every running Claude Code process of this machine that mccboard can see, mccboard's own
-/// process left out.
+/// process and the desktop app's processes left out.
 pub(crate) fn claude_processes() -> Vec<ClaudeProcess> {
     let mut system = System::new();
     let refresh = ProcessRefreshKind::nothing()
@@ -72,6 +72,7 @@ pub(crate) fn claude_processes() -> Vec<ClaudeProcess> {
         .processes()
         .values()
         .filter(|p| p.pid().as_u32() != own && p.thread_kind().is_none() && is_claude(p))
+        .filter(|p| !crate::desktop_process::is_desktop_app(&listing(p)))
         .map(|p| ClaudeProcess {
             pid: p.pid().as_u32(),
             name: p.name().to_string_lossy().into_owned(),
@@ -104,18 +105,23 @@ pub(crate) fn desktop_processes() -> Vec<ProcessListing> {
             stem(Path::new(p.name())) == "claude"
                 || p.exe().is_some_and(|exe| stem(exe) == "claude")
         })
-        .map(|p| ProcessListing {
-            pid: p.pid().as_u32(),
-            parent_pid: p.parent().map(|parent| parent.as_u32()),
-            name: p.name().to_string_lossy().into_owned(),
-            exe: p.exe().map(Path::to_path_buf),
-            args: p
-                .cmd()
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect(),
-        })
+        .map(listing)
         .collect()
+}
+
+/// `p` as the desktop app's processes are told apart: program, parent and command line.
+fn listing(p: &Process) -> ProcessListing {
+    ProcessListing {
+        pid: p.pid().as_u32(),
+        parent_pid: p.parent().map(|parent| parent.as_u32()),
+        name: p.name().to_string_lossy().into_owned(),
+        exe: p.exe().map(Path::to_path_buf),
+        args: p
+            .cmd()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect(),
+    }
 }
 
 /// Starts the desktop app as `launch` says and returns its pid, without waiting: its input and
