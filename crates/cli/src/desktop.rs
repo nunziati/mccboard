@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use mccboard_core::{
     AccountUuid, Core, DesktopOpening, DesktopProfile, DesktopProfileRemoval, DesktopProfileUpdate,
-    DesktopWarning, FolderOutcome, Registry, RemoveLevel,
+    DesktopWarning, FolderOutcome, Language, Registry, RemoveLevel,
 };
 
 #[derive(Subcommand)]
@@ -58,6 +58,14 @@ pub enum DesktopCommand {
         /// Confirm --with-folder: the data folder and the sign-in in it will be gone.
         #[arg(long, requires = "with_folder")]
         yes: bool,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Look once for a desktop profile the app reopened without mccboard (after an update,
+    /// say), whose Code tab may lack its instance. The tray app watches all the time and also
+    /// tells a profile an update closed; one look can't.
+    Notices {
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -170,6 +178,7 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
                 print_removal(&registry, &removal);
             }
         }
+        DesktopCommand::Notices { json } => notices(core, json)?,
         DesktopCommand::Set {
             account,
             open_at_start,
@@ -186,6 +195,21 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
             } else {
                 print_profile(&registry, &profile);
             }
+        }
+    }
+    Ok(())
+}
+
+/// One look at the desktop app's processes: the CLI is English-only.
+fn notices(core: &Core, json: bool) -> Result<()> {
+    let notices = core.poll_desktop_profiles(Language::English)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&notices)?);
+    } else if notices.notices.is_empty() {
+        println!("Every desktop profile that runs was opened by mccboard.");
+    } else {
+        for notice in &notices.notices {
+            println!("{}", notice.message);
         }
     }
     Ok(())

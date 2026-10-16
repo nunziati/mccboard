@@ -144,7 +144,10 @@ fn render(app: &AppHandle, view: &TrayView, profiles: Option<&TrayProfiles>) -> 
         icon::SIZE,
         icon::SIZE,
     )))?;
-    tray.set_tooltip(Some(&view.tooltip))?;
+    tray.set_tooltip(Some(&crate::desktop_watch::tray_tooltip(
+        app,
+        &view.tooltip,
+    )))?;
     tray.set_menu(Some(menu(app, view, profiles)?))?;
     Ok(())
 }
@@ -157,6 +160,7 @@ fn menu(
     profiles: Option<&TrayProfiles>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
+    crate::desktop_watch::append_to_menu(app, &menu)?;
     let line = |text: &str| MenuItem::new(app, escape(text), false, None::<&str>);
     if let Some(notice) = &view.notice {
         menu.append(&line(notice)?)?;
@@ -216,7 +220,7 @@ fn menu(
 }
 
 /// Menu texts treat `&` as a mnemonic marker; labels and model names are shown as they are.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&&")
 }
 
@@ -226,6 +230,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         REFRESH => wake(app, Wake::Refresh),
         QUIT => app.exit(0),
         id if profiles::on_menu_event(app, id) => {}
+        id if crate::desktop_watch::on_menu_event(app, id) => {}
         id => {
             let Some(code) = id.strip_prefix(LANGUAGE_PREFIX) else {
                 return;
