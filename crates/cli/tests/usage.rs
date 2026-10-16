@@ -204,13 +204,13 @@ fn fake_claude(home: &Path) -> std::path::PathBuf {
 
 /// `mccboard` with a PATH where the only `claude` is the fake one: never a real Claude Code.
 fn mccboard_with_fake_claude(home: &Path, bin: &Path, args: &[&str]) -> Output {
-    let system = if cfg!(windows) {
+    let system: Vec<std::path::PathBuf> = if cfg!(windows) {
         // cmd.exe, which runs the fake `claude.cmd`.
-        std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32")
+        vec![std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32")]
     } else {
-        "/usr/bin:/bin".into()
+        vec!["/usr/bin".into(), "/bin".into()]
     };
-    let path = std::env::join_paths([bin.to_path_buf(), system]).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(system)).unwrap();
     Command::new(env!("CARGO_BIN_EXE_mccboard"))
         .arg("--home")
         .arg(home)
