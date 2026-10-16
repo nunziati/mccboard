@@ -2,13 +2,15 @@
 //! and Claude desktop app processes, where the launcher shim is and, on Windows, whether
 //! Developer Mode is on.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use sysinfo::{Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-use crate::desktop_profile::{DesktopDataDir, DesktopProcess};
+use crate::desktop_launch::DesktopLaunch;
+use crate::desktop_process::ProcessListing;
 use crate::session_guard::{ClaudeProcess, ProcessConfigDir};
 
 const CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
@@ -50,85 +52,81 @@ pub(crate) fn claude_processes() -> Vec<ClaudeProcess> {
         .collect()
 }
 
-/// Every running process of the Claude desktop app that mccboard can see: a program named
-/// `Claude` (`Claude.exe`) started with `--user-data-dir`, as every desktop profile and each of
-/// its helper processes is, or running from the app's install folder (the MSIX package under
-/// `WindowsApps`, or the old `AnthropicClaude`) without it: the default desktop profile.
-pub(crate) fn desktop_processes() -> Vec<DesktopProcess> {
+/// Every running process named `Claude` that mccboard can see (the desktop app's `Claude.exe`
+/// and its helpers, and Claude Code's `claude`), with its program, parent and command line.
+/// [`crate::desktop_process`] tells them apart.
+pub(crate) fn desktop_processes() -> Vec<ProcessListing> {
     let mut system = System::new();
     let refresh = ProcessRefreshKind::nothing()
         .without_tasks()
         .with_exe(UpdateKind::OnlyIfNotSet)
         .with_cmd(UpdateKind::OnlyIfNotSet);
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
-    system
-        .processes()
-        .values()
-        .filter(|p| p.thread_kind().is_none())
-        .filter_map(|p| {
-            Some(DesktopProcess {
-                pid: p.pid().as_u32(),
-                name: p.name().to_string_lossy().into_owned(),
-                data_dir: desktop_data_dir(p)?,
-            })
-        })
-        .collect()
-}
-
-/// The data directory of a desktop app process; `None` for any other program, Claude Code's
-/// `claude.exe` included.
-fn desktop_data_dir(p: &Process) -> Option<DesktopDataDir> {
     let stem = |path: &Path| {
         path.file_stem()
             .map(|s| s.to_string_lossy().to_lowercase())
             .unwrap_or_default()
     };
-    let named_claude =
-        stem(Path::new(p.name())) == "claude" || p.exe().is_some_and(|exe| stem(exe) == "claude");
-    if !named_claude {
-        return None;
-    }
-    let args: Vec<String> = p
-        .cmd()
-        .iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    if let Some(dir) = user_data_dir(&args) {
-        return Some(if dir.is_absolute() {
-            DesktopDataDir::Dir {
-                path: crate::paths::normalize(&dir),
-            }
-        } else {
-            DesktopDataDir::Unknown
-        });
-    }
-    let exe = p
-        .exe()
-        .map(|exe| exe.to_string_lossy().replace('\\', "/").to_lowercase())
-        .unwrap_or_default();
-    let installed = exe.contains("/windowsapps/claude_") || exe.contains("/anthropicclaude/");
-    match (installed, args.is_empty()) {
-        (false, _) => None,
-        (true, true) => Some(DesktopDataDir::Unknown),
-        (true, false) => Some(DesktopDataDir::Default),
-    }
+    system
+        .processes()
+        .values()
+        .filter(|p| p.thread_kind().is_none())
+        .filter(|p| {
+            stem(Path::new(p.name())) == "claude"
+                || p.exe().is_some_and(|exe| stem(exe) == "claude")
+        })
+        .map(|p| ProcessListing {
+            pid: p.pid().as_u32(),
+            parent_pid: p.parent().map(|parent| parent.as_u32()),
+            name: p.name().to_string_lossy().into_owned(),
+            exe: p.exe().map(Path::to_path_buf),
+            args: p
+                .cmd()
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+        })
+        .collect()
 }
 
-/// The value of `--user-data-dir=<dir>` or `--user-data-dir <dir>` in a command line.
-fn user_data_dir(args: &[String]) -> Option<PathBuf> {
-    const FLAG: &str = "--user-data-dir";
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        let value = match arg.strip_prefix(FLAG) {
-            Some("") => args.next().map(String::as_str),
-            Some(rest) => rest.strip_prefix('='),
-            None => None,
-        };
-        if let Some(value) = value.map(|v| v.trim_matches('"')).filter(|v| !v.is_empty()) {
-            return Some(PathBuf::from(value));
-        }
+/// Starts the desktop app as `launch` says and returns its pid, without waiting: its input and
+/// output go nowhere (Electron would log to an inherited console), and dropping the child
+/// doesn't stop it.
+pub(crate) fn launch_desktop_app(launch: &DesktopLaunch) -> io::Result<u32> {
+    let mut command = if launch.console_window {
+        Command::new(&launch.program)
+    } else {
+        crate::background::command(&launch.program)
+    };
+    command.args(&launch.args);
+    for name in stripped_vars(std::env::vars_os().map(|(name, _)| name), launch) {
+        command.env_remove(name);
     }
-    None
+    for (name, value) in &launch.set_env {
+        command.env(name, value);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command
+        .spawn()
+        .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", launch.program.display())))?;
+    Ok(child.id())
+}
+
+/// The inherited variables (`names`) that `launch` removes: those starting with one of its
+/// prefixes, ASCII case ignored.
+fn stripped_vars(names: impl Iterator<Item = OsString>, launch: &DesktopLaunch) -> Vec<OsString> {
+    names
+        .filter(|name| {
+            let name = name.to_string_lossy();
+            launch.remove_env_prefixes.iter().any(|prefix| {
+                name.get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+            })
+        })
+        .collect()
 }
 
 /// The native build runs as `claude` (`claude.exe`); an npm install runs `node` on Claude
@@ -229,40 +227,85 @@ pub(crate) fn file_links_allowed() -> bool {
 mod tests {
     use super::*;
 
-    fn args(args: &[&str]) -> Vec<String> {
-        args.iter().map(|a| (*a).to_owned()).collect()
+    fn names(names: &[&str]) -> impl Iterator<Item = OsString> {
+        names
+            .iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     #[test]
-    fn the_data_directory_is_read_from_either_spelling_of_the_flag() {
-        assert_eq!(
-            user_data_dir(&args(&[
-                "Claude.exe",
-                r"--user-data-dir=C:\Users\me\Claude-B"
-            ])),
-            Some(PathBuf::from(r"C:\Users\me\Claude-B"))
+    fn the_launch_strips_every_claude_and_anthropic_variable_whatever_its_case() {
+        let launch = crate::desktop_launch::launch(
+            PathBuf::from("Claude.exe"),
+            Some(Path::new("/p/b")),
+            Some(Path::new("/h/.claude-b")),
+        );
+        let stripped = stripped_vars(
+            names(&[
+                "PATH",
+                "CLAUDE_CONFIG_DIR",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDECODE",
+                "ANTHROPIC_API_KEY",
+                "anthropic_base_url",
+                "Claude_Code_Entrypoint",
+                "MY_CLAUDE",
+                "USERPROFILE",
+            ]),
+            &launch,
         );
         assert_eq!(
-            user_data_dir(&args(&[
-                "Claude.exe",
-                "--type=renderer",
-                "--user-data-dir",
-                "/p/b"
-            ])),
-            Some(PathBuf::from("/p/b"))
+            stripped,
+            [
+                "CLAUDE_CONFIG_DIR",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDECODE",
+                "ANTHROPIC_API_KEY",
+                "anthropic_base_url",
+                "Claude_Code_Entrypoint",
+            ]
         );
-        assert_eq!(
-            user_data_dir(&args(&["Claude.exe", "--user-data-dir=\"/p/b\""])),
-            Some(PathBuf::from("/p/b"))
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_launched_program_gets_the_variable_set_and_the_others_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("env.txt");
+        let script = dir.path().join("fake-claude.sh");
+        let o = out.display();
+        std::fs::write(
+            &script,
+            format!("env > '{o}.part' && mv '{o}.part' '{o}'\n"),
+        )
+        .unwrap();
+        let mut launch = crate::desktop_launch::launch(
+            PathBuf::from("/bin/sh"),
+            None,
+            Some(Path::new("/h/.claude-b")),
         );
-        assert_eq!(user_data_dir(&args(&["Claude.exe"])), None);
-        assert_eq!(
-            user_data_dir(&args(&["Claude.exe", "--user-data-dir"])),
-            None
-        );
-        assert_eq!(
-            user_data_dir(&args(&["Claude.exe", "--user-data-directory=/x"])),
-            None
-        );
+        launch.args = vec![script.display().to_string()];
+        let pid = launch_desktop_app(&launch).unwrap();
+        assert!(pid > 0);
+        let mut text = String::new();
+        for _ in 0..200 {
+            text = std::fs::read_to_string(&out).unwrap_or_default();
+            if !text.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let ours: Vec<&str> = text
+            .lines()
+            .filter(|line| {
+                let upper = line.to_ascii_uppercase();
+                upper.starts_with("CLAUDE") || upper.starts_with("ANTHROPIC")
+            })
+            .collect();
+        // Whatever CLAUDE*/ANTHROPIC* variables the tests run with (CLAUDECODE under Claude
+        // Code), only the one set is left.
+        assert_eq!(ours, ["CLAUDE_CONFIG_DIR=/h/.claude-b"], "{text}");
     }
 }

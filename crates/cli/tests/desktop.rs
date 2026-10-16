@@ -212,3 +212,45 @@ fn no_token_from_a_data_folder_in_any_output() {
         assert!(!text(&out).contains("FIXTURE"), "{args:?}");
     }
 }
+
+#[test]
+fn open_needs_an_account_or_default_and_a_known_account() {
+    let home = fixture_home();
+
+    let out = mccboard(home.path(), &["desktop", "open"]);
+    assert_eq!(out.status.code(), Some(2), "clap's usage error");
+    let out = mccboard(home.path(), &["desktop", "open", "B", "--default"]);
+    assert_eq!(out.status.code(), Some(2), "clap's usage error");
+
+    let out = mccboard(home.path(), &["desktop", "open", "Nobody"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+}
+
+/// Off Windows nothing is launched. (On Windows this would start the real app, so it isn't
+/// run there: the core's tests cover opening through the fake environment.)
+#[cfg(not(windows))]
+#[test]
+fn open_off_windows_says_profiles_open_on_windows_only() {
+    let home = fixture_home();
+    let folder = home.path().join("profiles").join("b");
+    let out = mccboard(
+        home.path(),
+        &["desktop", "add", "B", "--folder", folder.to_str().unwrap()],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+
+    for args in [
+        &["desktop", "open", "B"][..],
+        &["desktop", "open", "--default", "--json"][..],
+        &["desktop", "open", "A"][..],
+    ] {
+        let out = mccboard(home.path(), args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("Windows only"),
+            "{args:?}: {}",
+            text(&out)
+        );
+    }
+    assert!(!folder.exists(), "no folder is created when nothing opens");
+}

@@ -182,3 +182,26 @@ impl TempHome {
         out
     }
 }
+
+/// The packaged desktop app's program, as Windows lists it.
+pub const DESKTOP_EXE: &str =
+    r"C:\Program Files\WindowsApps\Claude_1.0.2342.0_x64__pzs8sxrjxfjjc\app\Claude.exe";
+
+/// A process of the packaged desktop app with command line `args` after the program.
+pub fn desktop_process(pid: u32, args: &[&str]) -> mccboard_core::ProcessListing {
+    mccboard_core::ProcessListing {
+        pid,
+        parent_pid: Some(1),
+        name: "Claude.exe".to_owned(),
+        exe: Some(PathBuf::from(DESKTOP_EXE)),
+        args: std::iter::once(DESKTOP_EXE)
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect(),
+    }
+}
+
+/// `--user-data-dir=<folder>`, as mccboard passes it.
+pub fn user_data_dir(folder: &Path) -> String {
+    format!("--user-data-dir={}", folder.display())
+}

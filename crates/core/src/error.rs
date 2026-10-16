@@ -275,6 +275,25 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    #[error("desktop profiles open on Windows only, where the Claude desktop app runs")]
+    DesktopAppNeedsWindows,
+
+    #[error(
+        "the Claude desktop app isn't installed: install it from claude.ai/download or the \
+         Microsoft Store, then try again"
+    )]
+    DesktopAppNotInstalled,
+
+    #[error(
+        "the Claude desktop app in {} is the old installer's, which desktop profiles don't \
+         support: install the current app from claude.ai/download or the Microsoft Store, then \
+         try again",
+        path.display()
+    )]
+    DesktopAppNotMsix { path: PathBuf },
+
+    #[error("cannot open the Claude desktop app: {reason}")]
+    DesktopAppNotOpened { reason: String },
 }
 
 fn describe_desktop_processes(processes: &[DesktopProcess]) -> String {
@@ -344,6 +363,10 @@ impl Error {
             Error::NoIconSource => "no_icon_source",
             Error::IconSourceUnreadable { .. } => "icon_source_unreadable",
             Error::IconUnwritable { .. } => "icon_unwritable",
+            Error::DesktopAppNeedsWindows => "desktop_app_needs_windows",
+            Error::DesktopAppNotInstalled => "desktop_app_not_installed",
+            Error::DesktopAppNotMsix { .. } => "desktop_app_not_msix",
+            Error::DesktopAppNotOpened { .. } => "desktop_app_not_opened",
         }
     }
 
@@ -375,7 +398,8 @@ impl Error {
             | Error::DesktopProfileFolderNotAllowed { path }
             | Error::DesktopProfileInUse { path, .. }
             | Error::IconSourceUnreadable { path, .. }
-            | Error::IconUnwritable { path, .. } => Some(path),
+            | Error::IconUnwritable { path, .. }
+            | Error::DesktopAppNotMsix { path } => Some(path),
             _ => None,
         }
     }
@@ -399,10 +423,10 @@ impl Error {
     }
 
     /// Where `config.toml` is wrong (line and reason, from mccboard's own settings), for
-    /// [`Error::ConfigCorrupt`]; why the login couldn't open (an OS error), for
-    /// [`Error::LoginNotOpened`]; the label of the account the folder belongs to, for
-    /// [`Error::FolderHasAnotherAccount`]; the account's label, for the desktop profile
-    /// errors about an account.
+    /// [`Error::ConfigCorrupt`]; why the login or the desktop app couldn't open (an OS
+    /// error), for [`Error::LoginNotOpened`] and [`Error::DesktopAppNotOpened`]; the label of
+    /// the account the folder belongs to, for [`Error::FolderHasAnotherAccount`]; the
+    /// account's label, for the desktop profile errors about an account.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Error::ConfigCorrupt { detail, .. } => Some(detail),
@@ -412,7 +436,9 @@ impl Error {
             | Error::DefaultDesktopProfileAccount { label }
             | Error::DesktopProfileNotFound { label }
             | Error::DefaultProfileColor { label } => Some(label),
-            Error::LoginNotOpened { reason, .. } => Some(reason),
+            Error::LoginNotOpened { reason, .. } | Error::DesktopAppNotOpened { reason } => {
+                Some(reason)
+            }
             _ => None,
         }
     }

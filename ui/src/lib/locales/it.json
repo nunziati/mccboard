@@ -200,5 +200,9 @@
   "error.desktop_profile_in_use": "L'app desktop di Claude sta usando la cartella dati di questo profilo desktop. Chiudi il profilo, poi riprova. Non è stato cambiato nulla.",
   "error.no_icon_source": "Il logo dell'app desktop di Claude non è stato trovato, quindi questo profilo desktop non può avere la sua icona colorata.",
   "error.icon_source_unreadable": "Il logo dell'app desktop di Claude non si può leggere, quindi questo profilo desktop non può avere la sua icona colorata.",
-  "error.icon_unwritable": "L'icona del profilo desktop non si può scrivere nella cartella di mccboard."
+  "error.icon_unwritable": "L'icona del profilo desktop non si può scrivere nella cartella di mccboard.",
+  "error.desktop_app_needs_windows": "I profili desktop si aprono solo su Windows, dove gira l'app desktop di Claude.",
+  "error.desktop_app_not_installed": "L'app desktop di Claude non è installata. Installala da claude.ai/download o dal Microsoft Store, poi riprova.",
+  "error.desktop_app_not_msix": "Questa app desktop di Claude viene dal vecchio programma di installazione, che i profili desktop non supportano. Installa l'app attuale da claude.ai/download o dal Microsoft Store, poi riprova.",
+  "error.desktop_app_not_opened": "Non è stato possibile aprire l'app desktop di Claude."
 }

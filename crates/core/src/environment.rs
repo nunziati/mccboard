@@ -5,7 +5,8 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::AccessToken;
-use crate::desktop_profile::DesktopProcess;
+use crate::desktop_launch::{DesktopLaunch, DesktopPackage};
+use crate::desktop_process::ProcessListing;
 use crate::instance::InstanceKind;
 use crate::session_guard::ClaudeProcess;
 
@@ -46,11 +47,20 @@ pub trait Environment: Send + Sync {
     /// uses. The core matches them to instances (the session guard).
     fn claude_processes(&self) -> Vec<ClaudeProcess>;
 
-    /// Every running process of the Claude desktop app on this machine (its main process and
-    /// its helpers), each with the data directory it was started with (`--user-data-dir`).
-    /// The core matches them to desktop profiles: a profile's data folder is never deleted
-    /// while one uses it.
-    fn desktop_processes(&self) -> Vec<DesktopProcess>;
+    /// Every running process named `Claude` (`Claude.exe`) on this machine that mccboard can
+    /// see, with its program, parent and command line. The core tells which are the desktop
+    /// app (main processes and helpers) and which desktop profile each runs: a profile's data
+    /// folder is never deleted while one uses it.
+    fn desktop_processes(&self) -> Vec<ProcessListing>;
+
+    /// The installed MSIX packages of the given package families, for the current user, each
+    /// with its install folder (Windows' packaging API). Empty when none is installed. Errors
+    /// when the API fails, and with `Unsupported` off Windows.
+    fn desktop_app_packages(&self, families: &[String]) -> io::Result<Vec<DesktopPackage>>;
+
+    /// Starts the desktop app as `launch` says, with no input or output and no console window,
+    /// and returns its process id without waiting for it.
+    fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32>;
 
     /// Whether file links (symlinks to files) can be created without elevation: on Windows,
     /// whether Developer Mode is on (ADR 0006); elsewhere always.
@@ -240,8 +250,25 @@ impl Environment for SystemEnvironment {
         crate::system::claude_processes()
     }
 
-    fn desktop_processes(&self) -> Vec<DesktopProcess> {
+    fn desktop_processes(&self) -> Vec<ProcessListing> {
         crate::system::desktop_processes()
+    }
+
+    #[cfg(windows)]
+    fn desktop_app_packages(&self, families: &[String]) -> io::Result<Vec<DesktopPackage>> {
+        crate::windows_desktop_app::packages(families)
+    }
+
+    #[cfg(not(windows))]
+    fn desktop_app_packages(&self, _families: &[String]) -> io::Result<Vec<DesktopPackage>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the Claude desktop app is looked up on Windows only",
+        ))
+    }
+
+    fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32> {
+        crate::system::launch_desktop_app(launch)
     }
 
     fn file_links_allowed(&self) -> bool {

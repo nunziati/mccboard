@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use mccboard_core::{
     Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
-    Core, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal, Registration, Registry,
-    Removal, RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
+    Core, DesktopOpening, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal,
+    Registration, Registry, Removal, RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -145,6 +145,19 @@ fn repair(
     Ok(core.repair(&path, item.as_deref())?)
 }
 
+/// Opens the desktop profile of the account `uuid`, or the default desktop profile when
+/// `uuid` is `None` (or the primary instance's account). It doesn't wait for the app.
+#[tauri::command]
+fn open_desktop_profile(
+    core: tauri::State<'_, Core>,
+    uuid: Option<String>,
+) -> Result<DesktopOpening, CommandError> {
+    Ok(match uuid {
+        Some(uuid) => core.open_desktop_profile(&AccountUuid::new(uuid))?,
+        None => core.open_default_desktop_profile()?,
+    })
+}
+
 /// The folder a linked instance for `label` gets by default (`~/.claude-<label>`).
 #[tauri::command]
 fn add_folder(core: tauri::State<'_, Core>, label: String) -> Result<PathBuf, CommandError> {
@@ -238,6 +251,7 @@ pub fn run() {
             add_folder,
             add_instance,
             login_instance,
+            open_desktop_profile,
             settings::language,
             settings::set_language
         ])
