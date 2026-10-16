@@ -24,6 +24,7 @@ Personal project of Giacomo.
   New behavior goes in the core first, then gets a CLI command and a UI.
 - **Usage**: sessions first, endpoint second, once per account (ADR 0003).
 - **Sharing between instances**: linked, aligned and private items (ADR 0005); Developer Mode for file links on Windows (ADR 0006).
+- **Desktop profiles**: the official app started by mccboard with its own data directory, its taskbar identity and icons set from outside (ADR 0008).
 
 ## Token rules: hard guardrails
 Credentials are **read-only** to mccboard. Claude Code owns them.
