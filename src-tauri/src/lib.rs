@@ -13,7 +13,8 @@ use std::time::Duration;
 use mccboard_core::{
     Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
     Core, DesktopOpening, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal,
-    Registration, Registry, Removal, RemoveLevel, RepairReport, SharingAnswer, SystemEnvironment,
+    Registration, Registry, Removal, RemoveLevel, RepairReport, Saved, SharingAnswer,
+    SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -97,7 +98,8 @@ fn remove_instance(
     Ok(core.remove(&path, level)?)
 }
 
-/// `launcher`: `None` leaves it, `Some("")` drops the override, anything else sets it.
+/// `launcher`: `None` leaves it, `Some("")` drops the override, anything else sets it. A
+/// desktop profile's Start-menu shortcut that can't follow is a warning in the result.
 #[tauri::command]
 fn update_account(
     core: tauri::State<'_, Core>,
@@ -105,7 +107,7 @@ fn update_account(
     label: Option<String>,
     color: Option<String>,
     launcher: Option<String>,
-) -> Result<Account, CommandError> {
+) -> Result<Saved<Account>, CommandError> {
     let update = AccountUpdate {
         label,
         color: color.map(|c| c.parse::<Color>()).transpose()?,
@@ -239,11 +241,11 @@ pub fn run() {
     let core = Core::new(home, SystemEnvironment);
 
     let builder = tauri::Builder::default();
-    // First: a second instance (a profile's shortcut or pin) hands its arguments to this one
-    // and exits before anything else starts.
+    // First: a second copy of the app (a profile's shortcut or pin) hands its arguments to
+    // this one and exits before anything else starts.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        taskbar::on_second_instance(app, &app.state::<Core>(), &argv);
+        taskbar::on_second_copy(app, &argv);
     }));
     builder
         .manage(core.clone())
@@ -283,7 +285,7 @@ pub fn run() {
             if let Err(error) = watch_config(app, &core) {
                 eprintln!("mccboard: cannot watch config.toml: {error}");
             }
-            desktop::open_at_start(&core);
+            desktop::open_at_start(app.handle());
             taskbar::setup(app, &core);
             desktop_watch::setup(app, &core)?;
             Ok(())

@@ -126,6 +126,30 @@ fn a_profile_opens_with_its_folder_its_instance_and_no_console() {
 }
 
 #[test]
+fn an_opening_tells_whether_the_profile_still_needs_its_first_sign_in() {
+    let (home, core, _env) = setup();
+
+    let first = core.open_desktop_profile(&uuid(UUID_B)).unwrap();
+    assert!(
+        first.needs_sign_in,
+        "a new data folder: nobody signed in yet"
+    );
+
+    fs::create_dir_all(
+        folder_b(&home)
+            .join("claude-code-sessions")
+            .join(UUID_B)
+            .join("99999999-9999-4999-8999-999999999999"),
+    )
+    .unwrap();
+    let signed_in = core.open_desktop_profile(&uuid(UUID_B)).unwrap();
+    assert!(!signed_in.needs_sign_in);
+
+    let default = core.open_default_desktop_profile().unwrap();
+    assert!(!default.needs_sign_in, "the default profile has no guide");
+}
+
+#[test]
 fn opening_again_launches_again_without_waiting_and_keeps_the_folder() {
     let (home, core, env) = setup();
     let folder = folder_b(&home);

@@ -38,15 +38,12 @@ use crate::desktop_watch::launches;
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::{
-    Environment, Error, FolderOutcome, IconCache, OsKind, Paths, RemoveLevel, ShortcutSync,
-    desktop_app, folder_guard, paths, remove,
+    Environment, Error, FolderOutcome, OsKind, Paths, RemoveLevel, desktop_app, folder_guard,
+    paths, remove,
 };
 
 /// The folder under a data folder whose subfolders are named after the accounts signed in.
 const SESSIONS: &str = "claude-code-sessions";
-
-/// The color of a profile whose account isn't in `config.toml` (a hand-edited entry).
-const NEUTRAL_COLOR: &str = "#6b7280";
 
 /// A desktop profile as the front ends show it (the UI, the tray and the CLI share it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -140,6 +137,9 @@ pub struct DesktopOpening {
     pub data_folder: Option<PathBuf>,
     /// Whether the data folder was created for this launch: the profile's first opening.
     pub created_folder: bool,
+    /// A profile other than the default one with no account signed in yet, as its data
+    /// folder shows at launch: front ends show the first sign-in guide.
+    pub needs_sign_in: bool,
     /// The instance set as `CLAUDE_CONFIG_DIR`; `None` for the default profile, whose Code
     /// tab uses the primary instance as Claude Code does by default.
     pub instance: Option<PathBuf>,
@@ -181,6 +181,7 @@ pub(crate) fn open(
             program,
             data_folder: None,
             created_folder: false,
+            needs_sign_in: false,
             instance: None,
             pid,
         });
@@ -211,6 +212,9 @@ pub(crate) fn open(
     })?;
     let launch = desktop_launch::launch(program.clone(), Some(&data_folder), Some(&instance));
     let pid = start(paths, env, &launch, Some(account))?;
+    let needs_sign_in = observe(std::slice::from_ref(&data_folder))
+        .account
+        .is_none();
     Ok(DesktopOpening {
         default: false,
         account: Some(account.clone()),
@@ -218,6 +222,7 @@ pub(crate) fn open(
         program,
         data_folder: Some(data_folder),
         created_folder,
+        needs_sign_in,
         instance: Some(instance),
         pid,
     })
@@ -286,7 +291,7 @@ pub(crate) fn candidates(home: &Path, config_file: &Path) -> Result<Vec<Account>
         .filter(|a| config.desktop_profile(&a.uuid).is_none())
         .filter(|a| local_instance(home, &config, &a.uuid).is_some())
         .collect();
-    accounts.sort_by_key(|a| (a.label.to_lowercase(), a.uuid.clone()));
+    accounts.sort_by(|a, b| account::by_label((&a.label, &a.uuid), (&b.label, &b.uuid)));
     Ok(accounts)
 }
 
@@ -376,7 +381,6 @@ pub(crate) fn remove(
     env: &dyn Environment,
     account: &AccountUuid,
     level: RemoveLevel,
-    sync_shortcuts: &dyn Fn() -> Result<ShortcutSync, Error>,
 ) -> Result<DesktopProfileRemoval, Error> {
     let mut file = ConfigFile::load(&paths.config_file())?;
     let entry = stored(home, &file.config, account)?.clone();
@@ -410,11 +414,6 @@ pub(crate) fn remove(
 
     file.remove_desktop_profile(account);
     file.save()?;
-    // The shortcut first: it shows the icon.
-    let synced = sync_shortcuts();
-    // Leftover icons are harmless (a new color or profile gets new file names).
-    let _ = IconCache::new(paths).remove(account);
-    synced?;
     Ok(DesktopProfileRemoval {
         account: account.clone(),
         data_folder,
@@ -576,10 +575,7 @@ fn views(home: &Path, config: &Config, env: &dyn Environment) -> Vec<DesktopProf
                 default: false,
                 account: Some(entry.account.clone()),
                 label: account.map(|a| a.label.clone()),
-                color: account.map_or_else(
-                    || NEUTRAL_COLOR.parse().expect("a valid color"),
-                    |a| a.color.clone(),
-                ),
+                color: account.map_or_else(account::neutral_color, |a| a.color.clone()),
                 data_folder: entry.data_folder.clone(),
                 instance,
                 open_at_start: entry.open_at_start,

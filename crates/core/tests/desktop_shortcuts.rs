@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use common::{TempHome, UUID_A, UUID_B, UUID_C, desktop_process, user_data_dir};
 use mccboard_core::testing::{FAKE_MCCBOARD_APP, FakeEnvironment};
 use mccboard_core::{
-    AccountUpdate, AccountUuid, Color, Core, DesktopPackage, Error, IconCache, Image, OsKind,
-    RemoveLevel, ShortcutWarning, app_user_model_id,
+    AccountUpdate, AccountUuid, Color, Core, DesktopPackage, IconCache, Image, OsKind, RemoveLevel,
+    ShortcutWarning, app_user_model_id,
 };
 
 const FULL_NAME: &str = "Claude_1.0.2342.0_x64__pzs8sxrjxfjjc";
@@ -347,19 +347,39 @@ fn without_a_logo_the_programs_icon_is_used_and_without_either_mccboards() {
 }
 
 #[test]
-fn a_shortcut_that_cant_be_written_fails_the_call_but_the_profile_is_added() {
+fn a_profile_added_with_its_shortcut_carries_no_warning() {
+    let (home, core, _env) = setup();
+
+    let added = core
+        .add_desktop_profile(&uuid(UUID_B), Some(&folder(&home, "b")))
+        .unwrap();
+
+    assert_eq!(added.shortcuts_not_synced, None);
+    assert_eq!(added.value.account, Some(uuid(UUID_B)));
+}
+
+#[test]
+fn a_shortcut_that_cant_be_written_is_a_warning_and_the_profile_is_added() {
     let (home, core, env) = setup();
     env.set_shortcut_error(Some("access denied"));
 
-    let error = core
+    let added = core
         .add_desktop_profile(&uuid(UUID_B), Some(&folder(&home, "b")))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(
-        matches!(&error, Error::ShortcutNotWritten { path, .. } if path == &home.start_menu().join("Claude B.lnk")),
-        "{error:?}"
+    let warning = added.shortcuts_not_synced.expect("a warning");
+    assert_eq!(warning.code, "shortcut_not_written");
+    assert_eq!(
+        warning.path.as_deref(),
+        Some(home.start_menu().join("Claude B.lnk").as_path())
     );
-    assert_eq!(error.code(), "shortcut_not_written");
+    assert!(warning.detail.unwrap().contains("access denied"));
+    assert!(
+        warning.message.contains("Claude B.lnk"),
+        "{}",
+        warning.message
+    );
+    assert_eq!(added.value.account, Some(uuid(UUID_B)));
     assert_eq!(
         core.desktop_profiles().unwrap().len(),
         2,
@@ -372,19 +392,58 @@ fn a_shortcut_that_cant_be_written_fails_the_call_but_the_profile_is_added() {
 }
 
 #[test]
-fn without_the_start_menu_or_the_app_the_error_says_which() {
+fn without_the_start_menu_or_the_app_changes_warn_which_and_are_saved() {
     let (home, core, env) = setup();
     env.set_start_menu(None);
-    let error = core
+    let added = core
         .add_desktop_profile(&uuid(UUID_B), Some(&folder(&home, "b")))
-        .unwrap_err();
-    assert_eq!(error.code(), "start_menu_not_found");
+        .unwrap();
+    assert_eq!(
+        added.shortcuts_not_synced.map(|w| w.code),
+        Some("start_menu_not_found")
+    );
 
     env.set_start_menu(Some(&home.start_menu()));
+    // C keeps a profile, so the sync after removing B still looks for the app.
+    core.add_desktop_profile(&uuid(UUID_C), Some(&folder(&home, "c")))
+        .unwrap();
     env.set_mccboard_app(None);
+    let changed = core
+        .update_account(
+            &uuid(UUID_B),
+            AccountUpdate {
+                label: Some("Work".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(changed.value.label, "Work");
+    assert_eq!(
+        changed.shortcuts_not_synced.map(|w| w.code),
+        Some("app_program_not_found")
+    );
+
+    let removed = core
+        .remove_desktop_profile(&uuid(UUID_B), RemoveLevel::FromMccboard)
+        .unwrap();
+    assert_eq!(removed.value.account, uuid(UUID_B));
+    assert_eq!(
+        removed.shortcuts_not_synced.map(|w| w.code),
+        Some("app_program_not_found")
+    );
+    assert_eq!(
+        core.desktop_profiles().unwrap().len(),
+        2,
+        "removed all the same"
+    );
+
     let error = core.sync_desktop_shortcuts().unwrap_err();
     assert_eq!(error.code(), "app_program_not_found");
-    assert!(env.shortcuts_written().is_empty());
+    assert_eq!(
+        env.shortcuts_written().len(),
+        2,
+        "B's and C's, before the app went"
+    );
 }
 
 #[test]

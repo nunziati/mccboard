@@ -1,7 +1,7 @@
 //! Desktop profiles on the Windows taskbar (tickets #37, #38): their Start-menu shortcuts, the
 //! watcher that gives their windows their own button and icon and their notification-area
 //! icon the account's color, and `--open-profile <uuid>` from a shortcut or a pin, which a
-//! second app instance hands to this one. The work is the core's
+//! second copy of mccboard's app hands to this one. The work is the core's
 //! ([`Core::sync_desktop_shortcuts`], [`Core::running_desktop_profiles`],
 //! `mccboard_core::windows_taskbar`, `mccboard_core::windows_profile_tray`); this module starts
 //! it and feeds it the app's events.
@@ -39,33 +39,20 @@ pub(crate) fn setup(app: &tauri::App, core: &Core) {
         }
     }
     sync_shortcuts(core);
-    let args = AppArgs::parse(std::env::args());
-    on_args(app.handle(), core, args);
+    on_args(app.handle(), AppArgs::parse(std::env::args()));
 }
 
-/// A second instance of the app was started with `argv` (a shortcut, a pin, a plain start):
-/// it has handed them over and exited.
+/// A second copy of mccboard's app was started with `argv` (a shortcut, a pin, a plain
+/// start): it has handed them over and exited.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn on_second_instance(app: &AppHandle, core: &Core, argv: &[String]) {
-    on_args(app, core, AppArgs::parse(argv));
+pub(crate) fn on_second_copy(app: &AppHandle, argv: &[String]) {
+    on_args(app, AppArgs::parse(argv));
 }
 
-fn on_args(app: &AppHandle, core: &Core, args: AppArgs) {
-    let Some(account) = args.open_profile else {
-        crate::tray::open_instances(app);
-        return;
-    };
-    let core = core.clone();
-    // Finding and starting the desktop app takes a moment: not on the main thread.
-    let spawned = std::thread::Builder::new()
-        .name("mccboard-open-profile".into())
-        .spawn(move || {
-            if let Err(error) = crate::desktop::open(&core, Some(&account)) {
-                eprintln!("mccboard: cannot open the desktop profile {account}: {error}");
-            }
-        });
-    if let Err(error) = spawned {
-        eprintln!("mccboard: cannot open the desktop profile: {error}");
+fn on_args(app: &AppHandle, args: AppArgs) {
+    match args.open_profile {
+        Some(account) => crate::desktop::open_in_background(app, Some(account), |_| {}),
+        None => crate::tray::open_instances(app),
     }
 }
 
@@ -88,14 +75,9 @@ pub(crate) fn refresh() {
 /// reports them on the operation that changed a profile).
 fn sync_shortcuts(core: &Core) {
     let core = core.clone();
-    let spawned = std::thread::Builder::new()
-        .name("mccboard-shortcuts".into())
-        .spawn(move || {
-            if let Err(error) = core.sync_desktop_shortcuts() {
-                eprintln!("mccboard: cannot update the desktop profile shortcuts: {error}");
-            }
-        });
-    if let Err(error) = spawned {
-        eprintln!("mccboard: cannot update the desktop profile shortcuts: {error}");
-    }
+    crate::desktop::in_background(
+        "mccboard-shortcuts",
+        "cannot update the desktop profile shortcuts",
+        move || core.sync_desktop_shortcuts().map(drop),
+    );
 }

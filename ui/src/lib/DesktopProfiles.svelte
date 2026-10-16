@@ -20,6 +20,7 @@
     type CoreError,
     type DesktopProfile,
     type DesktopWarning,
+    type ShortcutsNotSynced,
   } from './core'
   import { errorMessage, t } from './i18n.svelte'
 
@@ -110,12 +111,20 @@
     }
   }
 
+  /** A notice, followed by why the Start-menu shortcuts couldn't follow, if they couldn't. */
+  function withShortcuts(notice: string, warning: ShortcutsNotSynced | null): string {
+    return warning ? `${notice} ${errorMessage(warning.code)}` : notice
+  }
+
   function add(uuid: string, folder: string | null): Promise<boolean> {
     let added = false
     return act(async () => {
       const profile = await addDesktopProfile(uuid, folder)
       added = true
-      return t('desktop.notice.added', { name: nameOf(profile), path: profile.data_folder })
+      return withShortcuts(
+        t('desktop.notice.added', { name: nameOf(profile), path: profile.data_folder }),
+        profile.shortcuts_not_synced,
+      )
     }).then(() => added)
   }
 
@@ -150,7 +159,10 @@
           : removal.folder === 'already_gone'
             ? 'desktop.notice.removed_already_gone'
             : 'desktop.notice.removed'
-      return t(key, { name: nameOf(profile), path: removal.data_folder })
+      return withShortcuts(
+        t(key, { name: nameOf(profile), path: removal.data_folder }),
+        removal.shortcuts_not_synced,
+      )
     })
   }
 

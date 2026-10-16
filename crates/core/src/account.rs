@@ -168,6 +168,20 @@ pub(crate) fn claude_orange() -> Color {
     Color(CLAUDE_ORANGE.to_owned())
 }
 
+/// mccboard's neutral gray: the tray icon's while no account's usage is known, and the color
+/// of an account that isn't in `config.toml` (a hand-edited desktop profile entry).
+pub const NEUTRAL_COLOR: &str = "#6b7280";
+
+pub(crate) fn neutral_color() -> Color {
+    Color(NEUTRAL_COLOR.to_owned())
+}
+
+/// The order front ends list accounts in: by label ignoring case, then by UUID, so equal
+/// labels keep a stable order.
+pub(crate) fn by_label(a: (&str, &AccountUuid), b: (&str, &AccountUuid)) -> std::cmp::Ordering {
+    (a.0.to_lowercase(), a.1).cmp(&(b.0.to_lowercase(), b.1))
+}
+
 /// Colors suggested for new accounts, in order: distinct, and readable on light and dark.
 const PALETTE: [&str; 8] = [
     "#2563eb", // blue

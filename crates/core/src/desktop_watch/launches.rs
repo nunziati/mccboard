@@ -85,14 +85,7 @@ fn alive(listed: &[ProcessListing], pid: u32) -> bool {
         .any(|p| p.pid == pid || p.parent_pid == Some(pid))
 }
 
-/// Writes atomically: a temporary file in the same folder, then a rename.
 fn save(path: &Path, file: &File) -> io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
-    let temporary = dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
-    fs::write(&temporary, text)?;
-    fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })
+    crate::atomic_file::write(path, text.as_bytes())
 }

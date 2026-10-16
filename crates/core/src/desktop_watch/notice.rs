@@ -7,11 +7,9 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use super::{NoticeState, Watch};
+use crate::account::{self, AccountUuid, Color};
 use crate::config::Config;
-use crate::{AccountUuid, Color, Language, TOOLTIP_MAX_UTF16};
-
-/// The color of a profile whose account isn't in `config.toml` (a hand-edited entry).
-const NEUTRAL_COLOR: &str = "#6b7280";
+use crate::{Language, TOOLTIP_MAX_UTF16};
 
 /// Every desktop profile notice showing, in one language.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -89,16 +87,11 @@ pub(super) fn view(config: &Config, watch: &Watch, language: Language) -> Deskto
         .map(|(account, state)| {
             let registered = config.account(account);
             let label = registered.map_or_else(|| account.to_string(), |a| a.label.clone());
-            let color = registered.map_or_else(
-                || NEUTRAL_COLOR.parse().expect("a valid color"),
-                |a| a.color.clone(),
-            );
+            let color = registered.map_or_else(account::neutral_color, |a| a.color.clone());
             notice(language, account, label, color, state)
         })
         .collect();
-    notices.sort_by(|a, b| {
-        (a.label.to_lowercase(), &a.account).cmp(&(b.label.to_lowercase(), &b.account))
-    });
+    notices.sort_by(|a, b| account::by_label((&a.label, &a.account), (&b.label, &b.account)));
     DesktopNotices { language, notices }
 }
 

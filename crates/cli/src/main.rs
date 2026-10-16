@@ -255,17 +255,19 @@ fn run(cli: Cli) -> Result<()> {
                     launcher.map(Some)
                 },
             };
-            let account = core.update_account(&uuid, update)?;
+            let saved = core.update_account(&uuid, update)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&account)?);
+                println!("{}", serde_json::to_string_pretty(&saved)?);
             } else {
+                let account = &saved.value;
                 println!(
                     "Account {}: label {:?}, color {}, launcher {}.",
-                    describe(&account),
+                    describe(account),
                     account.label,
                     account.color,
                     account.launcher_name()
                 );
+                desktop::warn_shortcuts(saved.shortcuts_not_synced.as_ref());
             }
         }
         Command::Launcher {

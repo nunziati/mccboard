@@ -163,7 +163,8 @@ fn the_default_profiles_account_color_cannot_be_edited_but_its_label_can() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
     assert_eq!(renamed.label, "Main");
     assert_eq!(renamed.color, orange());
 }
@@ -200,7 +201,7 @@ fn the_default_profile_is_never_removed_nor_changed() {
 fn a_profile_takes_its_accounts_local_instance_and_a_default_folder() {
     let (home, core, _env) = setup();
 
-    let added = core.add_desktop_profile(&uuid(UUID_B), None).unwrap();
+    let added = core.add_desktop_profile(&uuid(UUID_B), None).unwrap().value;
 
     // Elsewhere than Windows the folder is never used, but it is a real path all the same.
     let folder = home.path().join(".config").join("Claude-B");
@@ -268,7 +269,8 @@ fn a_chosen_folder_is_taken_as_given_and_tilde_means_the_home() {
 
     let added = core
         .add_desktop_profile(&uuid(UUID_B), Some(Path::new("~/profiles/b")))
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(added.data_folder, home.path().join("profiles").join("b"));
 }
@@ -725,7 +727,8 @@ fn removing_from_mccboard_forgets_the_profile_and_keeps_its_folder() {
 
     let removal = core
         .remove_desktop_profile(&uuid(UUID_B), RemoveLevel::FromMccboard)
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(removal.account, uuid(UUID_B));
     assert_eq!(removal.data_folder, folder);
@@ -749,7 +752,8 @@ fn removing_with_the_folder_deletes_it_without_following_links() {
 
     let removal = core
         .remove_desktop_profile(&uuid(UUID_B), RemoveLevel::WithFolder)
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(removal.folder, FolderOutcome::Deleted);
     assert!(!folder.exists());
@@ -764,7 +768,8 @@ fn removing_with_a_folder_already_gone_just_forgets_it() {
 
     let removal = core
         .remove_desktop_profile(&uuid(UUID_B), RemoveLevel::WithFolder)
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(removal.folder, FolderOutcome::AlreadyGone);
     assert_eq!(core.desktop_profiles().unwrap().len(), 1);

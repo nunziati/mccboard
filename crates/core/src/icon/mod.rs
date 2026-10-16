@@ -330,17 +330,9 @@ fn file_part(account: &AccountUuid) -> String {
 /// Writes `bytes` to a temporary file next to `path`, then renames it over `path`, so a
 /// reader (Explorer, the shell) never sees half an icon.
 fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    let unwritable = |source| Error::IconUnwritable {
+    crate::atomic_file::write(path, bytes).map_err(|source| Error::IconUnwritable {
         path: path.to_path_buf(),
         source,
-    };
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    fs::write(&temporary, bytes).map_err(unwritable)?;
-    fs::rename(&temporary, path).map_err(|source| {
-        let _ = fs::remove_file(&temporary);
-        unwritable(source)
     })
 }
 

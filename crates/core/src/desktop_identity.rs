@@ -30,11 +30,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::account::{AccountUuid, Color};
+use crate::account::{self, AccountUuid, Color};
 use crate::config::{Config, ConfigFile, DesktopProfileEntry};
 use crate::{
-    Environment, Error, IconCache, IconSources, OsKind, Paths, ProfileIcons, desktop_launch,
-    desktop_process, paths,
+    Environment, Error, IconCache, IconSources, OsKind, Paths, ProfileIcons, atomic_file,
+    desktop_launch, desktop_process, paths,
 };
 
 /// The argument that makes mccboard's app open a desktop profile: `--open-profile <uuid>`.
@@ -122,6 +122,50 @@ pub struct ShortcutSync {
     /// Shortcuts mccboard made that no profile needs any more: deleted.
     pub removed: Vec<PathBuf>,
     pub warnings: Vec<ShortcutWarning>,
+}
+
+/// A change to the accounts or desktop profiles, saved in `config.toml`, and whether the
+/// Start-menu shortcuts followed it. The change stands either way: shortcuts that couldn't
+/// follow are a warning for front ends to show, never a failed operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Saved<T> {
+    /// What the operation returns: the account, the profile, the removal.
+    #[serde(flatten)]
+    pub value: T,
+    /// Why the shortcuts couldn't be made to match ([`crate::Core::sync_desktop_shortcuts`]);
+    /// `None` when they match. Running that sync again, or the app's next start, retries.
+    pub shortcuts_not_synced: Option<ShortcutsNotSynced>,
+}
+
+impl<T> Saved<T> {
+    pub(crate) fn new(value: T, sync: Result<ShortcutSync, Error>) -> Self {
+        Saved {
+            value,
+            shortcuts_not_synced: sync.err().map(|error| ShortcutsNotSynced::from(&error)),
+        }
+    }
+}
+
+/// The error a shortcut sync stopped on, as data front ends show and translate by `code`, as
+/// they do an error ([`Error::code`], [`Error::path`], [`Error::detail`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ShortcutsNotSynced {
+    pub code: &'static str,
+    pub path: Option<PathBuf>,
+    pub detail: Option<String>,
+    /// The error's English message, for the CLI.
+    pub message: String,
+}
+
+impl From<&Error> for ShortcutsNotSynced {
+    fn from(error: &Error) -> Self {
+        ShortcutsNotSynced {
+            code: error.code(),
+            path: error.path().map(Path::to_path_buf),
+            detail: error.detail().map(str::to_owned),
+            message: error.to_string(),
+        }
+    }
 }
 
 /// Something about the shortcuts the user may want to know; none of them stops the others.
@@ -387,7 +431,7 @@ fn profiles<'a>(home: &Path, config: &'a Config) -> Vec<Profile<'a>> {
         })
         .collect();
     profiles.sort_by(|a, b| {
-        (a.label.to_lowercase(), &a.entry.account).cmp(&(b.label.to_lowercase(), &b.entry.account))
+        account::by_label((&a.label, &a.entry.account), (&b.label, &b.entry.account))
     });
     profiles
 }
@@ -495,14 +539,8 @@ fn load_record(path: &Path) -> Vec<Record> {
 }
 
 fn save_record(path: &Path, records: &[Record]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let text = serde_json::to_string_pretty(records).map_err(io::Error::other)?;
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    fs::write(&temporary, text)?;
-    fs::rename(&temporary, path)
+    atomic_file::write(path, text.as_bytes())
 }
 
 #[cfg(test)]

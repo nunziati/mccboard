@@ -135,29 +135,6 @@ fn the_tray_menu_speaks_italian_too() {
 }
 
 #[test]
-fn the_tray_says_which_profiles_are_not_signed_in_yet() {
-    let (home, core, _env) = setup();
-
-    let menu = core.tray_profiles(Language::English).unwrap();
-    assert!(menu.profiles[1].needs_sign_in);
-    assert!(
-        !menu.profiles[0].needs_sign_in,
-        "the default profile signs in as the app always does"
-    );
-
-    let org = "99999999-9999-4999-8999-999999999999";
-    fs::create_dir_all(
-        folder_b(&home)
-            .join("claude-code-sessions")
-            .join(UUID_B)
-            .join(org),
-    )
-    .unwrap();
-    let menu = core.tray_profiles(Language::English).unwrap();
-    assert!(!menu.profiles[1].needs_sign_in);
-}
-
-#[test]
 fn off_windows_the_tray_offers_no_profile() {
     let (_home, core, env) = setup();
     env.set_os(OsKind::Linux);

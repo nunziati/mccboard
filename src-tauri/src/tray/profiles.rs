@@ -2,10 +2,10 @@
 //! profile with a dot in its account's color, and opens the one clicked. A profile that runs
 //! already opens all the same: the app brings it to the front.
 
-use mccboard_core::{AccountUuid, Color, Core, TrayProfiles};
+use mccboard_core::{AccountUuid, Color, TrayProfile, TrayProfiles};
+use tauri::AppHandle;
 use tauri::image::Image;
 use tauri::menu::{IconMenuItem, IsMenuItem, Submenu};
-use tauri::{AppHandle, Manager};
 
 /// Menu ids: `open-profile:default`, or `open-profile:<account uuid>`.
 const PREFIX: &str = "open-profile:";
@@ -26,60 +26,39 @@ pub(super) fn submenu(
         .profiles
         .iter()
         .map(|profile| {
-            let id = match (&profile.account, profile.default) {
-                (_, true) | (None, _) => format!("{PREFIX}{DEFAULT}"),
-                (Some(account), false) => format!("{PREFIX}{account}"),
-            };
-            IconMenuItem::with_id(
-                app,
-                id,
-                super::escape(&profile.title),
-                true,
-                Some(dot(&profile.color)),
-                None::<&str>,
-            )
+            let title = super::escape(&profile.title);
+            let dot = Some(dot(&profile.color));
+            match menu_id(profile) {
+                Some(id) => IconMenuItem::with_id(app, id, title, true, dot, None::<&str>),
+                // Nothing it could open but the wrong profile: shown, disabled.
+                None => IconMenuItem::new(app, title, false, dot, None::<&str>),
+            }
         })
         .collect::<tauri::Result<Vec<_>>>()?;
     let items: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|item| item as _).collect();
     Submenu::with_items(app, super::escape(&profiles.title), true, &items).map(Some)
 }
 
-/// Handles a click on an "Open profile" entry; `false` for any other menu id.
+/// The menu id that opens `profile`: the default profile by its own id, any other by its
+/// account. `None` for a profile other than the default one without an account, which no id
+/// could open: its entry is disabled rather than opening the default profile.
+fn menu_id(profile: &TrayProfile) -> Option<String> {
+    match (&profile.account, profile.default) {
+        (_, true) => Some(format!("{PREFIX}{DEFAULT}")),
+        (Some(account), false) => Some(format!("{PREFIX}{account}")),
+        (None, false) => None,
+    }
+}
+
+/// Handles a click on an "Open profile" entry; `false` for any other menu id. A profile with
+/// no account signed in yet also shows the Instances window, with its first sign-in guide.
 pub(super) fn on_menu_event(app: &AppHandle, id: &str) -> bool {
     let Some(which) = id.strip_prefix(PREFIX) else {
         return false;
     };
     let account = (which != DEFAULT).then(|| AccountUuid::new(which));
-    let app = app.clone();
-    // Finding and starting the app takes a moment: not on the main thread.
-    let spawned = std::thread::Builder::new()
-        .name("mccboard-open-profile".into())
-        .spawn(move || open(&app, account.as_ref()));
-    if let Err(error) = spawned {
-        eprintln!("mccboard: cannot open the desktop profile: {error}");
-    }
+    crate::desktop::open_in_background(app, account, |_| {});
     true
-}
-
-/// Opens the profile, then shows the Instances window, with its first sign-in guide, when the
-/// profile has no account signed in yet.
-fn open(app: &AppHandle, account: Option<&AccountUuid>) {
-    let core = app.state::<Core>();
-    if let Err(error) = crate::desktop::open(&core, account) {
-        eprintln!("mccboard: cannot open the desktop profile: {error}");
-        return;
-    }
-    let needs_sign_in = core
-        .tray_profiles(super::language(&core))
-        .is_ok_and(|menu| {
-            menu.profiles
-                .iter()
-                .any(|p| !p.default && p.account.as_ref() == account && p.needs_sign_in)
-        });
-    if needs_sign_in {
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || super::open_instances(&handle));
-    }
 }
 
 /// A filled circle in `color`, antialiased at its edge, on a transparent square.
@@ -101,6 +80,33 @@ fn dot(color: &Color) -> Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(default: bool, account: Option<&str>) -> TrayProfile {
+        TrayProfile {
+            default,
+            account: account.map(AccountUuid::new),
+            title: "B".into(),
+            color: "#3366cc".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn each_entry_opens_its_own_profile_and_one_without_an_account_none() {
+        let uuid = "22222222-2222-4222-8222-222222222222";
+        assert_eq!(
+            menu_id(&entry(true, Some(uuid))).as_deref(),
+            Some("open-profile:default")
+        );
+        assert_eq!(
+            menu_id(&entry(true, None)).as_deref(),
+            Some("open-profile:default")
+        );
+        assert_eq!(
+            menu_id(&entry(false, Some(uuid))),
+            Some(format!("open-profile:{uuid}"))
+        );
+        assert_eq!(menu_id(&entry(false, None)), None);
+    }
 
     #[test]
     fn the_dot_is_the_color_in_the_middle_and_clear_in_the_corners() {

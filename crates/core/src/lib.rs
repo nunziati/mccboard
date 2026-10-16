@@ -11,6 +11,7 @@
 mod account;
 mod add;
 mod alignment;
+mod atomic_file;
 mod background;
 mod backup;
 mod claude_cli;
@@ -58,12 +59,15 @@ mod windows_user_path;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub use account::{Account, AccountUpdate, AccountUuid, CLAUDE_ORANGE, Color, ObservedAccount};
+pub use account::{
+    Account, AccountUpdate, AccountUuid, CLAUDE_ORANGE, Color, NEUTRAL_COLOR, ObservedAccount,
+};
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
 pub use desktop_identity::{
-    AppArgs, OPEN_PROFILE_ARG, RunningProfile, Shortcut, ShortcutSync, ShortcutWarning,
-    WindowIdentity, app_user_model_id, command_line, open_profile_args, shortcut_file_name,
+    AppArgs, OPEN_PROFILE_ARG, RunningProfile, Saved, Shortcut, ShortcutSync, ShortcutWarning,
+    ShortcutsNotSynced, WindowIdentity, app_user_model_id, command_line, open_profile_args,
+    shortcut_file_name,
 };
 pub use desktop_launch::{DesktopLaunch, DesktopPackage, PACKAGE_FAMILY};
 pub use desktop_process::{DesktopDataDir, DesktopProcess, ProcessListing};
@@ -222,18 +226,20 @@ impl Core {
     /// linked instances follow the new name, and its desktop profile's Start-menu shortcut
     /// and icon the new label and color ([`Core::sync_desktop_shortcuts`]). The default
     /// desktop profile's account (the primary instance's) always shows Claude's orange: a new
-    /// color for it is refused ([`Error::DefaultProfileColor`]). If the launchers or the
-    /// shortcut can't be written, the error says so; the account is changed all the same.
+    /// color for it is refused ([`Error::DefaultProfileColor`]). If the launchers can't be
+    /// written, the error says so; the account is changed all the same. A shortcut that
+    /// can't follow is only a warning in the result ([`Saved`]).
     pub fn update_account(
         &self,
         uuid: &AccountUuid,
         update: AccountUpdate,
-    ) -> Result<Account, Error> {
+    ) -> Result<Saved<Account>, Error> {
         let account =
             registry::update_account(&self.home, &self.paths().config_file(), uuid, update)?;
-        self.sync_launchers()?;
-        self.sync_desktop_shortcuts()?;
-        Ok(account)
+        let launchers = self.sync_launchers();
+        let saved = Saved::new(account, self.sync_desktop_shortcuts());
+        launchers?;
+        Ok(saved)
     }
 
     /// Every desktop profile, the default one first, then the others by label: each with its
@@ -283,12 +289,13 @@ impl Core {
     /// or that is a link ([`Error::DesktopProfileFolderNotAllowed`]).
     ///
     /// On Windows the profile gets its Start-menu shortcut ([`Core::sync_desktop_shortcuts`]);
-    /// if it can't be written, the error says so and the profile is added all the same.
+    /// if it can't be written, the result carries why ([`Saved`]) and the profile is added
+    /// all the same.
     pub fn add_desktop_profile(
         &self,
         account: &AccountUuid,
         data_folder: Option<&Path>,
-    ) -> Result<DesktopProfile, Error> {
+    ) -> Result<Saved<DesktopProfile>, Error> {
         let profile = desktop_profile::add(
             &self.home,
             &self.paths(),
@@ -296,8 +303,7 @@ impl Core {
             account,
             data_folder,
         )?;
-        self.sync_desktop_shortcuts()?;
-        Ok(profile)
+        Ok(Saved::new(profile, self.sync_desktop_shortcuts()))
     }
 
     /// Changes `account`'s desktop profile (whether it opens when mccboard starts), keeping
@@ -326,24 +332,24 @@ impl Core {
     ///   ([`Error::FolderNotDeletable`]). Links inside are removed, never followed.
     ///
     /// Its Start-menu shortcut goes with it ([`Core::sync_desktop_shortcuts`]; if that
-    /// fails, the error says so and the profile is removed all the same), then its cached
-    /// icons ([`IconCache::remove`]); one that can't be deleted stays behind without failing
-    /// the removal.
+    /// fails, the result carries why ([`Saved`]) and the profile is removed all the same),
+    /// then its cached icons ([`IconCache::remove`]); one that can't be deleted stays behind
+    /// without failing the removal.
     ///
     /// The default desktop profile is never removed ([`Error::DefaultDesktopProfile`]).
     pub fn remove_desktop_profile(
         &self,
         account: &AccountUuid,
         level: RemoveLevel,
-    ) -> Result<DesktopProfileRemoval, Error> {
-        desktop_profile::remove(
-            &self.home,
-            &self.paths(),
-            self.env.as_ref(),
-            account,
-            level,
-            &|| self.sync_desktop_shortcuts(),
-        )
+    ) -> Result<Saved<DesktopProfileRemoval>, Error> {
+        let paths = self.paths();
+        let removal =
+            desktop_profile::remove(&self.home, &paths, self.env.as_ref(), account, level)?;
+        // The shortcut first: it shows the icon.
+        let saved = Saved::new(removal, self.sync_desktop_shortcuts());
+        // Leftover icons are harmless (a new color or profile gets new file names).
+        let _ = IconCache::new(&paths).remove(account);
+        Ok(saved)
     }
 
     /// Makes the desktop profiles' Start-menu shortcuts match the stored profiles, on Windows

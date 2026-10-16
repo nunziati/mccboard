@@ -77,9 +77,9 @@ pub fn profile_tray_icons(profiles: &[RunningProfile], language: Language) -> Ve
 /// The tooltip of a profile's notification-area icon: `Claude <label>`, shortened with "…"
 /// to fit the Windows tray.
 pub fn profile_tray_tooltip(label: &str, language: Language) -> String {
+    // The same in every language so far; a new one has to say.
     let text = match language {
-        Language::English => format!("Claude {label}"),
-        Language::Italian => format!("Claude {label}"),
+        Language::English | Language::Italian => format!("Claude {label}"),
     };
     if text.encode_utf16().count() <= TOOLTIP_MAX_UTF16 {
         return text;

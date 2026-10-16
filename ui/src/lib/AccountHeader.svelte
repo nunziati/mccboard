@@ -31,12 +31,14 @@
     event.preventDefault()
     saving = true
     try {
-      await updateAccount(account.uuid, {
+      const saved = await updateAccount(account.uuid, {
         label: label === account.label ? undefined : label,
         color: colorLocked || color === account.color ? undefined : color,
         launcher: launcher === (account.launcher ?? '') ? undefined : launcher.trim(),
       })
       editing = false
+      // Saved all the same; its message says so.
+      if (saved.shortcuts_not_synced) onerror(saved.shortcuts_not_synced)
     } catch (e) {
       onerror(e)
     } finally {

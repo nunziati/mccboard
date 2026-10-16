@@ -86,7 +86,7 @@ pub(crate) fn redraw(app: &AppHandle) {
 fn placeholder() -> TrayIcon {
     TrayIcon {
         percent: None,
-        color: "#6b7280".parse().expect("a valid color"),
+        color: mccboard_core::NEUTRAL_COLOR.parse().expect("a valid color"),
         account: None,
         stale: false,
         token_expired: false,

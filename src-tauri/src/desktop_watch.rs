@@ -128,21 +128,7 @@ pub(crate) fn on_menu_event(app: &AppHandle, id: &str) -> bool {
     let Some(uuid) = id.strip_prefix(REOPEN_PREFIX) else {
         return false;
     };
-    let account = AccountUuid::new(uuid);
-    let core = app.state::<Core>().inner().clone();
-    let app = app.clone();
-    // Finding and starting the app takes a moment: not on the main thread.
-    let spawned = std::thread::Builder::new()
-        .name("mccboard-reopen-profile".into())
-        .spawn(move || {
-            if let Err(error) = crate::desktop::open(&core, Some(&account)) {
-                eprintln!("mccboard: cannot reopen the desktop profile: {error}");
-            }
-            wake(&app);
-        });
-    if let Err(error) = spawned {
-        eprintln!("mccboard: cannot reopen the desktop profile: {error}");
-    }
+    crate::desktop::open_in_background(app, Some(AccountUuid::new(uuid)), wake);
     true
 }
 

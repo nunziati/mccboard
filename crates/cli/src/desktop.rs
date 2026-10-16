@@ -4,11 +4,19 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use mccboard_core::{
     AccountUuid, Core, DesktopOpening, DesktopProfile, DesktopProfileRemoval, DesktopProfileUpdate,
     DesktopWarning, FolderOutcome, Language, Registry, RemoveLevel, ShortcutSync, ShortcutWarning,
+    ShortcutsNotSynced,
 };
+
+/// A yes/no setting on the command line: `on` or `off`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Switch {
+    On,
+    Off,
+}
 
 #[derive(Subcommand)]
 pub enum DesktopCommand {
@@ -84,8 +92,8 @@ pub enum DesktopCommand {
         /// The profile's account, by UUID or by its label.
         account: String,
         /// Open the profile when mccboard starts.
-        #[arg(long, value_name = "on|off", value_parser = ["on", "off"], required = true)]
-        open_at_start: Option<String>,
+        #[arg(long, value_name = "on|off")]
+        open_at_start: Switch,
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -118,15 +126,17 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
             let registry = core.registry()?;
             let uuid = crate::find_account(&registry, &account)?;
             let folder = folder.map(|f| crate::user_path(&f)).transpose()?;
-            let profile = core.add_desktop_profile(&uuid, folder.as_deref())?;
+            let saved = core.add_desktop_profile(&uuid, folder.as_deref())?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&profile)?);
+                println!("{}", serde_json::to_string_pretty(&saved)?);
             } else {
+                let profile = &saved.value;
                 println!(
                     "Added the desktop profile of {}.",
                     name(&registry, profile.account.as_ref())
                 );
-                print_profile(&registry, &profile);
+                print_profile(&registry, profile);
+                warn_shortcuts(saved.shortcuts_not_synced.as_ref());
             }
         }
         DesktopCommand::Open {
@@ -180,11 +190,12 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
             } else {
                 RemoveLevel::FromMccboard
             };
-            let removal = core.remove_desktop_profile(&uuid, level)?;
+            let saved = core.remove_desktop_profile(&uuid, level)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&removal)?);
+                println!("{}", serde_json::to_string_pretty(&saved)?);
             } else {
-                print_removal(&registry, &removal);
+                print_removal(&registry, &saved.value);
+                warn_shortcuts(saved.shortcuts_not_synced.as_ref());
             }
         }
         DesktopCommand::Notices { json } => notices(core, json)?,
@@ -204,7 +215,7 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
             let registry = core.registry()?;
             let uuid = crate::find_account(&registry, &account)?;
             let update = DesktopProfileUpdate {
-                open_at_start: open_at_start.map(|value| value == "on"),
+                open_at_start: Some(open_at_start == Switch::On),
             };
             let profile = core.update_desktop_profile(&uuid, update)?;
             if json {
@@ -215,6 +226,18 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A change was saved but the Start-menu shortcuts couldn't follow it: a warning, not a
+/// failure (the exit code stays 0).
+pub(crate) fn warn_shortcuts(warning: Option<&ShortcutsNotSynced>) {
+    if let Some(warning) = warning {
+        eprintln!(
+            "warning: {}. The change is saved; run `mccboard desktop shortcuts` to try the \
+             shortcuts again.",
+            warning.message
+        );
+    }
 }
 
 /// One look at the desktop app's processes: the CLI is English-only.

@@ -586,7 +586,7 @@ fn removing_a_desktop_profile_removes_its_cached_icons() {
     let b = home.linked(".claude-b");
     b.logged_in_as(UUID_B, "b@example.com");
     core.register(&b.dir).unwrap();
-    let profile = core.add_desktop_profile(&uuid(UUID_B), None).unwrap();
+    let profile = core.add_desktop_profile(&uuid(UUID_B), None).unwrap().value;
 
     let cache = IconCache::new(&core.paths());
     let icons = cache

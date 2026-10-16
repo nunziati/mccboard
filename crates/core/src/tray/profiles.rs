@@ -25,9 +25,6 @@ pub struct TrayProfile {
     /// The menu entry: the account's label, with "(default)" after the default profile's.
     pub title: String,
     pub color: Color,
-    /// A profile other than the default one with no account signed in yet: opening it should
-    /// show the first sign-in guide.
-    pub needs_sign_in: bool,
 }
 
 pub(crate) fn view(profiles: Vec<DesktopProfile>, language: Language) -> TrayProfiles {
@@ -50,7 +47,6 @@ pub(crate) fn view(profiles: Vec<DesktopProfile>, language: Language) -> TrayPro
             };
             TrayProfile {
                 default: p.default,
-                needs_sign_in: !p.default && p.observed.account.is_none(),
                 account: p.account,
                 title,
                 color: p.color,

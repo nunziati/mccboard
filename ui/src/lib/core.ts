@@ -117,6 +117,18 @@ export interface CoreError {
   processes?: ClaudeProcess[] | null
 }
 
+/**
+ * A change saved in config.toml whose Start-menu shortcuts couldn't follow: a warning shown
+ * like an error (its message says the change is saved), never a failed operation.
+ */
+export interface ShortcutsNotSynced extends CoreError {
+  /** The error's English message. */
+  message: string
+}
+
+/** What a change to the accounts or desktop profiles returns, with its shortcut warning. */
+export type Saved<T> = T & { shortcuts_not_synced: ShortcutsNotSynced | null }
+
 export function isCoreError(value: unknown): value is CoreError {
   return typeof value === 'object' && value !== null && typeof (value as CoreError).code === 'string'
 }
@@ -137,8 +149,8 @@ export function unregister(path: string): Promise<void> {
   return invoke<void>('unregister', { path })
 }
 
-export function updateAccount(uuid: string, update: AccountUpdate): Promise<Account> {
-  return invoke<Account>('update_account', { uuid, ...update })
+export function updateAccount(uuid: string, update: AccountUpdate): Promise<Saved<Account>> {
+  return invoke<Saved<Account>>('update_account', { uuid, ...update })
 }
 
 export function launchers(): Promise<LauncherStatus> {
@@ -369,6 +381,8 @@ export interface DesktopOpening {
   program: string
   data_folder: string | null
   created_folder: boolean
+  /** A profile other than the default one with no account signed in yet. */
+  needs_sign_in: boolean
   instance: string | null
   pid: number
 }
@@ -395,8 +409,8 @@ export function desktopProfileFolder(uuid: string): Promise<string> {
 }
 
 /** Adds a desktop profile for the account `uuid`, in `folder` or the default one. */
-export function addDesktopProfile(uuid: string, folder: string | null): Promise<DesktopProfile> {
-  return invoke<DesktopProfile>('add_desktop_profile', { uuid, folder })
+export function addDesktopProfile(uuid: string, folder: string | null): Promise<Saved<DesktopProfile>> {
+  return invoke<Saved<DesktopProfile>>('add_desktop_profile', { uuid, folder })
 }
 
 export function setDesktopProfileOpenAtStart(uuid: string, openAtStart: boolean): Promise<DesktopProfile> {
@@ -407,8 +421,11 @@ export function setDesktopProfileOpenAtStart(uuid: string, openAtStart: boolean)
  * Removes the account's desktop profile from mccboard. With `deleteFolder`, which the user must
  * have confirmed, also deletes its data folder; refused while the app uses it.
  */
-export function removeDesktopProfile(uuid: string, deleteFolder: boolean): Promise<DesktopProfileRemoval> {
-  return invoke<DesktopProfileRemoval>('remove_desktop_profile', { uuid, deleteFolder })
+export function removeDesktopProfile(
+  uuid: string,
+  deleteFolder: boolean,
+): Promise<Saved<DesktopProfileRemoval>> {
+  return invoke<Saved<DesktopProfileRemoval>>('remove_desktop_profile', { uuid, deleteFolder })
 }
 
 /** Opens the account's desktop profile, or the default one for null; brings an open one to the front. */
