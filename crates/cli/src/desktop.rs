@@ -1,13 +1,13 @@
 //! `mccboard desktop`: desktop profiles, copies of the Claude desktop app each bound to one
-//! account. Nothing is launched from here yet.
+//! account, listed, added, opened, changed and removed.
 
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Subcommand;
 use mccboard_core::{
-    AccountUuid, Core, DesktopProfile, DesktopProfileRemoval, DesktopProfileUpdate, DesktopWarning,
-    FolderOutcome, Registry, RemoveLevel,
+    AccountUuid, Core, DesktopOpening, DesktopProfile, DesktopProfileRemoval, DesktopProfileUpdate,
+    DesktopWarning, FolderOutcome, Registry, RemoveLevel,
 };
 
 #[derive(Subcommand)]
@@ -28,6 +28,20 @@ pub enum DesktopCommand {
         /// The profile's data folder (default: %LOCALAPPDATA%\Claude-<label>).
         #[arg(long, value_name = "PATH")]
         folder: Option<PathBuf>,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open a desktop profile (Windows): the Claude desktop app with the profile's data folder,
+    /// its Code tab in the account's local instance. Opening an open profile brings it to the
+    /// front. The primary instance's account, or --default, opens the default desktop profile.
+    Open {
+        /// The profile's account, by UUID or by its label.
+        #[arg(required_unless_present = "default", conflicts_with = "default")]
+        account: Option<String>,
+        /// Open the default desktop profile: the app as it starts normally.
+        #[arg(long)]
+        default: bool,
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -96,6 +110,25 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
                     name(&registry, profile.account.as_ref())
                 );
                 print_profile(&registry, &profile);
+            }
+        }
+        DesktopCommand::Open {
+            account,
+            default: _,
+            json,
+        } => {
+            let opening = match account {
+                Some(account) => {
+                    let registry = core.registry()?;
+                    let uuid = crate::find_account(&registry, &account)?;
+                    core.open_desktop_profile(&uuid)?
+                }
+                None => core.open_default_desktop_profile()?,
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&opening)?);
+            } else {
+                print_opening(&opening);
             }
         }
         DesktopCommand::Remove {
@@ -193,6 +226,9 @@ fn print_profile(registry: &Registry, profile: &DesktopProfile) {
             }
         );
     }
+    if profile.running {
+        println!("  running");
+    }
     println!("  data folder    {}", profile.data_folder.display());
     match &profile.instance {
         Some(dir) => println!("  Code sessions  {}", dir.display()),
@@ -238,6 +274,37 @@ fn print_profile(registry: &Registry, profile: &DesktopProfile) {
             ),
         }
     }
+}
+
+fn print_opening(opening: &DesktopOpening) {
+    let account = opening
+        .label
+        .clone()
+        .or_else(|| opening.account.as_ref().map(ToString::to_string));
+    match (opening.default, account) {
+        (true, Some(account)) => println!(
+            "Opened the default desktop profile (account {account}), pid {}.",
+            opening.pid
+        ),
+        (true, None) => println!("Opened the default desktop profile, pid {}.", opening.pid),
+        (false, account) => println!(
+            "Opened desktop profile {}, pid {}.",
+            account.unwrap_or_default(),
+            opening.pid
+        ),
+    }
+    if let Some(folder) = &opening.data_folder {
+        let created = if opening.created_folder {
+            " (created)"
+        } else {
+            ""
+        };
+        println!("  data folder    {}{created}", folder.display());
+    }
+    if let Some(instance) = &opening.instance {
+        println!("  Code sessions  {}", instance.display());
+    }
+    println!("  program        {}", opening.program.display());
 }
 
 fn print_removal(registry: &Registry, removal: &DesktopProfileRemoval) {

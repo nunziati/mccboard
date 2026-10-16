@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use common::{FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, UUID_C};
+use common::{FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, UUID_C, desktop_process, user_data_dir};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
     AccountUpdate, AccountUuid, AddRequest, CLAUDE_ORANGE, Color, Core, DesktopDataDir,
@@ -638,13 +638,7 @@ fn nothing_in_a_profiles_data_folder_is_read_beyond_the_sessions_folder_names() 
     let app = home.path().join("AppData/Roaming/Claude");
     signed_in(&app, UUID_A, ago(5));
     fs::write(app.join("config.json"), &secret).unwrap();
-    env.set_desktop_processes(vec![DesktopProcess {
-        pid: 7,
-        name: "Claude.exe".into(),
-        data_dir: DesktopDataDir::Dir {
-            path: folder.clone(),
-        },
-    }]);
+    env.set_desktop_processes(vec![desktop_process(7, &[&user_data_dir(&folder)])]);
 
     let profiles = core.desktop_profiles().unwrap();
     let removal = core.remove_desktop_profile(&uuid(UUID_B), RemoveLevel::WithFolder);
@@ -780,25 +774,20 @@ fn removing_with_the_folder_is_refused_while_the_app_uses_it() {
     let before = home.config_text().unwrap();
     let process = DesktopProcess {
         pid: 4242,
+        parent_pid: Some(1),
         name: "Claude.exe".into(),
+        helper: None,
         data_dir: DesktopDataDir::Dir {
-            path: folder.join("."),
+            path: folder.clone(),
         },
     };
     env.set_desktop_processes(vec![
-        DesktopProcess {
-            pid: 1,
-            name: "Claude.exe".into(),
-            data_dir: DesktopDataDir::Default,
-        },
-        DesktopProcess {
-            pid: 2,
-            name: "Claude.exe".into(),
-            data_dir: DesktopDataDir::Dir {
-                path: home.path().join("profiles").join("c"),
-            },
-        },
-        process.clone(),
+        desktop_process(1, &[]),
+        desktop_process(
+            2,
+            &[&user_data_dir(&home.path().join("profiles").join("c"))],
+        ),
+        desktop_process(4242, &[&user_data_dir(&folder.join("."))]),
     ]);
 
     assert_eq!(

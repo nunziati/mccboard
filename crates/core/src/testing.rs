@@ -10,9 +10,12 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopProcess, EndpointReply,
-    Environment, InstanceKind, LoginExit, LoginInvocation, OsKind,
+    AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopLaunch, DesktopPackage,
+    EndpointReply, Environment, InstanceKind, LoginExit, LoginInvocation, OsKind, ProcessListing,
 };
+
+/// The first pid a fake launch of the desktop app returns; each launch gets the next one.
+pub const FIRST_FAKE_DESKTOP_PID: u32 = 4000;
 
 /// The dummy access token [`FakeEnvironment::login_as`] writes, playing Claude Code. Nothing
 /// mccboard produces may contain it.
@@ -44,7 +47,13 @@ struct State {
     user_path_fails: bool,
     launcher_shim: Option<Vec<u8>>,
     processes: Vec<ClaudeProcess>,
-    desktop_processes: Vec<DesktopProcess>,
+    desktop_processes: Vec<ProcessListing>,
+    desktop_packages: Vec<DesktopPackage>,
+    desktop_lookup_error: Option<String>,
+    /// The families asked for, one list per lookup.
+    desktop_lookups: Vec<Vec<String>>,
+    desktop_launches: Vec<DesktopLaunch>,
+    desktop_launch_handler: DesktopLaunchHandler,
     developer_mode: bool,
     claude_invocations: Vec<ClaudeInvocation>,
     claude_handler: ClaudeHandler,
@@ -63,6 +72,19 @@ type LoginFn = dyn Fn(&LoginInvocation) -> io::Result<LoginExit> + Send + Sync;
 /// What a fake login does; by default the user closes it without logging in.
 #[derive(Clone)]
 struct LoginHandler(Arc<LoginFn>);
+
+type DesktopLaunchFn = dyn Fn(&DesktopLaunch) -> io::Result<u32> + Send + Sync;
+
+/// What a fake launch of the desktop app does; by default it starts nothing and returns the
+/// next pid from [`FIRST_FAKE_DESKTOP_PID`].
+#[derive(Clone)]
+struct DesktopLaunchHandler(Option<Arc<DesktopLaunchFn>>);
+
+impl std::fmt::Debug for DesktopLaunchHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DesktopLaunchHandler")
+    }
+}
 
 impl std::fmt::Debug for LoginHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,6 +115,11 @@ impl FakeEnvironment {
                 launcher_shim: Some(FAKE_LAUNCHER_SHIM.to_vec()),
                 processes: Vec::new(),
                 desktop_processes: Vec::new(),
+                desktop_packages: Vec::new(),
+                desktop_lookup_error: None,
+                desktop_lookups: Vec::new(),
+                desktop_launches: Vec::new(),
+                desktop_launch_handler: DesktopLaunchHandler(None),
                 developer_mode: true,
                 claude_invocations: Vec::new(),
                 claude_handler: ClaudeHandler(Arc::new(|_| Ok(ClaudeRun::ok("")))),
@@ -170,9 +197,42 @@ impl FakeEnvironment {
         self.state().processes.push(process);
     }
 
-    /// Replaces the running processes of the Claude desktop app.
-    pub fn set_desktop_processes(&self, processes: Vec<DesktopProcess>) {
+    /// Replaces the running processes named `Claude`, as the OS lists them (the desktop app's
+    /// and any other).
+    pub fn set_desktop_processes(&self, processes: Vec<ProcessListing>) {
         self.state().desktop_processes = processes;
+    }
+
+    /// Installs the desktop app's MSIX packages: what every lookup finds, whatever families
+    /// it asks for. None by default: the app isn't installed.
+    pub fn set_desktop_app_packages(&self, packages: Vec<DesktopPackage>) {
+        self.state().desktop_packages = packages;
+    }
+
+    /// Makes looking up the desktop app's packages fail with `message`, as when Windows'
+    /// packaging API does; `None` undoes it.
+    pub fn set_desktop_app_lookup_error(&self, message: Option<&str>) {
+        self.state().desktop_lookup_error = message.map(str::to_owned);
+    }
+
+    /// The package families each lookup of the desktop app asked for, in order.
+    pub fn desktop_app_lookups(&self) -> Vec<Vec<String>> {
+        self.state().desktop_lookups.clone()
+    }
+
+    /// Scripts what launching the desktop app does: `handler` gets each launch and returns
+    /// the pid started, or an error as when the program can't be started. It may look at the
+    /// filesystem, to check what existed at launch.
+    pub fn on_desktop_launch(
+        &self,
+        handler: impl Fn(&DesktopLaunch) -> io::Result<u32> + Send + Sync + 'static,
+    ) {
+        self.state().desktop_launch_handler = DesktopLaunchHandler(Some(Arc::new(handler)));
+    }
+
+    /// Every launch of the desktop app so far, in order.
+    pub fn desktop_launches(&self) -> Vec<DesktopLaunch> {
+        self.state().desktop_launches.clone()
     }
 
     /// Sets the launcher shim mccboard ships: other bytes, as after an upgrade of mccboard, or
@@ -336,8 +396,33 @@ impl Environment for FakeEnvironment {
         self.state().processes.clone()
     }
 
-    fn desktop_processes(&self) -> Vec<DesktopProcess> {
+    fn desktop_processes(&self) -> Vec<ProcessListing> {
         self.state().desktop_processes.clone()
+    }
+
+    fn desktop_app_packages(&self, families: &[String]) -> io::Result<Vec<DesktopPackage>> {
+        let mut state = self.state();
+        state.desktop_lookups.push(families.to_vec());
+        match &state.desktop_lookup_error {
+            Some(message) => Err(io::Error::other(format!("fake: {message}"))),
+            None => Ok(state.desktop_packages.clone()),
+        }
+    }
+
+    fn launch_desktop_app(&self, launch: &DesktopLaunch) -> io::Result<u32> {
+        let (handler, count) = {
+            let mut state = self.state();
+            state.desktop_launches.push(launch.clone());
+            (
+                state.desktop_launch_handler.clone(),
+                state.desktop_launches.len() as u32,
+            )
+        };
+        match handler.0 {
+            // Not under the lock: the handler may steer the fake itself.
+            Some(handler) => handler(launch),
+            None => Ok(FIRST_FAKE_DESKTOP_PID + count - 1),
+        }
     }
 
     fn file_links_allowed(&self) -> bool {

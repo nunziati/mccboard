@@ -15,6 +15,11 @@
 //!   `<data folder>/claude-code-sessions/` (`<account uuid>/<org uuid>/…`), and from nothing
 //!   else. mccboard never opens a file in a data folder: `config.json` holds the app's token
 //!   cache (ADR 0002).
+//! - **Opening** (Windows): the data folder is created first, then the app found from its
+//!   MSIX package starts with `--user-data-dir` and the account's local instance as
+//!   `CLAUDE_CONFIG_DIR` ([`crate::desktop_launch`]). The default profile starts with neither.
+//! - **Running**: a profile runs while a process of the app uses its folder
+//!   ([`crate::desktop_process`]).
 //! - **Removal**: from mccboard only, or with the data folder, refused while a process of the
 //!   app uses it (the environment port lists them, as the session guard does for Claude Code).
 
@@ -27,11 +32,13 @@ use serde::Serialize;
 
 use crate::account::{self, Account, AccountUuid, Color};
 use crate::config::{Config, ConfigFile, DesktopProfileEntry};
+use crate::desktop_launch::{self, DesktopLaunch};
+use crate::desktop_process::{self, DesktopProcess};
 use crate::instance::InstanceKind;
 use crate::links::{self, Entry};
 use crate::{
     Environment, Error, FolderOutcome, OsKind, Paths, RemoveLevel, desktop_app, folder_guard,
-    paths, remove, session_guard,
+    paths, remove,
 };
 
 /// The folder under a data folder whose subfolders are named after the accounts signed in.
@@ -59,6 +66,8 @@ pub struct DesktopProfile {
     pub instance: Option<PathBuf>,
     /// Whether it opens when mccboard starts; always `false` for the default profile.
     pub open_at_start: bool,
+    /// Whether a process of the desktop app runs it now, a helper process included.
+    pub running: bool,
     pub observed: DesktopObservation,
     pub warnings: Vec<DesktopWarning>,
 }
@@ -106,26 +115,104 @@ pub struct DesktopProfileRemoval {
     pub folder: FolderOutcome,
 }
 
-/// A running process of the Claude desktop app.
+/// What opening a desktop profile did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DesktopProcess {
+pub struct DesktopOpening {
+    /// The default desktop profile was opened.
+    pub default: bool,
+    /// The profile's account; for the default profile, the primary instance's, if any.
+    pub account: Option<AccountUuid>,
+    /// The account's label, when the account is registered.
+    pub label: Option<String>,
+    /// The app's program as found for this launch (`…\WindowsApps\Claude_…\app\Claude.exe`).
+    pub program: PathBuf,
+    /// The data folder passed with `--user-data-dir`; `None` for the default profile.
+    pub data_folder: Option<PathBuf>,
+    /// Whether the data folder was created for this launch: the profile's first opening.
+    pub created_folder: bool,
+    /// The instance set as `CLAUDE_CONFIG_DIR`; `None` for the default profile, whose Code
+    /// tab uses the primary instance as Claude Code does by default.
+    pub instance: Option<PathBuf>,
+    /// The process mccboard started. When the profile is open already, it hands over to the
+    /// running copy, which comes to the front, and exits.
     pub pid: u32,
-    /// The process name (`Claude.exe`).
-    pub name: String,
-    pub data_dir: DesktopDataDir,
 }
 
-/// The data directory a process of the desktop app uses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DesktopDataDir {
-    /// Started without `--user-data-dir`: the app's own data directory (the default desktop
-    /// profile).
-    Default,
-    /// Its `--user-data-dir`, absolute.
-    Dir { path: PathBuf },
-    /// Its command line can't be read (another user's process, an elevated one).
-    Unknown,
+/// Opens `account`'s desktop profile, or the default one (`None`, or the primary instance's
+/// account): finds the app, creates the data folder, then starts the app with
+/// `--user-data-dir=<folder>` and `CLAUDE_CONFIG_DIR=<the account's local instance>`, every
+/// other inherited `CLAUDE*`/`ANTHROPIC*` variable removed, and doesn't wait for it.
+pub(crate) fn open(
+    home: &Path,
+    paths: &Paths,
+    env: &dyn Environment,
+    account: Option<&AccountUuid>,
+) -> Result<DesktopOpening, Error> {
+    if env.os() != OsKind::Windows {
+        return Err(Error::DesktopAppNeedsWindows);
+    }
+    let config = ConfigFile::load(&paths.config_file())?.config;
+    let label_of = |uuid: &AccountUuid| config.account(uuid).map(|a| a.label.clone());
+    let default_account = config.default_profile_account(home);
+    let account = account.filter(|a| Some(*a) != default_account);
+
+    let Some(account) = account else {
+        let program = desktop_launch::find_app(home, env)?;
+        let pid = start(env, &desktop_launch::launch(program.clone(), None, None))?;
+        return Ok(DesktopOpening {
+            default: true,
+            account: default_account.cloned(),
+            label: default_account.and_then(label_of),
+            program,
+            data_folder: None,
+            created_folder: false,
+            instance: None,
+            pid,
+        });
+    };
+
+    let entry = stored(home, &config, account)?;
+    let label = label_of(account);
+    let Some(instance) = local_instance(home, &config, account) else {
+        return Err(Error::NoLocalInstance {
+            label: label.unwrap_or_else(|| account.to_string()),
+        });
+    };
+    let data_folder = entry.data_folder.clone();
+    if !folder_allowed(home, paths, &config, &data_folder, account) {
+        return Err(Error::DesktopProfileFolderNotAllowed { path: data_folder });
+    }
+    if data_folder.exists() && !data_folder.is_dir() {
+        return Err(Error::NotADirectory { path: data_folder });
+    }
+    let program = desktop_launch::find_app(home, env)?;
+
+    // Created here, not by the app: a folder the packaged app creates is virtualised into its
+    // package folder.
+    let created_folder = !data_folder.is_dir();
+    fs::create_dir_all(&data_folder).map_err(|source| Error::FolderNotCreated {
+        path: data_folder.clone(),
+        source,
+    })?;
+    let launch = desktop_launch::launch(program.clone(), Some(&data_folder), Some(&instance));
+    let pid = start(env, &launch)?;
+    Ok(DesktopOpening {
+        default: false,
+        account: Some(account.clone()),
+        label,
+        program,
+        data_folder: Some(data_folder),
+        created_folder,
+        instance: Some(instance),
+        pid,
+    })
+}
+
+fn start(env: &dyn Environment, launch: &DesktopLaunch) -> Result<u32, Error> {
+    env.launch_desktop_app(launch)
+        .map_err(|e| Error::DesktopAppNotOpened {
+            reason: e.to_string(),
+        })
 }
 
 pub(crate) fn list(
@@ -261,19 +348,8 @@ pub(crate) fn processes_using(
     env: &dyn Environment,
     data_folder: &Path,
 ) -> Vec<DesktopProcess> {
-    let mut using: Vec<DesktopProcess> = env
-        .desktop_processes()
-        .into_iter()
-        .filter(|process| match &process.data_dir {
-            DesktopDataDir::Dir { path } => session_guard::same_folder(path, data_folder),
-            DesktopDataDir::Default => desktop_app::default_data_dirs(home)
-                .iter()
-                .any(|dir| session_guard::same_folder(dir, data_folder)),
-            DesktopDataDir::Unknown => false,
-        })
-        .collect();
-    using.sort_by_key(|p| p.pid);
-    using
+    let processes = desktop_process::desktop_processes(env.desktop_processes());
+    desktop_process::using_folder(&processes, home, data_folder)
 }
 
 /// A registered account, or [`Error::AccountNotFound`].
@@ -371,6 +447,7 @@ fn views(home: &Path, config: &Config, env: &dyn Environment) -> Vec<DesktopProf
             .map(|a| a.label.clone())
     };
 
+    let processes = desktop_process::desktop_processes(env.desktop_processes());
     let primary_account = config.default_profile_account(home).cloned();
     let observed = observe(&desktop_app::default_data_dirs(home));
     let mut warnings = Vec::new();
@@ -390,6 +467,7 @@ fn views(home: &Path, config: &Config, env: &dyn Environment) -> Vec<DesktopProf
         data_folder: desktop_app::default_data_dir(home, env.os()),
         instance: config.primary_instance(home).map(|i| i.config_dir.clone()),
         open_at_start: false,
+        running: !desktop_process::running_default(&processes, home).is_empty(),
         observed,
         warnings,
     };
@@ -424,6 +502,8 @@ fn views(home: &Path, config: &Config, env: &dyn Environment) -> Vec<DesktopProf
                 data_folder: entry.data_folder.clone(),
                 instance,
                 open_at_start: entry.open_at_start,
+                running: !desktop_process::using_folder(&processes, home, &entry.data_folder)
+                    .is_empty(),
                 observed,
                 warnings,
             }

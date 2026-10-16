@@ -17,6 +17,8 @@ mod claude_cli;
 mod claude_files;
 mod config;
 mod desktop_app;
+mod desktop_launch;
+mod desktop_process;
 mod desktop_profile;
 mod doctor;
 mod environment;
@@ -39,6 +41,8 @@ pub mod testing;
 mod tray;
 mod usage;
 #[cfg(windows)]
+mod windows_desktop_app;
+#[cfg(windows)]
 mod windows_user_path;
 
 use std::path::{Path, PathBuf};
@@ -47,8 +51,10 @@ use std::sync::{Arc, Mutex};
 pub use account::{Account, AccountUpdate, AccountUuid, CLAUDE_ORANGE, Color, ObservedAccount};
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
+pub use desktop_launch::{DesktopLaunch, DesktopPackage, PACKAGE_FAMILY};
+pub use desktop_process::{DesktopDataDir, DesktopProcess, ProcessListing};
 pub use desktop_profile::{
-    DesktopDataDir, DesktopObservation, DesktopProcess, DesktopProfile, DesktopProfileRemoval,
+    DesktopObservation, DesktopOpening, DesktopProfile, DesktopProfileRemoval,
     DesktopProfileUpdate, DesktopWarning,
 };
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
@@ -276,6 +282,31 @@ impl Core {
         level: RemoveLevel,
     ) -> Result<DesktopProfileRemoval, Error> {
         desktop_profile::remove(&self.home, &self.paths(), self.env.as_ref(), account, level)
+    }
+
+    /// Opens `account`'s desktop profile on Windows, or the default desktop profile when
+    /// `account` is the primary instance's. The app is found from its MSIX package at every
+    /// launch, since its folder changes with each update. The data folder is created first,
+    /// then the app starts with `--user-data-dir=<folder>` and, in its environment,
+    /// `CLAUDE_CONFIG_DIR=<the account's local instance>`, every other inherited `CLAUDE*`
+    /// and `ANTHROPIC*` variable removed, with no console window. mccboard doesn't wait for
+    /// it: a profile open already comes to the front. The report carries the pid started.
+    ///
+    /// Refuses off Windows ([`Error::DesktopAppNeedsWindows`]), when the app isn't installed
+    /// ([`Error::DesktopAppNotInstalled`]) or only the old installer's is
+    /// ([`Error::DesktopAppNotMsix`]), for an account without a profile
+    /// ([`Error::DesktopProfileNotFound`]) or without a local instance
+    /// ([`Error::NoLocalInstance`]), and for a hand-edited data folder the rules of
+    /// [`Core::add_desktop_profile`] wouldn't accept.
+    pub fn open_desktop_profile(&self, account: &AccountUuid) -> Result<DesktopOpening, Error> {
+        desktop_profile::open(&self.home, &self.paths(), self.env.as_ref(), Some(account))
+    }
+
+    /// Opens the default desktop profile: the app as it starts normally, with neither
+    /// `--user-data-dir` nor `CLAUDE_CONFIG_DIR` (the inherited `CLAUDE*`/`ANTHROPIC*`
+    /// variables are still removed). Refuses as [`Core::open_desktop_profile`] does.
+    pub fn open_default_desktop_profile(&self) -> Result<DesktopOpening, Error> {
+        desktop_profile::open(&self.home, &self.paths(), self.env.as_ref(), None)
     }
 
     /// The processes of the Claude desktop app using the data folder `data_folder`

@@ -197,5 +197,9 @@
   "error.desktop_profile_not_found": "Questo account non ha un profilo desktop.",
   "error.default_desktop_profile": "Il profilo desktop predefinito è l'app desktop di Claude così com'è: mccboard non lo rimuove né lo modifica mai.",
   "error.default_profile_color": "Questo è l'account del profilo desktop predefinito, che mostra sempre l'arancione di Claude: il suo colore non si può cambiare.",
-  "error.desktop_profile_in_use": "L'app desktop di Claude sta usando la cartella dati di questo profilo desktop. Chiudi il profilo, poi riprova. Non è stato cambiato nulla."
+  "error.desktop_profile_in_use": "L'app desktop di Claude sta usando la cartella dati di questo profilo desktop. Chiudi il profilo, poi riprova. Non è stato cambiato nulla.",
+  "error.desktop_app_needs_windows": "I profili desktop si aprono solo su Windows, dove gira l'app desktop di Claude.",
+  "error.desktop_app_not_installed": "L'app desktop di Claude non è installata. Installala da claude.ai/download o dal Microsoft Store, poi riprova.",
+  "error.desktop_app_not_msix": "Questa app desktop di Claude viene dal vecchio programma di installazione, che i profili desktop non supportano. Installa l'app attuale da claude.ai/download o dal Microsoft Store, poi riprova.",
+  "error.desktop_app_not_opened": "Non è stato possibile aprire l'app desktop di Claude."
 }
