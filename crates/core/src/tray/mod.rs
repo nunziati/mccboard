@@ -18,7 +18,7 @@
 //! time zone.
 
 pub(crate) mod profiles;
-mod text;
+pub(crate) mod text;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -322,7 +322,12 @@ fn status_of(account: &TrayAccount) -> Status {
             Status::Current
         };
     }
-    match &account.status {
+    status_without_reading(&account.status)
+}
+
+/// What the tray says about an account that has no reading, from its usage status.
+pub(crate) fn status_without_reading(status: &UsageStatus) -> Status {
+    match status {
         UsageStatus::Ok | UsageStatus::NeverRead => Status::NeverRead,
         UsageStatus::TokenExpired => Status::TokenExpired,
         UsageStatus::NotLoggedIn => Status::NotLoggedIn,
