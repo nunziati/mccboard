@@ -34,7 +34,7 @@
 //! renew_expired_tokens = true   # let Claude Code renew an expired token; absent: true
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -73,6 +73,9 @@ pub(crate) struct Config {
     pub desktop_profiles: Vec<DesktopProfileEntry>,
     /// Answers about unknown items, by item name.
     pub sharing: BTreeMap<String, SharingAnswer>,
+    /// Items answered "link" that the sharing table has since made private: the answer is
+    /// ignored and left as written, and the doctor says so (#28).
+    pub ignored_link_answers: BTreeSet<String>,
     /// The app's language, when the user chose one.
     pub language: Option<Language>,
     /// Whether mccboard asks Claude Code to renew an expired token (#30).
@@ -86,6 +89,7 @@ impl Default for Config {
             instances: Vec::new(),
             desktop_profiles: Vec::new(),
             sharing: BTreeMap::new(),
+            ignored_link_answers: BTreeSet::new(),
             language: None,
             renew_expired_tokens: true,
         }
@@ -639,6 +643,7 @@ impl RawConfig {
             });
         }
         let mut sharing = BTreeMap::new();
+        let mut ignored_link_answers = BTreeSet::new();
         for (item, answer) in self.sharing.items {
             let at = format!("sharing.items.{item}");
             sharing::check_plain(&item).map_err(|e| format!("{at}: {e}"))?;
@@ -647,6 +652,9 @@ impl RawConfig {
                 .map_err(|e| format!("{at}: {e}"))?;
             if sharing::is_private(&item) {
                 // Answered while still unknown; the table has since learned it is private.
+                if answer == SharingAnswer::Link {
+                    ignored_link_answers.insert(item);
+                }
                 continue;
             }
             sharing::check_item(&item).map_err(|e| format!("{at}: {e}"))?;
@@ -693,6 +701,7 @@ impl RawConfig {
             instances,
             desktop_profiles,
             sharing,
+            ignored_link_answers,
             language,
             renew_expired_tokens: self.preferences.renew_expired_tokens.unwrap_or(true),
         })

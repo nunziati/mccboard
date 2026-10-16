@@ -3,18 +3,19 @@
 //!
 //! Drift is a list of [`DriftItem`]s. Each has a stable `id` naming the item it is about,
 //! `<family>:<subject>` (`link:settings.json`, `link:skills/review`, `migrate:skills`), which
-//! stays the same whatever is wrong with the item, so a repair can target it. Its [`Problem`]
+//! stays the same whatever is wrong with the item, so a repair can target it. A private item
+//! that is a link to the primary's has its own family (`private:downloads`). Its [`Problem`]
 //! says what is wrong and its [`Repair`] what a repair would do. Launchers have their own
 //! family (`launcher:claude-b`), and so do aligned items: Global config keys
 //! (`config:diffTool`), marketplaces (`marketplace:tools`) and plugins (`plugin:review@tools`),
 //! see [`crate::alignment`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::config::ConfigFile;
+use crate::config::{Config, ConfigFile};
 use crate::instance::InstanceKind;
 use crate::launcher::{LauncherPlace, LauncherState, LauncherStatus};
 use crate::links::{self, Entry};
@@ -101,6 +102,14 @@ pub enum Problem {
     NotALink,
     /// `skills/` or `plugins/` linked as a whole folder: needs migrating to the safe layout.
     WholeFolderLink { target: Option<PathBuf> },
+    /// A private item (by the sharing table or by the user's answer) is a link to the
+    /// primary instance's item, so this instance shares what belongs to each instance.
+    /// `target` is where the link points. `ignored_answer` is true when `config.toml` still
+    /// answers "link" for it, an answer the table now overrides.
+    LinkedPrivateItem {
+        target: PathBuf,
+        ignored_answer: bool,
+    },
     /// The instance has no launcher (`claude-b`) to start Claude Code in it.
     MissingLauncher,
     /// The instance's launcher isn't what mccboard writes: it starts Claude Code in another
@@ -139,6 +148,10 @@ pub enum Repair {
     /// Replace the whole-folder `plugins/` link with the instance's own folder; its plugins
     /// are then reinstalled with Claude Code's own commands.
     MigratePlugins,
+    /// Remove the link (or junction) to `target`, leaving the item absent: Claude Code
+    /// creates the instance's own when it needs it. Nothing is copied, and what the link
+    /// pointed to is left as it is.
+    Unlink { target: PathBuf },
     /// Make the launchers match the registered linked instances ([`crate::Core::sync_launchers`]).
     SyncLaunchers,
     /// Set the Global config key `key` to `value` in this instance's `.claude.json`, leaving
@@ -166,12 +179,10 @@ pub(crate) fn doctor(
     launchers: Option<&LauncherStatus>,
 ) -> Result<Doctor, Error> {
     let config = ConfigFile::load(config_file)?.config;
-    let answers = &config.sharing;
-
     let mut instances: Vec<InstanceDrift> = config
         .instances
         .iter()
-        .map(|entry| drift(home, &entry.config_dir, answers, launchers))
+        .map(|entry| drift(home, &entry.config_dir, &config, launchers))
         .collect();
     instances.sort_by(|a, b| {
         (a.kind != InstanceKind::Primary, paths::key(&a.config_dir))
@@ -181,7 +192,7 @@ pub(crate) fn doctor(
 
     let drift_count = instances.iter().map(|i| i.drift_count).sum();
     Ok(Doctor {
-        questions: sharing::questions(&primary_dir(home), answers),
+        questions: sharing::questions(&primary_dir(home), &config.sharing),
         instances,
         drift_count,
     })
@@ -196,7 +207,7 @@ pub(crate) fn primary_dir(home: &Path) -> PathBuf {
 pub(crate) fn drift(
     home: &Path,
     config_dir: &Path,
-    answers: &BTreeMap<String, SharingAnswer>,
+    config: &Config,
     launchers: Option<&LauncherStatus>,
 ) -> InstanceDrift {
     let kind = InstanceKind::of(home, config_dir);
@@ -205,7 +216,13 @@ pub(crate) fn drift(
         // The primary holds the real items; a missing folder has nothing to compare.
         Vec::new()
     } else {
-        let mut items = link_drift(&primary, config_dir, answers);
+        let mut items = link_drift(&primary, config_dir, &config.sharing);
+        items.extend(private_link_drift(
+            &primary,
+            config_dir,
+            &config.sharing,
+            &config.ignored_link_answers,
+        ));
         items.extend(alignment::drift(home, &primary, config_dir));
         items
     };
@@ -355,6 +372,59 @@ fn check_link(item: &str, source: &Path, at: &Path, missing: Problem) -> Option<
     ))
 }
 
+/// Private top-level items of `linked` that are links to the primary instance's item of the
+/// same name, by name. Private means by the sharing table or by the user's "private" answer;
+/// an item the table made private keeps an old "link" answer in `config.toml`, now ignored.
+/// `skills/` and `plugins/` have their own checks. A link anywhere else may be the user's own
+/// setup: it is left alone.
+fn private_link_drift(
+    primary: &Path,
+    linked: &Path,
+    answers: &BTreeMap<String, SharingAnswer>,
+    ignored_link_answers: &BTreeSet<String>,
+) -> Vec<DriftItem> {
+    sharing::entries(linked)
+        .into_iter()
+        .filter(|name| name != sharing::SKILLS && name != sharing::PLUGINS)
+        .filter(|name| sharing::classify(name, answers) == Sharing::Private)
+        .filter_map(|name| {
+            let at = linked.join(&name);
+            let Entry::Link {
+                target: Some(target),
+            } = links::inspect(&at)
+            else {
+                return None;
+            };
+            if !leads_to_primary(&at, &target, &primary.join(&name)) {
+                return None;
+            }
+            let problem = Problem::LinkedPrivateItem {
+                target: target.clone(),
+                ignored_answer: ignored_link_answers.contains(&name),
+            };
+            Some(DriftItem::new(
+                format!("private:{name}"),
+                &name,
+                &at,
+                problem,
+                Repair::Unlink { target },
+            ))
+        })
+        .collect()
+}
+
+/// Whether the link at `at`, whose first hop is `target`, points to the primary's item
+/// `source`: straight at it (even when it is gone), or through other links to where it leads.
+fn leads_to_primary(at: &Path, target: &Path, source: &Path) -> bool {
+    if links::same_place(target, source) {
+        return true;
+    }
+    match (links::destination(at), links::destination(source)) {
+        (Some(end), Some(primary_end)) => paths::same(&end, &primary_end),
+        _ => false,
+    }
+}
+
 fn whole_folder(item: &str, at: &Path, target: Option<PathBuf>, repair: Repair) -> DriftItem {
     let problem = Problem::WholeFolderLink { target };
     DriftItem::new(format!("migrate:{item}"), item, at, problem, repair)
@@ -429,6 +499,24 @@ fn explain(item: &str, problem: &Problem) -> String {
                 )
             }
         }
+        Problem::LinkedPrivateItem {
+            target,
+            ignored_answer,
+        } => {
+            let shared = format!(
+                "{item} belongs to each instance, but here it is a link to {}, which leads to \
+                 the primary instance's {item}, so this instance shares it with the primary.",
+                target.display()
+            );
+            if *ignored_answer {
+                format!(
+                    "{shared} The answer \"link\" for {item} in config.toml is now ignored: \
+                     {item} is private, so that line can be deleted."
+                )
+            } else {
+                shared
+            }
+        }
         Problem::MissingLauncher => format!(
             "The launcher {item} is missing, so no command starts Claude Code in this instance."
         ),
@@ -491,6 +579,11 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
         Repair::MigratePlugins => "Give this instance its own plugins folder; its plugins are \
              then reinstalled with Claude Code's own `claude plugin` commands."
             .to_owned(),
+        Repair::Unlink { target } => format!(
+            "Remove the link to {}, leaving it as it is; Claude Code then creates this \
+             instance's own {item}.",
+            target.display()
+        ),
         Repair::SyncLaunchers => {
             "Fix the launchers (mccboard launcher sync), then open a new terminal.".to_owned()
         }

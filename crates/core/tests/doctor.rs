@@ -919,6 +919,210 @@ fn junctions_are_links_too() {
     ));
 }
 
+// ---------------------------------------------------------------------------------------------
+// A private item that is still a link to the primary's (#28)
+
+#[test]
+fn a_private_item_still_linked_to_the_primary_after_an_update_is_drift() {
+    // Before #17, `downloads` was asked about and answered "link", and repair linked it.
+    // Now the table makes it private: the answer is ignored, the link still shares it.
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    write(p.join("downloads/file.zip"), "the primary's download");
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(p.join("downloads"), b.join("downloads"));
+    home.write_config("[sharing.items]\ndownloads = \"link\"\n");
+    let (core, _env) = home.core();
+    core.register(&b).unwrap();
+
+    let doctor = core.doctor().unwrap();
+
+    let drift = &doctor.instances[0];
+    assert_eq!(ids(drift), vec!["private:downloads"]);
+    let downloads = item(drift, "private:downloads");
+    assert_eq!(downloads.item, "downloads");
+    assert_eq!(downloads.path, b.join("downloads"));
+    assert_eq!(
+        downloads.problem,
+        Problem::LinkedPrivateItem {
+            target: p.join("downloads"),
+            ignored_answer: true,
+        }
+    );
+    assert_eq!(
+        downloads.repair,
+        Repair::Unlink {
+            target: p.join("downloads")
+        }
+    );
+    assert!(
+        downloads.explanation.contains("belongs to each instance"),
+        "{}",
+        downloads.explanation
+    );
+    assert!(
+        downloads.explanation.contains("config.toml") && downloads.explanation.contains("ignored"),
+        "{}",
+        downloads.explanation
+    );
+    assert!(
+        downloads.repair_explanation.contains("Remove the link"),
+        "{}",
+        downloads.repair_explanation
+    );
+    assert_eq!(doctor.drift_count, 1);
+    assert_eq!(doctor.questions, vec![]);
+}
+
+#[test]
+fn private_items_by_name_prefix_or_suffix_linked_to_the_primary_are_drift() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    mkdir(p.join("scratch"));
+    write(p.join("daemon-auth-cooldown"), "{}");
+    write(p.join("computer-use.lock"), "");
+    let b = safe_linked(&home, ".claude-b", &p);
+    for name in ["scratch", "daemon-auth-cooldown", "computer-use.lock"] {
+        link(p.join(name), b.join(name));
+    }
+    let (core, _env) = home.core();
+
+    let drift = drift_of(&core, &b);
+
+    assert_eq!(
+        ids(&drift),
+        vec![
+            "private:computer-use.lock",
+            "private:daemon-auth-cooldown",
+            "private:scratch",
+        ]
+    );
+    for found in &drift.items {
+        assert_eq!(
+            found.problem,
+            Problem::LinkedPrivateItem {
+                target: p.join(&found.item),
+                ignored_answer: false,
+            }
+        );
+        assert!(
+            !found.explanation.contains("config.toml"),
+            "{}",
+            found.explanation
+        );
+    }
+}
+
+#[test]
+fn an_item_answered_private_that_is_still_a_link_to_the_primary_is_drift() {
+    // The user changed the answer from "link" to "private" after repair had linked it.
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    write(p.join("gsd-core/VERSION"), "1");
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(p.join("gsd-core"), b.join("gsd-core"));
+    home.write_config("[sharing.items]\ngsd-core = \"private\"\n");
+    let (core, _env) = home.core();
+
+    let drift = drift_of(&core, &b);
+
+    assert_eq!(ids(&drift), vec!["private:gsd-core"]);
+    assert_eq!(
+        item(&drift, "private:gsd-core").problem,
+        Problem::LinkedPrivateItem {
+            target: p.join("gsd-core"),
+            ignored_answer: false,
+        }
+    );
+}
+
+#[test]
+fn a_private_item_linked_through_a_chain_to_the_primary_is_drift() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    mkdir(p.join("downloads"));
+    let b = safe_linked(&home, ".claude-b", &p);
+    let c = safe_linked(&home, ".claude-c", &p);
+    link(p.join("downloads"), b.join("downloads"));
+    link(b.join("downloads"), c.join("downloads"));
+    let (core, _env) = home.core();
+
+    let drift = drift_of(&core, &c);
+
+    assert_eq!(ids(&drift), vec!["private:downloads"]);
+    assert_eq!(
+        item(&drift, "private:downloads").problem,
+        Problem::LinkedPrivateItem {
+            target: b.join("downloads"),
+            ignored_answer: false,
+        }
+    );
+}
+
+#[test]
+fn a_private_item_linked_anywhere_but_the_primary_is_left_alone() {
+    // The user's own setup: not reported.
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    mkdir(p.join("downloads"));
+    mkdir(home.path().join("Downloads"));
+    write(home.path().join("dotfiles/gsd-core/VERSION"), "1");
+    mkdir(p.join("gsd-core"));
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(home.path().join("Downloads"), b.join("downloads"));
+    link(home.path().join("dotfiles/gsd-core"), b.join("gsd-core"));
+    // A private item linked to where nothing is, and a link to the primary's private item
+    // under another name.
+    link(home.path().join("nowhere"), b.join("scratch"));
+    link(p.join("downloads"), b.join("daemon-auth-elsewhere"));
+    home.write_config("[sharing.items]\ngsd-core = \"private\"\n");
+    let (core, _env) = home.core();
+
+    assert_eq!(drift_of(&core, &b).items, vec![]);
+}
+
+#[test]
+fn an_unanswered_item_linked_to_the_primary_is_not_drift() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    mkdir(p.join("gsd-core"));
+    let b = safe_linked(&home, ".claude-b", &p);
+    link(p.join("gsd-core"), b.join("gsd-core"));
+    let (core, _env) = home.core();
+
+    assert_eq!(drift_of(&core, &b).items, vec![]);
+    assert_eq!(core.sharing_questions().unwrap()[0].item, "gsd-core");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_to_the_primary_private_folder_is_drift() {
+    use std::process::Command;
+
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    mkdir(p.join("downloads"));
+    let b = safe_linked(&home, ".claude-b", &p);
+    let status = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(b.join("downloads"))
+        .arg(p.join("downloads"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let (core, _env) = home.core();
+
+    let drift = drift_of(&core, &b);
+
+    assert_eq!(ids(&drift), vec!["private:downloads"]);
+    assert_eq!(
+        item(&drift, "private:downloads").repair,
+        Repair::Unlink {
+            target: p.join("downloads")
+        }
+    );
+}
+
 /// Removes a link (file or directory symlink, or junction) without touching its target.
 fn remove_link(path: &Path) {
     if fs::remove_file(path).is_err() {

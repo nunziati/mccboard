@@ -503,14 +503,12 @@ impl Core {
     /// or not. Reads only; changes nothing.
     pub fn drift(&self, config_dir: &Path) -> Result<InstanceDrift, Error> {
         let config_dir = paths::resolve(&self.home, config_dir)?;
-        let answers = config::ConfigFile::load(&self.paths().config_file())?
-            .config
-            .sharing;
+        let config = config::ConfigFile::load(&self.paths().config_file())?.config;
         let launchers = self.launchers().ok();
         Ok(doctor::drift(
             &self.home,
             &config_dir,
-            &answers,
+            &config,
             launchers.as_ref(),
         ))
     }
