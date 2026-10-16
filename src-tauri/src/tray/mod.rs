@@ -4,7 +4,11 @@
 //! every 60 seconds and when the user asks from the menu. The core applies the rate limits to
 //! both, so neither can call the endpoint more often than they allow. Between refreshes the
 //! thread redraws from the last readings when the language or `config.toml` changes. After
-//! each refresh it tells the windows, since Claude Code may have renewed a token.
+//! each refresh it tells the windows, since Claude Code may have renewed a token, and every
+//! report it draws goes to the taskbar widget too.
+//!
+//! The icon is mccboard's logo while the taskbar widget is shown (it carries every window),
+//! else the worst weekly window (#45).
 
 mod icon;
 mod profiles;
@@ -13,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use mccboard_core::{Core, Language, TrayIcon, TrayProfiles, TrayView};
+use mccboard_core::{Core, Language, LogoStyle, TrayIcon, TrayProfiles, TrayView, mccboard_logo};
 use tauri::image::Image;
 use tauri::menu::{
     CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
@@ -127,6 +131,7 @@ fn run(app: &AppHandle, core: &Core, wakes: &Receiver<Wake>) {
         } else {
             core.usage()
         };
+        crate::taskbar_widget::update(app, report.as_ref().ok().cloned());
         let language = language(core);
         let view = report
             .and_then(|report| core.tray_view(&report, language, &jiff::tz::TimeZone::system()))
@@ -143,11 +148,14 @@ fn render(app: &AppHandle, view: &TrayView, profiles: Option<&TrayProfiles>) -> 
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
-    tray.set_icon(Some(Image::new_owned(
-        icon::render(&view.icon),
-        icon::SIZE,
-        icon::SIZE,
-    )))?;
+    let image = match crate::taskbar_widget::shown() {
+        Some(theme) => {
+            let size = crate::taskbar_widget::logo_size();
+            Image::new_owned(mccboard_logo(size, LogoStyle::Tray(theme)).rgba, size, size)
+        }
+        None => Image::new_owned(icon::render(&view.icon), icon::SIZE, icon::SIZE),
+    };
+    tray.set_icon(Some(image))?;
     tray.set_tooltip(Some(&crate::desktop_watch::tray_tooltip(
         app,
         &view.tooltip,
@@ -271,6 +279,17 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             // The config watcher tells the windows; the tray redraws now, checks included.
             redraw(app);
         }
+    }
+}
+
+/// Opens the tray's menu, as a right click on the tray icon does (the taskbar widget's right
+/// click). Waits while the menu is open: call it off the widget's thread.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn show_menu(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID)
+        && let Err(error) = tray.with_inner_tray_icon(|tray| tray.show_menu())
+    {
+        eprintln!("mccboard: cannot open the tray menu: {error}");
     }
 }
 

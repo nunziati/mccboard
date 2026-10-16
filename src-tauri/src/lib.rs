@@ -4,6 +4,7 @@ mod desktop;
 mod desktop_watch;
 mod settings;
 mod taskbar;
+mod taskbar_widget;
 mod tray;
 mod usage;
 
@@ -281,9 +282,13 @@ pub fn run() {
             settings::language,
             settings::set_language,
             settings::renew_expired_tokens,
-            settings::set_renew_expired_tokens
+            settings::set_renew_expired_tokens,
+            settings::taskbar_widget,
+            settings::set_taskbar_widget
         ])
         .setup(move |app| {
+            // Before the tray, whose first readings it gets.
+            taskbar_widget::setup(app, &core);
             tray::setup(app, &core)?;
             // Without the watcher the window still works; it just won't see outside edits
             // until it reloads.

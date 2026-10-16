@@ -104,3 +104,21 @@ export function renewExpiredTokens(): Promise<boolean> {
 export function setRenewExpiredTokens(on: boolean): Promise<void> {
   return invoke<void>('set_renew_expired_tokens', { on })
 }
+
+/** The taskbar widget's preferences (config.toml), and whether this platform has it (Windows). */
+export interface TaskbarWidgetSettings {
+  supported: boolean
+  /** "Show the widget on the taskbar". */
+  on: boolean
+  /** "Show account labels" in it. */
+  labels: boolean
+}
+
+export function taskbarWidget(): Promise<TaskbarWidgetSettings> {
+  return invoke<TaskbarWidgetSettings>('taskbar_widget')
+}
+
+/** Saves the taskbar widget's preferences given; the others stay. */
+export function setTaskbarWidget(change: { on?: boolean; labels?: boolean }): Promise<void> {
+  return invoke<void>('set_taskbar_widget', { on: change.on ?? null, labels: change.labels ?? null })
+}
