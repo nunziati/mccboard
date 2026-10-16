@@ -9,7 +9,7 @@ A Claude subscription identity (claude.ai login), identified by its account UUID
 _Avoid_: user, login, profile
 
 **Account label**:
-The short name and color the user gives an account ("A", blue). Used for display only, never for identity.
+The short name and color the user gives an account ("A", blue). Used for display only, never for identity. The account of the default desktop profile always has Claude's own orange, matching the icon mccboard leaves alone.
 _Avoid_: alias, nickname
 
 **Machine**:
@@ -40,8 +40,12 @@ The command that starts Claude Code in a linked instance (`claude-b`). The prima
 _Avoid_: alias, shim, wrapper
 
 **Desktop profile**:
-A Claude desktop app installation with its own data directory and its own sign-in, bound to one account by the user. It may also name the instance whose config directory its local Code sessions use.
-_Avoid_: desktop instance, app instance
+A copy of the Claude desktop app running with its own data directory and its own sign-in, bound to one account by the user; at most one per account on a machine. Its account is observed like an instance's. It may also name the instance whose config directory its local Code sessions use. Every profile but the default one has its own taskbar button and an icon in its account's color.
+_Avoid_: desktop instance, app instance, instance (an instance is a Claude Code config directory)
+
+**Default desktop profile**:
+The desktop profile in the app's own data directory, the one it uses when started normally. It keeps Claude's own icon and pairs with the primary instance.
+_Avoid_: main profile, primary profile
 
 ### Sharing between instances
 
