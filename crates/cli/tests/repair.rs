@@ -87,6 +87,51 @@ fn one_item_by_id_with_json_output() {
 }
 
 #[test]
+fn a_private_item_still_linked_to_the_primary_is_reported_then_unlinked() {
+    // `downloads` answered "link" before it became private, and linked back then.
+    let home = fixture_home();
+    assert!(mccboard(home.path(), &["repair"]).status.success());
+    let primary_downloads = home.path().join(".claude").join("downloads");
+    fs::create_dir(&primary_downloads).unwrap();
+    fs::write(primary_downloads.join("file.zip"), "kept").unwrap();
+    let at = home.path().join(".claude-b").join("downloads");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&primary_downloads, &at).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&primary_downloads, &at).unwrap();
+    let config = home.path().join(".mccboard").join("config.toml");
+    let text_before = fs::read_to_string(&config).unwrap();
+    let with_answer = format!("{text_before}\n[sharing.items]\ndownloads = \"link\"\n");
+    fs::write(&config, &with_answer).unwrap();
+
+    let doctor = mccboard(home.path(), &["doctor", "--no-ask"]);
+    assert_eq!(doctor.status.code(), Some(2), "{}", text(&doctor));
+    let printed = text(&doctor);
+    assert!(printed.contains("[private:downloads]"), "{printed}");
+    assert!(printed.contains("is now ignored"), "{printed}");
+
+    let out = mccboard(
+        home.path(),
+        &["repair", "~/.claude-b", "--item", "private:downloads"],
+    );
+
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("done    [private:downloads]"),
+        "{}",
+        text(&out)
+    );
+    assert!(fs::symlink_metadata(&at).is_err());
+    assert_eq!(
+        fs::read_to_string(primary_downloads.join("file.zip")).unwrap(),
+        "kept"
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), with_answer);
+    let doctor = mccboard(home.path(), &["doctor", "--no-ask"]);
+    assert_eq!(doctor.status.code(), Some(0), "{}", text(&doctor));
+}
+
+#[test]
 fn an_unknown_item_or_a_missing_path_fails_with_1() {
     let home = fixture_home();
 

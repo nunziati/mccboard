@@ -13,7 +13,7 @@ pub struct RepairArgs {
     #[arg(value_name = "PATH")]
     paths: Vec<PathBuf>,
     /// Repair only this drift item, by the id `mccboard doctor` shows (`link:settings.json`,
-    /// `config:diffTool`, `plugin:review@tools`).
+    /// `private:downloads`, `config:diffTool`, `plugin:review@tools`).
     /// Needs exactly one PATH.
     #[arg(long, value_name = "ID")]
     item: Option<String>,
