@@ -1,8 +1,10 @@
-//! Desktop profiles on the Windows taskbar (ticket #37): their Start-menu shortcuts, the
-//! watcher that gives their windows their own button and icon, and `--open-profile <uuid>`
-//! from a shortcut or a pin, which a second app instance hands to this one. The work is the
-//! core's ([`Core::sync_desktop_shortcuts`], [`Core::running_desktop_profiles`],
-//! `mccboard_core::windows_taskbar`); this module starts it and feeds it the app's events.
+//! Desktop profiles on the Windows taskbar (tickets #37, #38): their Start-menu shortcuts, the
+//! watcher that gives their windows their own button and icon and their notification-area
+//! icon the account's color, and `--open-profile <uuid>` from a shortcut or a pin, which a
+//! second app instance hands to this one. The work is the core's
+//! ([`Core::sync_desktop_shortcuts`], [`Core::running_desktop_profiles`],
+//! `mccboard_core::windows_taskbar`, `mccboard_core::windows_profile_tray`); this module starts
+//! it and feeds it the app's events.
 
 use mccboard_core::{AppArgs, Core};
 use tauri::AppHandle;
@@ -25,7 +27,11 @@ pub(crate) fn setup(app: &tauri::App, core: &Core) {
                 Vec::new()
             }
         });
-        match mccboard_core::windows_taskbar::ProfileWatcher::start(source, Vec::new()) {
+        let language_core = core.clone();
+        let tray = mccboard_core::windows_profile_tray::listener(Box::new(move || {
+            crate::tray::language(&language_core)
+        }));
+        match mccboard_core::windows_taskbar::ProfileWatcher::start(source, vec![tray]) {
             Ok(watcher) => {
                 let _ = WATCHER.set(watcher);
             }
