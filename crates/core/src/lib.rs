@@ -106,6 +106,8 @@ pub struct Core {
     env: Arc<dyn Environment>,
     /// Serializes usage refreshes within this process (rate limits are per account).
     usage_lock: Arc<Mutex<()>>,
+    /// Serializes shortcut syncs within this process (they share a record file).
+    shortcut_lock: Arc<Mutex<()>>,
     /// What the desktop profile watch remembers between polls ([`Core::poll_desktop_profiles`]).
     desktop_watch: Arc<Mutex<desktop_watch::Watch>>,
 }
@@ -117,6 +119,7 @@ impl Core {
             home: home.into(),
             env: Arc::new(env),
             usage_lock: Arc::default(),
+            shortcut_lock: Arc::default(),
             desktop_watch: Arc::default(),
         }
     }
@@ -349,6 +352,10 @@ impl Core {
     /// ([`Error::AppProgramNotFound`]) can't be found, or a shortcut can't be written
     /// ([`Error::ShortcutNotWritten`]); an icon that can't be drawn is only a warning.
     pub fn sync_desktop_shortcuts(&self) -> Result<ShortcutSync, Error> {
+        let _guard = self
+            .shortcut_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         desktop_identity::sync(&self.home, &self.paths(), self.env.as_ref())
     }
 

@@ -3,6 +3,7 @@
 mod desktop;
 mod desktop_watch;
 mod settings;
+mod taskbar;
 mod tray;
 mod usage;
 
@@ -216,6 +217,7 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
             if changed {
                 let _ = handle.emit(CONFIG_CHANGED, ());
                 tray::redraw(&handle);
+                taskbar::config_changed(&handle.state::<Core>());
             }
         },
     )?;
@@ -230,9 +232,20 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
 pub fn run() {
     // Without a home directory the core reports its home as unreadable, which the UI shows.
     let home = std::env::home_dir().unwrap_or_default();
+    // Desktop profiles' shortcuts and pins start this program with `--open-profile`.
+    if let Ok(program) = std::env::current_exe() {
+        SystemEnvironment::set_app_program(program);
+    }
     let core = Core::new(home, SystemEnvironment);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // First: a second instance (a profile's shortcut or pin) hands its arguments to this one
+    // and exits before anything else starts.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        taskbar::on_second_instance(app, &app.state::<Core>(), &argv);
+    }));
+    builder
         .manage(core.clone())
         .invoke_handler(tauri::generate_handler![
             scan,
@@ -271,6 +284,7 @@ pub fn run() {
                 eprintln!("mccboard: cannot watch config.toml: {error}");
             }
             desktop::open_at_start(&core);
+            taskbar::setup(app, &core);
             desktop_watch::setup(app, &core)?;
             Ok(())
         })

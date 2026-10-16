@@ -266,6 +266,8 @@ pub(crate) fn open_instances(app: &AppHandle) {
     if let Some(config) = config {
         match tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|b| b.build()) {
             Ok(window) => {
+                // Hidden in tauri.conf.json, so a start for a profile alone shows nothing.
+                let _ = window.show();
                 let _ = window.set_focus();
             }
             Err(error) => eprintln!("mccboard: cannot open the Instances window: {error}"),

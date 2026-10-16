@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use mccboard_core::{
     AccountUuid, Core, DesktopOpening, DesktopProfile, DesktopProfileRemoval, DesktopProfileUpdate,
-    DesktopWarning, FolderOutcome, Language, Registry, RemoveLevel,
+    DesktopWarning, FolderOutcome, Language, Registry, RemoveLevel, ShortcutSync, ShortcutWarning,
 };
 
 #[derive(Subcommand)]
@@ -66,6 +66,15 @@ pub enum DesktopCommand {
     /// say), whose Code tab may lack its instance. The tray app watches all the time and also
     /// tells a profile an update closed; one look can't.
     Notices {
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make the desktop profiles' Start-menu shortcuts (Windows) match the profiles:
+    /// `Claude <label>.lnk`, with the profile's colored icon, opening it through mccboard's
+    /// app. Adding, changing and removing a profile does this already; pin a shortcut to the
+    /// taskbar by hand (right-click, Pin to taskbar).
+    Shortcuts {
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -179,6 +188,14 @@ pub fn run(core: &Core, command: DesktopCommand) -> Result<()> {
             }
         }
         DesktopCommand::Notices { json } => notices(core, json)?,
+        DesktopCommand::Shortcuts { json } => {
+            let sync = core.sync_desktop_shortcuts()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sync)?);
+            } else {
+                print_shortcuts(&sync);
+            }
+        }
         DesktopCommand::Set {
             account,
             open_at_start,
@@ -345,5 +362,40 @@ fn print_removal(registry: &Registry, removal: &DesktopProfileRemoval) {
         FolderOutcome::AlreadyGone => println!(
             "Removed the desktop profile of {account}; its data folder {folder} was already gone."
         ),
+    }
+}
+
+fn print_shortcuts(sync: &ShortcutSync) {
+    for path in &sync.written {
+        println!("Wrote {}", path.display());
+    }
+    for path in &sync.unchanged {
+        println!("Up to date: {}", path.display());
+    }
+    for path in &sync.removed {
+        println!("Removed {}", path.display());
+    }
+    for warning in &sync.warnings {
+        match warning {
+            ShortcutWarning::NoIcon { account, error } => println!(
+                "warning: no colored icon for the profile of {account} ({error}); its shortcut \
+                 shows mccboard's icon"
+            ),
+            ShortcutWarning::NameTaken { path } => println!(
+                "warning: {} exists and isn't mccboard's: left as it is, no shortcut written",
+                path.display()
+            ),
+            ShortcutWarning::NotRemoved { path, reason } => {
+                println!("warning: cannot remove {}: {reason}", path.display())
+            }
+            ShortcutWarning::RecordNotSaved { path, reason } => {
+                println!("warning: cannot save {}: {reason}", path.display())
+            }
+        }
+    }
+    if sync.written.is_empty() && sync.unchanged.is_empty() && sync.removed.is_empty() {
+        println!(
+            "No desktop profile shortcut (they exist on Windows, for profiles other than the default one)."
+        );
     }
 }

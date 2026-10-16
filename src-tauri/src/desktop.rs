@@ -11,15 +11,20 @@ use mccboard_core::{
 use crate::CommandError;
 
 /// Opens the desktop profile of `account`, or the default desktop profile for `None`.
-/// Every opening in the app goes through here.
+/// Every opening in the app goes through here, a profile's Start-menu shortcut included;
+/// afterwards the taskbar watcher looks at once, to tag the new windows.
 pub(crate) fn open(
     core: &Core,
     account: Option<&AccountUuid>,
 ) -> Result<DesktopOpening, mccboard_core::Error> {
-    match account {
+    let opening = match account {
         Some(account) => core.open_desktop_profile(account),
         None => core.open_default_desktop_profile(),
+    };
+    if opening.is_ok() {
+        crate::taskbar::refresh();
     }
+    opening
 }
 
 /// Opens, off the main thread, the profiles set to open when mccboard starts. Called once,
@@ -30,6 +35,7 @@ pub(crate) fn open_at_start(core: &Core) {
         .name("mccboard-open-at-start".into())
         .spawn(move || match core.open_desktop_profiles_at_start() {
             Ok(openings) => {
+                crate::taskbar::refresh();
                 for opening in openings {
                     if let Err(error) = opening.result {
                         let name = opening.label.unwrap_or_else(|| opening.account.to_string());
