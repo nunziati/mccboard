@@ -162,7 +162,7 @@ pub(crate) fn report(
     refresh: bool,
 ) -> Result<UsageReport, Error> {
     let config = ConfigFile::load(&paths.config_file())?.config;
-    let mut accounts = config.accounts;
+    let mut accounts = config.shown_accounts(home);
     accounts
         .sort_by(|a, b| (a.label.to_lowercase(), &a.uuid).cmp(&(b.label.to_lowercase(), &b.uuid)));
 

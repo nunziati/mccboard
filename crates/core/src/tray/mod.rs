@@ -13,6 +13,7 @@
 //! Texts come in the app's [`Language`], with reset times relative to now and in the given
 //! time zone.
 
+pub(crate) mod profiles;
 mod text;
 
 use jiff::Timestamp;
@@ -25,9 +26,6 @@ use text::{Status, Texts};
 
 /// The Windows tray keeps at most this many UTF-16 units of a tooltip.
 pub const TOOLTIP_MAX_UTF16: usize = 127;
-
-/// The icon's color when no account's usage is known.
-const NEUTRAL_COLOR: &str = "#6b7280";
 
 /// Everything the tray shows.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -222,7 +220,7 @@ pub(crate) fn view(
 }
 
 fn neutral() -> Color {
-    NEUTRAL_COLOR.parse().expect("a valid color")
+    crate::account::neutral_color()
 }
 
 fn percent(utilization: f64) -> u8 {

@@ -94,7 +94,8 @@ fn label_color_and_launcher_can_be_changed_and_persist() {
                 launcher: Some(Some("cw".into())),
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(updated.label, "Work");
     assert_eq!(updated.color.as_str(), "#0d9488");
@@ -123,7 +124,8 @@ fn the_launcher_name_follows_the_label_unless_overridden() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
     assert_eq!(renamed.launcher_name(), "claude-personal-max");
 
     let overridden = core
@@ -134,7 +136,8 @@ fn the_launcher_name_follows_the_label_unless_overridden() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
     assert_eq!(overridden.launcher_name(), "cb");
 
     let reset = core
@@ -145,7 +148,8 @@ fn the_launcher_name_follows_the_label_unless_overridden() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
     assert_eq!(reset.launcher, None);
     assert_eq!(reset.launcher_name(), "claude-personal-max");
 }
@@ -160,7 +164,8 @@ fn an_update_that_changes_nothing_keeps_the_other_fields() {
 
     let after = core
         .update_account(&before.uuid, AccountUpdate::default())
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(after, before);
 }
@@ -207,7 +212,8 @@ fn an_account_keeps_its_own_label_when_renamed_to_another_case() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
 
     assert_eq!(updated.label, "b");
 }
@@ -267,7 +273,8 @@ fn a_label_that_makes_no_launcher_name_needs_an_override() {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .value;
 
     // Non-ASCII is dropped from the derived name; nothing left falls back to the UUID prefix.
     assert_eq!(renamed.launcher_name(), "claude-22222222");

@@ -6,12 +6,13 @@
 //! thread redraws from the last readings when the language or `config.toml` changes.
 
 mod icon;
+mod profiles;
 
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use mccboard_core::{Core, Language, TrayIcon, TrayView};
+use mccboard_core::{Core, Language, TrayIcon, TrayProfiles, TrayView};
 use tauri::image::Image;
 use tauri::menu::{
     CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
@@ -85,7 +86,7 @@ pub(crate) fn redraw(app: &AppHandle) {
 fn placeholder() -> TrayIcon {
     TrayIcon {
         percent: None,
-        color: "#6b7280".parse().expect("a valid color"),
+        color: mccboard_core::NEUTRAL_COLOR.parse().expect("a valid color"),
         account: None,
         stale: false,
         token_expired: false,
@@ -126,13 +127,15 @@ fn run(app: &AppHandle, core: &Core, wakes: &Receiver<Wake>) {
         let view = report
             .and_then(|report| core.tray_view(&report, language, &jiff::tz::TimeZone::system()))
             .unwrap_or_else(|error| TrayView::unavailable(&error, language));
-        if let Err(error) = render(app, &view) {
+        // Without the profiles (a corrupt config.toml) the menu just has no "Open profile".
+        let profiles = core.tray_profiles(language).ok();
+        if let Err(error) = render(app, &view, profiles.as_ref()) {
             eprintln!("mccboard: cannot update the tray: {error}");
         }
     }
 }
 
-fn render(app: &AppHandle, view: &TrayView) -> tauri::Result<()> {
+fn render(app: &AppHandle, view: &TrayView, profiles: Option<&TrayProfiles>) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
@@ -141,14 +144,23 @@ fn render(app: &AppHandle, view: &TrayView) -> tauri::Result<()> {
         icon::SIZE,
         icon::SIZE,
     )))?;
-    tray.set_tooltip(Some(&view.tooltip))?;
-    tray.set_menu(Some(menu(app, view)?))?;
+    tray.set_tooltip(Some(&crate::desktop_watch::tray_tooltip(
+        app,
+        &view.tooltip,
+    )))?;
+    tray.set_menu(Some(menu(app, view, profiles)?))?;
     Ok(())
 }
 
-/// The menu: the status lines (disabled), then open Instances, refresh, settings, quit.
-fn menu(app: &AppHandle, view: &TrayView) -> tauri::Result<Menu<tauri::Wry>> {
+/// The menu: the status lines (disabled), then open Instances, open a desktop profile,
+/// refresh, settings, quit.
+fn menu(
+    app: &AppHandle,
+    view: &TrayView,
+    profiles: Option<&TrayProfiles>,
+) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
+    crate::desktop_watch::append_to_menu(app, &menu)?;
     let line = |text: &str| MenuItem::new(app, escape(text), false, None::<&str>);
     if let Some(notice) = &view.notice {
         menu.append(&line(notice)?)?;
@@ -184,8 +196,21 @@ fn menu(app: &AppHandle, view: &TrayView) -> tauri::Result<Menu<tauri::Wry>> {
     let language = Submenu::with_items(app, escape(&texts.language), true, &languages)?;
     let settings = Submenu::with_items(app, escape(&texts.settings), true, &[&language])?;
 
+    menu.append(&MenuItem::with_id(
+        app,
+        OPEN,
+        escape(&texts.open_instances),
+        true,
+        None::<&str>,
+    )?)?;
+    if let Some(open_profile) = profiles
+        .map(|profiles| profiles::submenu(app, profiles))
+        .transpose()?
+        .flatten()
+    {
+        menu.append(&open_profile)?;
+    }
     menu.append_items(&[
-        &MenuItem::with_id(app, OPEN, escape(&texts.open_instances), true, None::<&str>)?,
         &MenuItem::with_id(app, REFRESH, escape(&texts.refresh), true, None::<&str>)?,
         &settings,
         &PredefinedMenuItem::separator(app)?,
@@ -195,7 +220,7 @@ fn menu(app: &AppHandle, view: &TrayView) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 /// Menu texts treat `&` as a mnemonic marker; labels and model names are shown as they are.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&&")
 }
 
@@ -204,6 +229,8 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         OPEN => open_instances(app),
         REFRESH => wake(app, Wake::Refresh),
         QUIT => app.exit(0),
+        id if profiles::on_menu_event(app, id) => {}
+        id if crate::desktop_watch::on_menu_event(app, id) => {}
         id => {
             let Some(code) = id.strip_prefix(LANGUAGE_PREFIX) else {
                 return;
@@ -239,6 +266,8 @@ pub(crate) fn open_instances(app: &AppHandle) {
     if let Some(config) = config {
         match tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|b| b.build()) {
             Ok(window) => {
+                // Hidden in tauri.conf.json, so a start for a profile alone shows nothing.
+                let _ = window.show();
                 let _ = window.set_focus();
             }
             Err(error) => eprintln!("mccboard: cannot open the Instances window: {error}"),

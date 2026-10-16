@@ -129,6 +129,12 @@ impl Color {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The color's red, green and blue components.
+    pub fn rgb(&self) -> [u8; 3] {
+        let channel = |i: usize| u8::from_str_radix(&self.0[1 + 2 * i..3 + 2 * i], 16).unwrap_or(0);
+        [channel(0), channel(1), channel(2)]
+    }
 }
 
 impl FromStr for Color {
@@ -152,6 +158,28 @@ impl std::fmt::Display for Color {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Claude's own orange: the color of the default desktop profile's account in every view
+/// model, matching the app's icon, which mccboard leaves alone. It can't be edited.
+pub const CLAUDE_ORANGE: &str = "#d97757";
+
+pub(crate) fn claude_orange() -> Color {
+    Color(CLAUDE_ORANGE.to_owned())
+}
+
+/// mccboard's neutral gray: the tray icon's while no account's usage is known, and the color
+/// of an account that isn't in `config.toml` (a hand-edited desktop profile entry).
+pub const NEUTRAL_COLOR: &str = "#6b7280";
+
+pub(crate) fn neutral_color() -> Color {
+    Color(NEUTRAL_COLOR.to_owned())
+}
+
+/// The order front ends list accounts in: by label ignoring case, then by UUID, so equal
+/// labels keep a stable order.
+pub(crate) fn by_label(a: (&str, &AccountUuid), b: (&str, &AccountUuid)) -> std::cmp::Ordering {
+    (a.0.to_lowercase(), a.1).cmp(&(b.0.to_lowercase(), b.1))
 }
 
 /// Colors suggested for new accounts, in order: distinct, and readable on light and dark.

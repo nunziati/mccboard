@@ -25,3 +25,8 @@ notify-debouncer-mini.workspace = true
 serde.workspace = true
 sys-locale = "0.3"
 tauri = { version = "2", features = ["tray-icon"] }
+
+[target.'cfg(windows)'.dependencies]
+# A desktop profile's Start-menu shortcut starts mccboard with `--open-profile <uuid>`: a
+# second instance hands the argument to the running one and exits.
+tauri-plugin-single-instance = "2.5"

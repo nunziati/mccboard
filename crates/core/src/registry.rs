@@ -60,7 +60,7 @@ pub(crate) fn registry(
 ) -> Result<Registry, Error> {
     let config = ConfigFile::load(config_file)?.config;
 
-    let mut accounts = config.accounts;
+    let mut accounts = config.shown_accounts(home);
     accounts
         .sort_by(|a, b| (a.label.to_lowercase(), &a.uuid).cmp(&(b.label.to_lowercase(), &b.uuid)));
 
@@ -126,6 +126,7 @@ pub(crate) fn register(
         });
     file.set_instance(&config_dir, account.as_ref(), waiting.as_deref());
     file.save()?;
+    let new_account = new_account.map(|account| file.config.shown_account(home, &account));
 
     let entry = InstanceEntry {
         config_dir,
@@ -196,7 +197,10 @@ pub(crate) fn unregister(home: &Path, config_file: &Path, path: &Path) -> Result
     file.save()
 }
 
+/// Refuses a new color for the default desktop profile's account
+/// ([`Error::DefaultProfileColor`]): it is always shown in Claude's orange.
 pub(crate) fn update_account(
+    home: &Path,
     config_file: &Path,
     uuid: &AccountUuid,
     update: AccountUpdate,
@@ -223,6 +227,11 @@ pub(crate) fn update_account(
         account.label = label;
     }
     if let Some(color) = update.color {
+        if file.config.default_profile_account(home) == Some(uuid) {
+            return Err(Error::DefaultProfileColor {
+                label: account.label,
+            });
+        }
         account.color = color;
     }
     if let Some(launcher) = update.launcher {
@@ -233,7 +242,7 @@ pub(crate) fn update_account(
 
     file.set_account(&account);
     file.save()?;
-    Ok(account)
+    Ok(file.config.shown_account(home, &account))
 }
 
 /// The config directories registered, for marking scan candidates.
