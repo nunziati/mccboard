@@ -1,41 +1,47 @@
 //! `~/.mccboard/state/usage.json`: the last reading and the rate-limit state of each account.
 //!
-//! Layout (version 1), keyed by account UUID:
+//! Layout (version 2), keyed by account UUID:
 //!
 //! ```json
-//! { "version": 1,
+//! { "version": 2,
 //!   "accounts": {
 //!     "<account uuid>": {
 //!       "reading": { "source": "endpoint", "read_at": "…", "session": {…}, "weekly": {…},
 //!                    "models": [ { "model": "…", "utilization": 58.0, "resets_at": "…" } ] },
 //!       "last_failure": null,          // or { "kind": "rate_limited" }, …
-//!       "interval_secs": 60,           // 60 after a success, doubled after each failure up to 300
-//!       "next_call_at": "…"            // no call for this account before then
+//!       "interval_secs": 60,           // the schedule of its endpoint calls (rationing)
+//!       "next_at": "…"
 //!     } },
 //!   "renewals": {                      // Claude Code renewing expired tokens (#30)
 //!     "<instance config dir>": {
-//!       "interval_secs": 900,          // 900 after a success, doubled after each failure up
-//!                                      // to 21600
-//!       "next_attempt_at": "…",        // no renewal in this instance before then
+//!       "interval_secs": 900,          // the schedule of its renewals (rationing)
+//!       "next_at": "…",
 //!       "last": { "at": "…", "outcome": "renewed" }  // or "failed", "failure": {…}
 //!     } } }
 //! ```
 //!
-//! Windows are stored as read; resets are applied when they are shown. A file that can't be
-//! read or understood is discarded with a warning: it holds nothing that can't be read again.
+//! Windows are stored as read; resets are applied when they are shown. A file of another
+//! version is started over silently; one that can't be read or understood is discarded with a
+//! warning. It holds nothing that can't be read again.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::renewal::{self, RenewalAttempt};
+use super::rationing::{Rationed, Schedule};
+use super::renewal::RenewalAttempt;
 use super::{UsageFailure, UsageReading, UsageWarning};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+
+/// Just the version of a state file, read before the rest.
+#[derive(Deserialize)]
+struct Versioned {
+    version: u32,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct State {
@@ -47,60 +53,39 @@ pub(crate) struct State {
     pub renewals: BTreeMap<String, RenewalState>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct RenewalState {
-    #[serde(default = "renewal_base_interval")]
-    pub interval_secs: i64,
-    #[serde(default)]
-    pub next_attempt_at: Option<Timestamp>,
+    #[serde(flatten)]
+    pub schedule: Schedule,
     #[serde(default)]
     pub last: Option<RenewalAttempt>,
 }
 
-fn renewal_base_interval() -> i64 {
-    renewal::BASE_INTERVAL_SECS
-}
-
-impl Default for RenewalState {
-    fn default() -> Self {
-        Self {
-            interval_secs: renewal_base_interval(),
-            next_attempt_at: None,
-            last: None,
-        }
+impl Rationed for RenewalState {
+    fn schedule(&mut self) -> &mut Schedule {
+        &mut self.schedule
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct AccountState {
     #[serde(default)]
     pub reading: Option<UsageReading>,
     /// Why the last call failed, if it did.
     #[serde(default)]
     pub last_failure: Option<UsageFailure>,
-    #[serde(default = "base_interval")]
-    pub interval_secs: i64,
-    #[serde(default)]
-    pub next_call_at: Option<Timestamp>,
+    #[serde(flatten)]
+    pub schedule: Schedule,
 }
 
-fn base_interval() -> i64 {
-    super::BASE_INTERVAL_SECS
-}
-
-impl Default for AccountState {
-    fn default() -> Self {
-        Self {
-            reading: None,
-            last_failure: None,
-            interval_secs: base_interval(),
-            next_call_at: None,
-        }
+impl Rationed for AccountState {
+    fn schedule(&mut self) -> &mut Schedule {
+        &mut self.schedule
     }
 }
 
-/// Reads the state. A missing file is an empty state; an unreadable or invalid one is
-/// discarded with a warning.
+/// Reads the state. A missing file, or one of another version, is an empty state; an
+/// unreadable or invalid one is discarded with a warning.
 pub(crate) fn load(path: &Path, warnings: &mut Vec<UsageWarning>) -> State {
     let mut discard = || {
         if !warnings.contains(&UsageWarning::StateDiscarded) {
@@ -109,9 +94,10 @@ pub(crate) fn load(path: &Path, warnings: &mut Vec<UsageWarning>) -> State {
         State::default()
     };
     match fs::read(path) {
-        Ok(bytes) => match serde_json::from_slice::<State>(&bytes) {
-            Ok(state) if state.version == VERSION => state,
-            _ => discard(),
+        Ok(bytes) => match serde_json::from_slice::<Versioned>(&bytes) {
+            Ok(Versioned { version }) if version != VERSION => State::default(),
+            Ok(_) => serde_json::from_slice(&bytes).unwrap_or_else(|_| discard()),
+            Err(_) => discard(),
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => State::default(),
         Err(_) => discard(),

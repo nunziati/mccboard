@@ -20,14 +20,19 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::state::{self, RenewalState, State};
+use super::UsageWarning;
+use super::rationing::{Policy, Rationing, Verdict};
+use super::state::{RenewalState, State};
 use super::token::{self, TokenRead};
-use super::{UsageWarning, secs};
 use crate::instance::InstanceKind;
 use crate::{Environment, Paths, RenewalExit, RenewalInvocation, paths};
 
-pub(crate) const BASE_INTERVAL_SECS: i64 = 15 * 60;
-const MAX_INTERVAL_SECS: i64 = 6 * 60 * 60;
+/// At most one attempt per instance every 15 minutes; after failures up to 6 hours.
+const ATTEMPTS: Policy = Policy {
+    base_secs: 15 * 60,
+    max_secs: 6 * 60 * 60,
+    longest_wait_secs: 6 * 60 * 60,
+};
 
 /// What mccboard keeps about the renewal of an account's token, as
 /// [`super::RenewalSituation`] reads it.
@@ -89,49 +94,37 @@ pub(super) fn run(
     expired: &[&Path],
     warnings: &mut Vec<UsageWarning>,
 ) -> Vec<PathBuf> {
-    let now = env.now();
-    let mut due = Vec::new();
-    for dir in expired {
-        let entry = state.renewals.entry(paths::key(dir)).or_default();
-        if entry.next_attempt_at.is_none_or(|at| at <= now) {
-            entry.next_attempt_at = Some(now + secs(entry.interval_secs));
-            due.push(dir.to_path_buf());
-        }
-    }
-    if due.is_empty() {
-        return due;
-    }
-    state::save(state_path, state, warnings);
-
     let working_dir = paths.renewal_dir();
-    // If it can't be made, starting Claude Code there fails and says so.
-    let _ = fs::create_dir_all(&working_dir);
-    let mut attempts = Vec::new();
-    for dir in &due {
-        let exit = env.renew_token(&RenewalInvocation {
-            config_dir: dir.clone(),
-            kind: InstanceKind::of(home, dir),
-            working_dir: working_dir.clone(),
-        });
-        let at = env.now();
-        let renewed = matches!(token::read(dir, at), TokenRead::Valid { .. });
-        let outcome = if renewed {
-            RenewalOutcome::Renewed
-        } else {
-            RenewalOutcome::Failed {
-                failure: failure(exit),
+    Rationing {
+        path: state_path,
+        policy: ATTEMPTS,
+        table: |state| &mut state.renewals,
+    }
+    .run(
+        state,
+        warnings,
+        &|| env.now(),
+        expired
+            .iter()
+            .map(|dir| (paths::key(dir), dir.to_path_buf()))
+            .collect(),
+        |dir| {
+            // If it can't be made, starting Claude Code there fails and says so.
+            let _ = fs::create_dir_all(&working_dir);
+            let exit = env.renew_token(&RenewalInvocation {
+                config_dir: dir.clone(),
+                kind: InstanceKind::of(home, dir),
+                working_dir: working_dir.clone(),
+            });
+            match token::read(dir, env.now()) {
+                TokenRead::Valid { .. } => RenewalOutcome::Renewed,
+                _ => RenewalOutcome::Failed {
+                    failure: failure(exit),
+                },
             }
-        };
-        attempts.push((paths::key(dir), RenewalAttempt { at, outcome }));
-    }
-
-    // Re-read: another mccboard may have written meanwhile.
-    *state = state::load(state_path, warnings);
-    for (key, attempt) in attempts {
-        apply(state.renewals.entry(key).or_default(), attempt);
-    }
-    state::save(state_path, state, warnings);
-    due
+        },
+        record,
+    )
 }
 
 fn failure(exit: io::Result<RenewalExit>) -> RenewalFailure {
@@ -146,15 +139,16 @@ fn failure(exit: io::Result<RenewalExit>) -> RenewalFailure {
     }
 }
 
-fn apply(entry: &mut RenewalState, attempt: RenewalAttempt) {
-    entry.interval_secs = match attempt.outcome {
-        RenewalOutcome::Renewed => BASE_INTERVAL_SECS,
-        RenewalOutcome::Failed { .. } => {
-            (entry.interval_secs.max(BASE_INTERVAL_SECS) * 2).min(MAX_INTERVAL_SECS)
-        }
+/// Writes an attempt's outcome into the instance's entry.
+fn record(entry: &mut RenewalState, outcome: RenewalOutcome, at: Timestamp) -> Verdict {
+    let verdict = match outcome {
+        RenewalOutcome::Renewed => Verdict::Succeeded,
+        RenewalOutcome::Failed { .. } => Verdict::Failed {
+            wait_at_least: None,
+        },
     };
-    entry.next_attempt_at = Some(attempt.at + secs(entry.interval_secs));
-    entry.last = Some(attempt);
+    entry.last = Some(RenewalAttempt { at, outcome });
+    verdict
 }
 
 /// The renewal to show for an account: while its token is expired, that of its usage instance
@@ -177,7 +171,7 @@ pub(super) fn view(
     let found = entry(&dir).cloned().unwrap_or_default();
     Some(TokenRenewal {
         last: found.last,
-        next_attempt_at: found.next_attempt_at.filter(|_| expired.is_some()),
+        next_attempt_at: found.schedule.next_at().filter(|_| expired.is_some()),
         config_dir: dir,
     })
 }

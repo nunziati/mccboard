@@ -317,6 +317,8 @@ fn attempts_at(env: &FakeEnvironment, core: &Core, after: SignedDuration) -> usi
     env.renewal_invocations().len()
 }
 
+/// The renewal's policy; how rationing doubles, resets and survives a restart is tested with
+/// it (`rationing`).
 #[test]
 fn a_failed_renewal_waits_30_minutes_then_doubles_up_to_6_hours() {
     let (_home, _b, core, env) = home_with_expired_b();
@@ -352,19 +354,6 @@ fn a_success_resets_the_interval_to_15_minutes() {
     assert_eq!(attempts_at(&env, &core, mins(8)), 3);
     exits(&env, 1);
     assert_eq!(attempts_at(&env, &core, mins(1)), 4);
-}
-
-#[test]
-fn renewal_limits_survive_a_restart() {
-    let (home, _b, core, env) = home_with_expired_b();
-    exits(&env, 1);
-    core.refresh_usage().unwrap();
-
-    let restarted = Core::new(home.path(), env.clone());
-    env.advance(mins(10));
-    restarted.refresh_usage().unwrap();
-
-    assert_eq!(env.renewal_invocations().len(), 1);
 }
 
 #[test]
