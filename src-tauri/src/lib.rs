@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mccboard_core::{
-    Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess, Color,
-    Core, DesktopOpening, Doctor, LauncherStatus, LauncherSync, LoginReport, LoginTerminal,
-    Registration, Registry, Removal, RemoveLevel, RepairReport, Saved, SharingAnswer,
-    SystemEnvironment,
+    Account, AccountUpdate, AccountUuid, AddReport, AddRequest, Candidate, ClaudeProcess,
+    CliInstall, Color, Core, DesktopOpening, Doctor, LauncherStatus, LauncherSync, LoginReport,
+    LoginTerminal, Registration, Registry, Removal, RemoveLevel, RepairReport, Saved,
+    SharingAnswer, SystemEnvironment,
 };
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 use serde::Serialize;
@@ -234,6 +234,18 @@ fn watch_config(app: &tauri::App, core: &Core) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// On Windows, copies the CLI installed next to the app into `~/.mccboard/bin`, on the PATH,
+/// so an update of the app refreshes the `mccboard` command too. In the background: it reads
+/// a few megabytes, and the window needn't wait.
+fn install_cli_at_start(core: &Core) {
+    let core = core.clone();
+    std::thread::spawn(move || {
+        if let Some(CliInstall::NotCopied { reason }) = core.install_cli() {
+            eprintln!("mccboard: the CLI isn't copied into the bin folder: {reason}");
+        }
+    });
+}
+
 pub fn run() {
     // Without a home directory the core reports its home as unreadable, which the UI shows.
     let home = std::env::home_dir().unwrap_or_default();
@@ -293,6 +305,7 @@ pub fn run() {
             desktop::open_at_start(app.handle());
             taskbar::setup(app, &core);
             desktop_watch::setup(app, &core)?;
+            install_cli_at_start(&core);
             Ok(())
         })
         .build(tauri::generate_context!())

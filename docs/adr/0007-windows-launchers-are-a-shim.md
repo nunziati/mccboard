@@ -14,3 +14,11 @@ The core looks for the shim next to the running program. `cargo build` puts ever
 - **A `.ps1` signed or a policy change:** mccboard would be changing the user's security settings.
 - **The target folder from `config.toml` instead of a sidecar:** the shim would parse mccboard's config, and break when it changes.
 - **The CLI or the app as the shim:** megabytes per launcher, all copied again at every update.
+
+## Amendment (#32): the CLI is copied into the bin folder too
+
+mccboard tells Windows users to run `mccboard launcher sync` and `mccboard login`, but the installer shipped only the app and the shim. Now `tauri.bundle.conf.json` also builds the CLI in release and ships it next to the app as `mccboard.exe`, the same version as the app. Every launcher sync, and the app when it starts (so an update of the app refreshes it), copies it into `~/.mccboard/bin` when it is missing there or differs. That folder is already on the user PATH because of the launchers, so `mccboard` works in any new terminal. A running copy is moved aside to `mccboard.exe.old` like a launcher program, and a later sync deletes it. `mccboard` is reserved as a launcher name, as `claude` is, so no launcher overwrites it. A missing or unreadable shipped CLI never fails a sync: the copy already there stays.
+
+The copy runs from the bin folder, where the shim and the app aren't. Beside it the core writes `mccboard.origin`, one line naming the folder it was copied from (the app's). Every program mccboard looks for next to the running one, the shim, the CLI and the app, is looked for in that folder instead when the running program has an origin file beside it. So the copy writes launchers with the shim the app shipped, and its own sync refreshes it from the app's folder after an update. A copy without an origin file is the CLI to install: it isn't copied onto itself.
+
+Considered and set aside: copying the shim into the bin folder too would put a second command, `mccboard-shim`, on the PATH and still leave the app unfound; reading the installer's registry keys would tie the core to one installer's layout and miss development builds.

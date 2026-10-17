@@ -50,6 +50,7 @@ struct State {
     user_path_additions: usize,
     user_path_fails: bool,
     launcher_shim: Option<Vec<u8>>,
+    shipped_cli: Option<PathBuf>,
     processes: Vec<ClaudeProcess>,
     desktop_processes: Vec<ProcessListing>,
     desktop_packages: Vec<DesktopPackage>,
@@ -137,6 +138,7 @@ impl FakeEnvironment {
                 user_path_additions: 0,
                 user_path_fails: false,
                 launcher_shim: Some(FAKE_LAUNCHER_SHIM.to_vec()),
+                shipped_cli: None,
                 processes: Vec::new(),
                 desktop_processes: Vec::new(),
                 desktop_packages: Vec::new(),
@@ -308,6 +310,12 @@ impl FakeEnvironment {
         self.state().launcher_shim = shim.map(<[u8]>::to_vec);
     }
 
+    /// Sets the CLI mccboard ships, a file the test wrote; `None` (the default): no CLI is
+    /// shipped, so a sync on Windows leaves the bin folder's copy alone.
+    pub fn set_shipped_cli(&self, cli: Option<&Path>) {
+        self.state().shipped_cli = cli.map(Path::to_path_buf);
+    }
+
     /// Turns Windows Developer Mode on or off: off, file links can't be created.
     pub fn set_developer_mode(&self, on: bool) {
         self.state().developer_mode = on;
@@ -473,6 +481,13 @@ impl Environment for FakeEnvironment {
                 "fake: mccboard-shim.exe isn't there",
             )
         })
+    }
+
+    fn shipped_cli(&self) -> io::Result<PathBuf> {
+        self.state()
+            .shipped_cli
+            .clone()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fake: no mccboard.exe"))
     }
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {

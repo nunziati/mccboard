@@ -101,11 +101,18 @@ export type UserPathChange =
   | { status: 'added' }
   | { status: 'not_added'; reason: string }
 
+/** On Windows: mccboard's CLI copied into the bin folder, next to the launchers. */
+export type CliInstall =
+  | { status: 'up_to_date' }
+  | { status: 'copied' }
+  | { status: 'not_copied'; reason: string }
+
 export interface LauncherSync {
   created: Launcher[]
   updated: Launcher[]
   removed: Launcher[]
   user_path: UserPathChange | null
+  cli: CliInstall | null
 }
 
 /** A typed core error: `code` is stable and translated by the UI. */
