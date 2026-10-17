@@ -69,7 +69,11 @@ fn cached_usage_json_lists_accounts_without_calling() {
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["accounts"][0]["account"]["uuid"], UUID_A);
-    assert_eq!(json["accounts"][0]["status"]["status"], "never_read");
+    assert_eq!(json["accounts"][0]["situation"]["freshness"], "no_reading");
+    assert_eq!(
+        json["accounts"][0]["situation"]["blocker"],
+        serde_json::Value::Null
+    );
     assert_eq!(json["accounts"][0]["called"], false);
     assert_no_token(&out);
 }
@@ -129,7 +133,10 @@ fn refreshing_an_account_without_a_token_reports_it_not_logged_in() {
         String::from_utf8_lossy(&out.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["accounts"][0]["status"]["status"], "not_logged_in");
+    assert_eq!(
+        json["accounts"][0]["situation"]["blocker"]["kind"],
+        "not_logged_in"
+    );
     assert_eq!(json["accounts"][0]["called"], false);
 }
 
@@ -263,9 +270,9 @@ fn an_expired_token_is_handed_to_claude_code_once_and_the_outcome_shown() {
     assert!(again.status.success());
     assert_eq!(self::seen(&bin).len(), 1);
     let report: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
-    let renewal = &report["accounts"][0]["renewal"];
-    assert_eq!(renewal["last"]["outcome"], "failed");
-    assert_eq!(renewal["last"]["failure"]["kind"], "still_expired");
+    let renewal = &report["accounts"][0]["situation"]["renewal"];
+    assert_eq!(renewal["state"], "failed");
+    assert_eq!(renewal["failure"]["kind"], "still_expired");
 }
 
 #[test]

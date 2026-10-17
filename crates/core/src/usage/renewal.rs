@@ -29,19 +29,18 @@ use crate::{Environment, Paths, RenewalExit, RenewalInvocation, paths};
 pub(crate) const BASE_INTERVAL_SECS: i64 = 15 * 60;
 const MAX_INTERVAL_SECS: i64 = 6 * 60 * 60;
 
-/// Where the renewal of an account's token stands.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TokenRenewal {
+/// What mccboard keeps about the renewal of an account's token, as
+/// [`super::RenewalSituation`] reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TokenRenewal {
     /// The instance Claude Code is (or was last) run in: while the token is expired, the
     /// account's usage instance; otherwise the one renewed last.
-    pub config_dir: PathBuf,
-    /// Whether this operation ran Claude Code to renew it.
-    pub attempted: bool,
+    pub(super) config_dir: PathBuf,
     /// The last attempt, if there was one.
-    pub last: Option<RenewalAttempt>,
+    pub(super) last: Option<RenewalAttempt>,
     /// While the token is expired: no attempt before then. `None` when the next refresh may
     /// try, or when the token is valid.
-    pub next_attempt_at: Option<Timestamp>,
+    pub(super) next_attempt_at: Option<Timestamp>,
 }
 
 /// One attempt to have Claude Code renew a token.
@@ -164,8 +163,6 @@ pub(super) fn view(
     state: &State,
     expired: Option<&Path>,
     dirs: &[PathBuf],
-    attempted: &[PathBuf],
-    now: Timestamp,
 ) -> Option<TokenRenewal> {
     let entry = |dir: &Path| state.renewals.get(&paths::key(dir));
     let dir = match expired {
@@ -179,11 +176,8 @@ pub(super) fn view(
     };
     let found = entry(&dir).cloned().unwrap_or_default();
     Some(TokenRenewal {
-        attempted: attempted.iter().any(|a| paths::same(a, &dir)),
         last: found.last,
-        next_attempt_at: found
-            .next_attempt_at
-            .filter(|at| expired.is_some() && *at > now),
+        next_attempt_at: found.next_attempt_at.filter(|_| expired.is_some()),
         config_dir: dir,
     })
 }

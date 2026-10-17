@@ -116,9 +116,9 @@ pub use tray::{
     WindowName,
 };
 pub use usage::{
-    AccessToken, AccountUsage, ModelWindow, RenewalAttempt, RenewalFailure, RenewalOutcome,
-    TokenRenewal, UsageFailure, UsageReading, UsageReport, UsageSource, UsageStatus, UsageWarning,
-    UsageWindow,
+    AccessToken, AccountUsage, Freshness, ModelWindow, RenewalAttempt, RenewalFailure,
+    RenewalOutcome, RenewalSituation, UsageBlocker, UsageFailure, UsageReading, UsageReport,
+    UsageSituation, UsageSource, UsageWarning, UsageWindow,
 };
 
 /// The entry point to every core operation, bound to one home directory on the local machine.
@@ -165,10 +165,18 @@ impl Core {
         scan::scan(&self.home, self.env.as_ref(), &registered)
     }
 
-    /// The registered accounts and instances, each instance observed now. Reads
-    /// `config.toml` and writes nothing.
+    /// The registered accounts and instances, each instance observed now, with the token
+    /// renewal that runs in it. Reads `config.toml` and mccboard's state, and writes nothing.
     pub fn registry(&self) -> Result<Registry, Error> {
-        registry::registry(&self.home, &self.paths().config_file(), self.env.as_ref())
+        let mut registry =
+            registry::registry(&self.home, &self.paths().config_file(), self.env.as_ref())?;
+        // Without the usage state (unreadable), the instances just show no renewal.
+        if let Ok(report) = self.usage() {
+            for instance in &mut registry.instances {
+                instance.renewal = report.renewal_in(&instance.config_dir);
+            }
+        }
+        Ok(registry)
     }
 
     /// Registers the instance whose config directory is `path` (absolute, or starting with
@@ -555,7 +563,8 @@ impl Core {
     }
 
     /// Every registered account's last known usage reading, without calling the endpoint.
-    /// Windows whose reset time has passed read as zero.
+    /// Windows whose reset time has passed read as zero. It doesn't wait for a refresh in
+    /// progress: it shows what was saved last.
     pub fn usage(&self) -> Result<UsageReport, Error> {
         usage::report(
             &self.home,

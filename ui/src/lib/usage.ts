@@ -32,14 +32,6 @@ export type UsageFailure =
   | { kind: 'unreachable'; reason: string }
   | { kind: 'malformed' }
 
-export type UsageStatus =
-  | { status: 'ok' }
-  | { status: 'never_read' }
-  | { status: 'token_expired' }
-  | { status: 'not_logged_in' }
-  | { status: 'credentials_unreadable' }
-  | { status: 'failed'; failure: UsageFailure }
-
 /** Why Claude Code didn't leave a valid token when asked to renew it. */
 export type RenewalFailure =
   | { kind: 'claude_not_found' }
@@ -48,29 +40,45 @@ export type RenewalFailure =
   | { kind: 'still_expired' }
   | { kind: 'not_started' }
 
-export type RenewalAttempt = { at: string } & (
-  | { outcome: 'renewed' }
-  | { outcome: 'failed'; failure: RenewalFailure }
-)
+/** How far the reading can be trusted as current. */
+export type Freshness = 'current' | 'stale' | 'no_reading'
 
-/** Claude Code renewing an account's expired token in one of its instances (#30). */
-export interface TokenRenewal {
-  config_dir: string
-  attempted: boolean
-  last: RenewalAttempt | null
-  /** While the token is expired: no attempt before then; null when the next refresh may try. */
-  next_attempt_at: string | null
+/** Why an account's usage isn't being refreshed. */
+export type UsageBlocker =
+  | { kind: 'token_expired' }
+  | { kind: 'not_logged_in' }
+  | { kind: 'credentials_unreadable' }
+  | { kind: 'refresh_failed'; failure: UsageFailure }
+
+/** Where the token renewal of an account stands, as the core decides it (#30, #53). */
+export type RenewalSituation =
+  | { state: 'renewed'; config_dir: string; at: string }
+  | {
+      state: 'failed'
+      config_dir: string
+      at: string
+      failure: RenewalFailure
+      /** Null when the next refresh may try again. */
+      retry_at: string | null
+    }
+  /** Null `next_at`: the next refresh may try. */
+  | { state: 'waiting'; config_dir: string; next_at: string | null }
+  | { state: 'off'; config_dir: string }
+  | { state: 'quiet' }
+
+/** Where an account's usage stands, as of the report. */
+export interface UsageSituation {
+  reading: UsageReading | null
+  freshness: Freshness
+  blocker: UsageBlocker | null
+  renewal: RenewalSituation
 }
 
 export interface AccountUsage {
   account: Account
-  status: UsageStatus
-  reading: UsageReading | null
-  stale: boolean
   called: boolean
   next_call_at: string | null
-  /** Null when the preference is off, or when no renewal was ever needed. */
-  renewal: TokenRenewal | null
+  situation: UsageSituation
 }
 
 export type UsageWarning = 'state_discarded' | 'state_unwritable'

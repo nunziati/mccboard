@@ -54,9 +54,7 @@
     setRenewExpiredTokens,
     setTaskbarWidget,
     taskbarWidget,
-    usage as loadUsage,
     type TaskbarWidgetSettings,
-    type UsageReport,
   } from './lib/usage'
 
   /** Instances shown under one heading: an account, an account missing from config.toml, or none. */
@@ -86,8 +84,6 @@
   let repairReport = $state<RepairReport | null>(null)
   /** Shown while Claude Code's login is open, until it ends. */
   let waiting = $state<string | null>(null)
-  /** The last usage report, for each instance's token renewal. Null until loaded or if it can't be. */
-  let usageReport = $state<UsageReport | null>(null)
   /** Whether mccboard lets Claude Code renew an expired token (config.toml). */
   let renewTokens = $state(true)
   /** The taskbar widget's preferences (config.toml); null until loaded or off Windows. */
@@ -164,21 +160,13 @@
     })
   }
 
-  /** Claude Code renewing this instance's token, when the usage report has it. */
-  function renewalOf(instance: InstanceStatus) {
-    return usageReport?.accounts.find((a) => a.renewal?.config_dir === instance.config_dir)
-      ?.renewal
-  }
-
-  /** The usage report and the renewal preference. They don't hold up the rest of the window:
-   * a refresh in progress (a renewal can take a while) makes the report wait. */
-  async function reloadUsage() {
+  /** The renewal and taskbar widget preferences. */
+  async function reloadPreferences() {
     try {
       renewTokens = await renewExpiredTokens()
       widget = await taskbarWidget()
-      usageReport = await loadUsage()
     } catch {
-      usageReport = null
+      // Kept as they were; the next full reload tries again.
     }
   }
 
@@ -186,7 +174,7 @@
     renewTokens = on
     setRenewExpiredTokens(on).catch((error: unknown) => {
       actionError = asCoreError(error)
-      reloadUsage()
+      reloadPreferences()
     })
   }
 
@@ -194,7 +182,7 @@
     if (widget) widget = { ...widget, ...change }
     setTaskbarWidget(change).catch((error: unknown) => {
       actionError = asCoreError(error)
-      reloadUsage()
+      reloadPreferences()
     })
   }
 
@@ -256,7 +244,7 @@
     } catch (e) {
       loadError = asCoreError(e)
     }
-    reloadUsage()
+    reloadPreferences()
     try {
       launcherStatus = await loadLaunchers()
       launcherError = null
@@ -364,7 +352,6 @@
       } catch {
         // Kept as it was; the next full reload shows the error.
       }
-      reloadUsage()
     })
     return () => {
       unlisten.then((stop) => stop())
@@ -503,15 +490,12 @@
               <tbody>
                 {#each group.instances as instance (instance.config_dir)}
                   {@const drift = driftOf(instance)}
-                  {@const renewal = renewalOf(instance)}
                   <tr>
                     <td><code>{instance.config_dir}</code></td>
                     <td>{instance.kind === 'primary' ? t('kind.primary') : t('kind.linked')}</td>
                     <td>
                       <Login observation={instance} />
-                      {#if renewal}
-                        <Renewal {renewal} expired={instance.login.state === 'expired'} />
-                      {/if}
+                      <Renewal renewal={instance.renewal} />
                       {#if instance.account_status.status === 'changed'}
                         <div class="warning small">
                           {t('status.changed', {

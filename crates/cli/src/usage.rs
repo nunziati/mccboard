@@ -4,8 +4,8 @@ use anyhow::Result;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use mccboard_core::{
-    AccountUsage, Core, RenewalFailure, RenewalOutcome, UsageFailure, UsageReport, UsageStatus,
-    UsageWarning, UsageWindow,
+    AccountUsage, Core, Freshness, RenewalFailure, RenewalSituation, UsageBlocker, UsageFailure,
+    UsageReport, UsageWarning, UsageWindow,
 };
 
 /// Refreshes usage within the rate limits (or, with `cached`, only reads the last readings)
@@ -22,7 +22,7 @@ pub fn run(core: &Core, json: bool, cached: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print(&report, cached, core.renew_expired_tokens()?);
+        print(&report, cached);
     }
     Ok(())
 }
@@ -38,7 +38,7 @@ fn warning_text(warning: UsageWarning) -> &'static str {
     }
 }
 
-fn print(report: &UsageReport, cached: bool, renewal_on: bool) {
+fn print(report: &UsageReport, cached: bool) {
     if report.accounts.is_empty() {
         println!(
             "No account registered yet. Run `mccboard scan`, then `mccboard register <path>`."
@@ -49,18 +49,20 @@ fn print(report: &UsageReport, cached: bool, renewal_on: bool) {
         if index > 0 {
             println!();
         }
-        print_account(usage, cached, renewal_on);
+        print_account(usage, cached);
     }
 }
 
-fn print_account(usage: &AccountUsage, cached: bool, renewal_on: bool) {
+fn print_account(usage: &AccountUsage, cached: bool) {
     let account = &usage.account;
+    // Printed at once: the situation as of the report.
+    let situation = usage.as_reported();
     match &account.email {
         Some(email) => println!("{} {}  {email}", account.label, account.color),
         None => println!("{} {}  {}", account.label, account.color, account.uuid),
     }
 
-    if let Some(reading) = &usage.reading {
+    if let Some(reading) = &situation.reading {
         let mut rows: Vec<(String, f64, Option<Timestamp>)> = Vec::new();
         let named = [("session", &reading.session), ("weekly", &reading.weekly)];
         for (name, window) in named {
@@ -94,37 +96,44 @@ fn print_account(usage: &AccountUsage, cached: bool, renewal_on: bool) {
         println!(
             "  read {}{}",
             local(reading.read_at),
-            if usage.stale { " (stale)" } else { "" }
+            if situation.freshness == Freshness::Stale {
+                " (stale)"
+            } else {
+                ""
+            }
         );
     }
 
-    let status = match &usage.status {
-        UsageStatus::Ok => None,
-        UsageStatus::NeverRead if cached => {
-            Some("not read yet; run `mccboard usage` to read it".to_owned())
-        }
-        UsageStatus::NeverRead => Some("not read yet".to_owned()),
-        UsageStatus::TokenExpired if renewal_on => Some("token expired".to_owned()),
-        UsageStatus::TokenExpired => Some(
-            "token expired: Claude Code renews it the next time it runs with this account              (or turn renewal on: `mccboard settings --renew-expired-tokens on`)"
-                .to_owned(),
+    let status = match &situation.blocker {
+        None if situation.freshness != Freshness::NoReading => None,
+        None if cached => Some("not read yet; run `mccboard usage` to read it".to_owned()),
+        None => Some("not read yet".to_owned()),
+        Some(UsageBlocker::TokenExpired) => Some(
+            match situation.renewal {
+                RenewalSituation::Off { .. } => {
+                    "token expired: Claude Code renews it the next time it runs with this account \
+                 (or turn renewal on: `mccboard settings --renew-expired-tokens on`)"
+                }
+                _ => "token expired",
+            }
+            .to_owned(),
         ),
-        UsageStatus::NotLoggedIn => {
+        Some(UsageBlocker::NotLoggedIn) => {
             Some("no registered instance is logged in with this account".to_owned())
         }
-        UsageStatus::CredentialsUnreadable => Some(
+        Some(UsageBlocker::CredentialsUnreadable) => Some(
             "the credentials of this account's instances can't be read \
              (on Windows they may be in the Credential Manager)"
                 .to_owned(),
         ),
-        UsageStatus::Failed { failure } => {
+        Some(UsageBlocker::RefreshFailed { failure }) => {
             Some(format!("last refresh failed: {}", failure_text(failure)))
         }
     };
     if let Some(status) = status {
         println!("  {status}");
     }
-    if let Some(renewal) = renewal_text(usage) {
+    if let Some(renewal) = renewal_text(&situation.renewal) {
         println!("  {renewal}");
     }
     if let Some(at) = usage.next_call_at
@@ -136,34 +145,36 @@ fn print_account(usage: &AccountUsage, cached: bool, renewal_on: bool) {
 }
 
 /// When Claude Code renewed the account's token, or why it couldn't and when it tries again.
-fn renewal_text(usage: &AccountUsage) -> Option<String> {
-    let renewal = usage.renewal.as_ref()?;
-    let expired = usage.status == UsageStatus::TokenExpired;
-    let next = match renewal.next_attempt_at {
-        Some(at) => format!("next try after {}", local(at)),
+fn renewal_text(renewal: &RenewalSituation) -> Option<String> {
+    let next = |at: &Option<Timestamp>| match at {
+        Some(at) => format!("next try after {}", local(*at)),
         None => "next try at the next refresh".to_owned(),
     };
-    match (&renewal.last, expired) {
-        (Some(last), false) if last.outcome == RenewalOutcome::Renewed => Some(format!(
-            "token renewed by Claude Code at {}",
-            local(last.at)
+    match renewal {
+        RenewalSituation::Renewed { at, .. } => {
+            Some(format!("token renewed by Claude Code at {}", local(*at)))
+        }
+        RenewalSituation::Failed {
+            config_dir,
+            at,
+            failure,
+            retry_at,
+        } => Some(format!(
+            "renewal in {} failed at {}: {}; {}",
+            config_dir.display(),
+            local(*at),
+            renewal_failure_text(failure),
+            next(retry_at)
         )),
-        (_, false) => None,
-        (Some(last), true) => Some(match &last.outcome {
-            RenewalOutcome::Failed { failure } => format!(
-                "renewal in {} failed at {}: {}; {next}",
-                renewal.config_dir.display(),
-                local(last.at),
-                renewal_failure_text(failure)
-            ),
-            RenewalOutcome::Renewed => {
-                format!("renewal in {}: {next}", renewal.config_dir.display())
-            }
-        }),
-        (None, true) => Some(format!(
-            "renewal in {}: {next}",
-            renewal.config_dir.display()
+        RenewalSituation::Waiting {
+            config_dir,
+            next_at,
+        } => Some(format!(
+            "renewal in {}: {}",
+            config_dir.display(),
+            next(next_at)
         )),
+        RenewalSituation::Off { .. } | RenewalSituation::Quiet => None,
     }
 }
 

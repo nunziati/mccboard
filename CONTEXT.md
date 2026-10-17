@@ -27,6 +27,10 @@ _Avoid_: install, setup, environment
 An instance whose OAuth access token is past its expiry while its credentials are still there. Claude Code renews it the next time it runs in that instance, or when mccboard runs it there for that purpose (a token renewal); mccboard itself never does. It is still logged in: not logged in means no credentials, or ones Claude Code emptied on logout.
 _Avoid_: login expired, logged out
 
+**Token renewal**:
+mccboard running Claude Code in an instance with an expired token, so that Claude Code renews it. It happens only while the user has it turned on; when it is off, the token stays expired until Claude Code next runs with that account. Its last outcome (renewed, or failed and why) is shown with the account.
+_Avoid_: token refresh, re-login
+
 **Primary instance**:
 The instance in Claude Code's default config directory on a machine (`~/.claude`). It holds the real copies of everything shared.
 _Avoid_: main instance, default instance, source
