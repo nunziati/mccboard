@@ -9,8 +9,8 @@
 //! The login is the exception: it is interactive, so it runs in a terminal the user sees (the
 //! CLI's own, or a new window), and mccboard reads nothing it prints.
 //!
-//! The token renewal (a minimal `claude -p`) runs hidden like a background run, but in a folder
-//! of mccboard's own and with its output discarded.
+//! The token renewal (`claude mcp get` with a missing name) runs hidden like a background run,
+//! but in a folder of mccboard's own and with its output discarded.
 
 use std::env;
 use std::ffi::OsString;
@@ -177,31 +177,21 @@ fn is_program(path: &Path) -> bool {
     path.is_file()
 }
 
-/// The smallest one-shot prompt (#51): Claude Code needs a valid token before it can call the
-/// model, so with an expired one it renews it first. It counts as a little usage and may start
-/// the session window. `auth status` would be free, but it exits before its startup refresh
-/// is done and leaves the token expired.
-///
-/// The cheapest model and a one-line system prompt; no session saved in the instance's
-/// history; safe mode, so no hooks, MCP servers, plugins or `CLAUDE.md`; no tools.
-const RENEW_ARGS: &[&str] = &[
-    "-p",
-    ".",
-    "--model",
-    "haiku",
-    "--system-prompt",
-    "Reply with a single dot.",
-    "--no-session-persistence",
-    "--safe-mode",
-    "--tools",
-    "",
-];
+/// Claude Code's details of an MCP server, asked for a name no server has (#51). Before looking
+/// it up, Claude Code loads the account's claude.ai connectors, and for that it waits until it
+/// has renewed an expired token. Then it finds no such server and exits: no MCP server is
+/// started, no model called, no usage counted. `auth status` doesn't wait: it exits before its startup
+/// refresh is done, and usually leaves the token expired.
+const RENEW_ARGS: &[&str] = &["mcp", "get", "mccboard-renewal-no-such-server"];
 
-/// A few seconds when it works; a minute covers a slow network.
+/// How `mcp get` ends when it finds no such server: the expected end, reported as 0.
+const NO_SUCH_SERVER_EXIT: i32 = 1;
+
+/// About a second when it works; a minute covers a slow network.
 const RENEW_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Runs a minimal prompt in the instance, in the background, so Claude Code renews its own
-/// expired token. Its output goes nowhere: only the exit code is kept.
+/// Runs `claude mcp get` with a missing name in the instance, in the background, so Claude Code
+/// renews its own expired token. Its output goes nowhere: only the exit code is kept.
 pub(crate) fn renew(renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
     renew_with(renewal, &Lookup::from_env(), RENEW_TIMEOUT)
 }
@@ -231,13 +221,16 @@ fn renew_with(
             let _ = child.wait();
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "Claude Code didn't finish its renewal prompt in time",
+                "Claude Code didn't finish its renewal in time",
             ));
         }
         thread::sleep(Duration::from_millis(50));
     };
     Ok(RenewalExit {
-        exit_code: status.code(),
+        exit_code: status.code().map(|code| match code {
+            NO_SUCH_SERVER_EXIT => 0,
+            code => code,
+        }),
     })
 }
 
@@ -533,14 +526,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_renewal_runs_the_minimal_prompt_in_the_instance_from_the_neutral_folder() {
+    fn a_renewal_runs_mcp_get_in_the_instance_from_the_neutral_folder() {
         let (_home, bin, dir, neutral, out) = renewal_home();
         write_program(
             &bin.join("claude"),
             &format!(
                 "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"$PWD\" \
                  \"$*\" \"${{ANTHROPIC_API_KEY-unset}}\" > '{}/claude'\n\
-                 echo '{{\"loggedIn\": true, \"email\": \"a@example.com\"}}'\nexit 0\n",
+                 echo 'No MCP server named \"x\".' >&2\nexit 1\n",
                 out.display()
             ),
         );
@@ -552,6 +545,7 @@ mod tests {
         )
         .unwrap();
 
+        // Finding no such server is how it ends: reported as 0.
         assert_eq!(exit.exit_code, Some(0));
         let seen = fs::read_to_string(out.join("claude")).unwrap();
         assert_eq!(
@@ -575,7 +569,7 @@ mod tests {
             &bin.join("claude"),
             &format!(
                 "#!/bin/sh\nprintf '%s|%s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"$HOME\" \
-                 > '{}/claude'\nexit 1\n",
+                 > '{}/claude'\nexit 2\n",
                 out.display()
             ),
         );
@@ -587,7 +581,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(exit.exit_code, Some(1));
+        assert_eq!(exit.exit_code, Some(2));
         let seen = fs::read_to_string(out.join("claude")).unwrap();
         assert_eq!(seen.trim(), format!("unset|{}", home.path().display()));
     }
@@ -618,7 +612,7 @@ mod tests {
             bin.join("claude.cmd"),
             format!(
                 "@echo off\r\n>\"{}\\claude\" echo %CLAUDE_CONFIG_DIR%^|%CD%^|%*\r\n\
-                 echo {{\"loggedIn\": true}}\r\nexit /b 0\r\n",
+                 echo No MCP server named x. 1>&2\r\nexit /b 1\r\n",
                 out.display()
             ),
         )
@@ -636,8 +630,7 @@ mod tests {
         assert_eq!(
             seen.trim().to_lowercase(),
             format!(
-                "{}|{}|-p . --model haiku --system-prompt \"reply with a single dot.\" \
-                 --no-session-persistence --safe-mode --tools \"\"",
+                "{}|{}|mcp get mccboard-renewal-no-such-server",
                 dir.display(),
                 neutral.display()
             )

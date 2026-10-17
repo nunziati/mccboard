@@ -114,10 +114,10 @@ pub trait Environment: Send + Sync {
     /// the instance's folder is missing or the program can't be started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
 
-    /// Runs a minimal prompt (`claude -p`) in the instance `renewal.config_dir`, so that Claude
-    /// Code renews the instance's expired token on its own and rewrites its own credentials
-    /// (ADR 0002): a little usage, and it may start the session window. mccboard never
-    /// refreshes the token itself.
+    /// Runs `claude mcp get` with a missing name in the instance `renewal.config_dir`, so that
+    /// Claude Code renews the instance's expired token on its own and rewrites its own
+    /// credentials (ADR 0002): it makes no model call and starts no session window. mccboard never refreshes
+    /// the token itself.
     ///
     /// Like the login, a linked instance gets `CLAUDE_CONFIG_DIR`, and the primary instance
     /// none, with the home set to its folder's parent; the variables that would override the

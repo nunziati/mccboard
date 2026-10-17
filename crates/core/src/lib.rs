@@ -573,7 +573,7 @@ impl Core {
     ///
     /// When every token of an account has expired and the preference allows it
     /// ([`Core::renew_expired_tokens`]), Claude Code is first asked to renew the token in the
-    /// account's usage instance (a minimal `claude -p`, hidden), at most once per instance
+    /// account's usage instance (`claude mcp get` with a missing name, hidden), at most once per instance
     /// every 15 minutes, backing off up to 6 hours after failures. The token is then read
     /// again, and the endpoint called with it if it was renewed. mccboard never refreshes a
     /// token or writes credentials itself.
