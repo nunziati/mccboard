@@ -9,6 +9,10 @@
 //!
 //! The bin folder is mccboard's: a program there with a launcher's name is replaced by the
 //! launcher. Other files mccboard didn't write, and scripts without its marker, are left alone.
+//!
+//! It also holds a copy of mccboard's CLI, `mccboard.exe` (a name no launcher can take), so
+//! `mccboard` works in any terminal, and beside it `mccboard.origin`, naming the folder it was
+//! copied from, where that copy finds the shim and the app.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -17,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use mccboard_shim::sidecar;
 
-use super::Found;
-use crate::Error;
+use super::{CLI_NAME, CLI_ORIGIN, CliInstall, Found};
+use crate::{Error, paths};
 
 const PROGRAM: &str = "exe";
 /// The scripts earlier versions wrote, and the marker they carry.
@@ -177,6 +181,48 @@ impl BinFolder {
             if entry.file_name().to_str().is_some_and(is_aside) {
                 let _ = fs::remove_file(entry.path());
             }
+        }
+    }
+
+    /// Copies the CLI shipped with mccboard, at `shipped`, into the folder as `mccboard.exe`
+    /// unless it is there already, moving a running copy aside, and writes beside it the
+    /// origin file naming the folder it came from. A copy running from this folder is the CLI
+    /// to install: nothing to do.
+    pub fn install_cli(&self, shipped: io::Result<PathBuf>) -> CliInstall {
+        let not_copied = |reason: String| CliInstall::NotCopied { reason };
+        let shipped = match shipped {
+            Ok(shipped) => shipped,
+            Err(e) => return not_copied(e.to_string()),
+        };
+        let Some(origin) = shipped.parent() else {
+            return not_copied(format!("{} has no folder", shipped.display()));
+        };
+        if paths::same(origin, &self.path) {
+            return CliInstall::UpToDate;
+        }
+        let cli = match fs::read(&shipped) {
+            Ok(cli) => cli,
+            Err(e) => return not_copied(format!("{}: {e}", shipped.display())),
+        };
+        let copy = self.file(CLI_NAME, PROGRAM);
+        let copied = (|| -> io::Result<bool> {
+            fs::create_dir_all(&self.path)?;
+            let origin_file = self.path.join(CLI_ORIGIN);
+            let origin_text = format!("{}\n", origin.display());
+            if fs::read_to_string(&origin_file).ok().as_deref() != Some(origin_text.as_str()) {
+                fs::write(&origin_file, origin_text)?;
+            }
+            if same_bytes(&copy, &cli)? {
+                return Ok(false);
+            }
+            remove_program(&copy)?;
+            fs::write(&copy, &cli)?;
+            Ok(true)
+        })();
+        match copied {
+            Ok(true) => CliInstall::Copied,
+            Ok(false) => CliInstall::UpToDate,
+            Err(e) => not_copied(format!("{}: {e}", copy.display())),
         }
     }
 

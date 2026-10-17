@@ -33,12 +33,15 @@ npm run build
 # The app (run from ui/; the Tauri CLI needs to be told where src-tauri is)
 TAURI_APP_PATH=../src-tauri npm run tauri dev     # PowerShell: $env:TAURI_APP_PATH='..\src-tauri'
 # Windows installer under target/release/bundle/. The extra config builds the launcher shim
-# (mccboard-shim.exe) and ships it next to the app (ADR 0007); it expects the default target/.
+# (mccboard-shim.exe) and the CLI (mccboard.exe) and ships them next to the app (ADR 0007); it
+# expects the default target/.
 TAURI_APP_PATH=../src-tauri npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json
 ```
 
 On Windows, launchers are copies of `mccboard-shim.exe`, which mccboard looks for next to its own
 program: `cargo build --workspace` puts it there for the CLI. A CLI installed on its own needs the
 shim installed next to it too: `cargo install --path crates/cli` and `cargo install --path crates/shim`.
+The installed app copies its CLI into `~/.mccboard/bin`, next to the launchers, when it starts
+and on every launcher sync, so `mccboard` works in any new terminal.
 
 CI (`.github/workflows/ci.yml`) runs the same checks on Ubuntu and Windows and keeps the Windows installer as an artifact.

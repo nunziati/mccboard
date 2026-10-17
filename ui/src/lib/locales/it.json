@@ -80,7 +80,7 @@
   "error.invalid_label": "Un'etichetta deve avere da 1 a 40 caratteri.",
   "error.label_taken": "Un altro account ha già quell'etichetta.",
   "error.invalid_color": "I colori si scrivono #rrggbb.",
-  "error.invalid_launcher": "Il nome del comando usa lettere, cifre, '-', '_' e '.', e non può essere “claude”.",
+  "error.invalid_launcher": "Il nome del comando usa lettere, cifre, '-', '_' e '.', e non può essere “claude” né “mccboard”.",
   "instances.column.drift": "Differenze",
   "drift.none": "Nessuna differenza",
   "drift.count_one": "1 elemento da sistemare",

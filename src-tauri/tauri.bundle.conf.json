@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeBuildCommand": "npm run build && cargo build --release --locked -p mccboard-shim"
+    "beforeBuildCommand": "npm run build && cargo build --release --locked -p mccboard-shim -p mccboard-cli"
   },
   "bundle": {
     "resources": {
-      "../target/release/mccboard-shim.exe": "mccboard-shim.exe"
+      "../target/release/mccboard-shim.exe": "mccboard-shim.exe",
+      "../target/release/mccboard.exe": "mccboard.exe"
     }
   }
 }

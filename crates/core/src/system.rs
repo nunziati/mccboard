@@ -16,16 +16,41 @@ use crate::session_guard::{ClaudeProcess, ProcessConfigDir};
 
 const CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
 
-/// The launcher shim's bytes, from next to the running program: `cargo build` puts every
-/// workspace program in one folder, and the app's installer puts the shim next to the app.
+/// The launcher shim's bytes, from where mccboard's programs are ([`shipped_program`]).
 pub(crate) fn launcher_shim() -> io::Result<Vec<u8>> {
-    let file = format!(
-        "{}{}",
-        mccboard_shim::PROGRAM_NAME,
-        std::env::consts::EXE_SUFFIX
-    );
-    let path = std::env::current_exe()?.with_file_name(file);
+    let path = shipped_program(&std::env::current_exe()?, mccboard_shim::PROGRAM_NAME);
     std::fs::read(&path).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))
+}
+
+/// The CLI mccboard ships, `mccboard.exe`, from where mccboard's programs are
+/// ([`shipped_program`]).
+pub(crate) fn shipped_cli() -> io::Result<PathBuf> {
+    let path = shipped_program(&std::env::current_exe()?, crate::launcher::CLI_NAME);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} isn't there", path.display()),
+        ))
+    }
+}
+
+/// Where mccboard's program `name` (the shim, the CLI, the app) is, for the program running
+/// at `running`: next to it, since `cargo build` puts every workspace program in one folder
+/// and the installer puts the shim and the CLI next to the app. The CLI's copy in the bin
+/// folder is the exception: the origin file beside it names the folder it was copied from,
+/// and the programs are there.
+pub(crate) fn shipped_program(running: &Path, name: &str) -> PathBuf {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    let origin = std::fs::read_to_string(running.with_file_name(crate::launcher::CLI_ORIGIN))
+        .ok()
+        .map(|text| text.trim_end_matches(['\r', '\n']).to_owned())
+        .filter(|folder| !folder.is_empty());
+    match origin {
+        Some(folder) => Path::new(&folder).join(file),
+        None => running.with_file_name(file),
+    }
 }
 
 /// mccboard's app program, when the running program is the app ([`set_app_program`]).
@@ -38,14 +63,14 @@ pub(crate) fn set_app_program(program: PathBuf) {
     let _ = APP_PROGRAM.set(program);
 }
 
-/// mccboard's app: the running program if it said it is the app, else `mccboard-app` next to
-/// the running program (the CLI in a `cargo build` folder or next to the app).
+/// mccboard's app: the running program if it said it is the app, else `mccboard-app` where
+/// mccboard's programs are ([`shipped_program`]: the CLI in a `cargo build` folder, next to
+/// the app, or copied into the bin folder).
 pub(crate) fn mccboard_app() -> io::Result<PathBuf> {
     if let Some(program) = APP_PROGRAM.get() {
         return Ok(program.clone());
     }
-    let file = format!("{APP_PROGRAM_NAME}{}", std::env::consts::EXE_SUFFIX);
-    let path = std::env::current_exe()?.with_file_name(file);
+    let path = shipped_program(&std::env::current_exe()?, APP_PROGRAM_NAME);
     if path.is_file() {
         Ok(path)
     } else {
@@ -268,6 +293,48 @@ mod tests {
             .map(OsString::from)
             .collect::<Vec<_>>()
             .into_iter()
+    }
+
+    #[test]
+    fn mccboards_programs_are_next_to_the_running_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = dir.path().join("mccboard-app.exe");
+        let exe = std::env::consts::EXE_SUFFIX;
+        assert_eq!(
+            shipped_program(&running, "mccboard-shim"),
+            dir.path().join(format!("mccboard-shim{exe}"))
+        );
+    }
+
+    /// The CLI copied into the bin folder finds the shim and the app in the folder it was
+    /// copied from, which its origin file names.
+    #[test]
+    fn the_cli_in_the_bin_folder_finds_mccboards_programs_where_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let app = dir.path().join("Programs").join("mccboard");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            bin.join(crate::launcher::CLI_ORIGIN),
+            format!("{}\r\n", app.display()),
+        )
+        .unwrap();
+        let exe = std::env::consts::EXE_SUFFIX;
+        let running = bin.join(format!("mccboard{exe}"));
+
+        for name in ["mccboard-shim", "mccboard", "mccboard-app"] {
+            assert_eq!(
+                shipped_program(&running, name),
+                app.join(format!("{name}{exe}"))
+            );
+        }
+
+        // An empty origin file names nothing: next to the running program, as usual.
+        std::fs::write(bin.join(crate::launcher::CLI_ORIGIN), "").unwrap();
+        assert_eq!(
+            shipped_program(&running, "mccboard-shim"),
+            bin.join(format!("mccboard-shim{exe}"))
+        );
     }
 
     #[test]
