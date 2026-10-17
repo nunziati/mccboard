@@ -84,12 +84,12 @@ fn cached_usage_shows_the_last_reading_with_its_windows() {
     write_state(
         home.path(),
         &format!(
-            r#"{{"version":1,"accounts":{{"{UUID_A}":{{
+            r#"{{"version":2,"accounts":{{"{UUID_A}":{{
                 "reading":{{"source":"endpoint","read_at":"2020-01-01T12:00:00Z",
                   "session":{{"utilization":35.0,"resets_at":"2099-01-01T00:00:00Z"}},
                   "weekly":{{"utilization":14.0,"resets_at":"2099-01-02T00:00:00Z"}},
                   "models":[{{"model":"Fable","utilization":58.0,"resets_at":"2099-01-02T00:00:00Z"}}]}},
-                "last_failure":null,"interval_secs":60,"next_call_at":"2026-10-15T12:01:00Z"}}}}}}"#
+                "last_failure":null,"interval_secs":60,"next_at":"2026-10-15T12:01:00Z"}}}}}}"#
         ),
     );
 

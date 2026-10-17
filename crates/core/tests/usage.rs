@@ -500,8 +500,9 @@ fn at_most_one_call_per_60_seconds_per_account_even_on_manual_refresh() {
     );
 }
 
+/// The endpoint's policy; how rationing doubles and resets is tested with it (`rationing`).
 #[test]
-fn after_a_429_the_next_call_waits_120_s_then_doubles_up_to_300_s_and_resets_on_success() {
+fn after_a_429_the_next_call_waits_120_s_then_doubles_up_to_300_s() {
     let (_home, core, env) = home_with_a();
     let mut at = now();
     // 429 → 120 s, error → 240 s, 429 → 300 s (cap), error → 300 s.
@@ -522,24 +523,7 @@ fn after_a_429_the_next_call_waits_120_s_then_doubles_up_to_300_s_and_resets_on_
         assert!(!only(&report).called, "called before {wait} s");
         at += secs(wait);
     }
-    let calls = env.usage_calls();
-    assert_eq!(calls, 4);
-
-    env.set_now(at);
-    env.push_usage_reply(ok(limits_body(10.0, 20.0)));
-    let report = core.refresh_usage().unwrap();
-    assert_eq!(only(&report).as_reported().blocker, None);
-    assert_eq!(only(&report).next_call_at, Some(at + secs(60)));
-
-    // After a success, the next failure starts from 120 s again.
-    env.set_now(at + secs(60));
-    env.push_usage_reply(status(429));
-    let report = core.refresh_usage().unwrap();
-    assert_eq!(
-        only(&report).as_reported().blocker,
-        failed(UsageFailure::RateLimited)
-    );
-    assert_eq!(only(&report).next_call_at, Some(at + secs(180)));
+    assert_eq!(env.usage_calls(), 4);
 }
 
 #[test]
@@ -690,6 +674,25 @@ fn a_window_whose_reset_time_passed_reads_as_zero() {
         })
     );
     assert_eq!(reading.weekly, window(20.0, WEEKLY_RESET));
+}
+
+#[test]
+fn a_state_file_of_another_version_starts_over_without_a_warning() {
+    let (home, core, env) = home_with_a();
+    home.write(
+        ".mccboard/state/usage.json",
+        &format!(
+            r#"{{"version":1,"accounts":{{"{UUID_A}":{{"interval_secs":300,
+                "next_call_at":"2099-01-01T00:00:00Z"}}}}}}"#
+        ),
+    );
+    env.push_usage_reply(ok(limits_body(10.0, 20.0)));
+
+    let report = core.refresh_usage().unwrap();
+
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert!(only(&report).called);
+    assert_eq!(only(&report).next_call_at, Some(now() + secs(60)));
 }
 
 #[test]

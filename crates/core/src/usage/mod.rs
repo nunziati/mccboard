@@ -11,6 +11,7 @@
 //! - the last known reading is kept, marked stale, and a window past its reset reads as zero.
 
 mod endpoint;
+mod rationing;
 mod renewal;
 mod situation;
 mod state;
@@ -31,12 +32,16 @@ pub(crate) use token::fingerprint;
 
 use crate::config::{ConfigFile, InstanceEntry};
 use crate::{Account, AccountUuid, EndpointReply, Environment, Error, Paths, instance, paths};
+use rationing::{Rationing, Verdict};
 use token::TokenRead;
 
-pub(crate) const BASE_INTERVAL_SECS: i64 = 60;
-const MAX_INTERVAL_SECS: i64 = 300;
-/// The longest wait a `Retry-After` can impose.
-const MAX_RETRY_AFTER_SECS: i64 = 3600;
+/// At most one call per 60 s per account; after failures up to 300 s, or up to an hour when
+/// the endpoint's `Retry-After` asks for it.
+const CALLS: rationing::Policy = rationing::Policy {
+    base_secs: 60,
+    max_secs: 300,
+    longest_wait_secs: 3600,
+};
 
 /// Every registered account's usage, in label order.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -230,47 +235,36 @@ pub(crate) fn report(
         }
     }
 
-    // Reserve the calls before making them, so a concurrent mccboard (the app and the CLI)
-    // sees the account as just called.
+    // Accounts with a valid token whose wait is over get a call.
     let mut due = Vec::new();
     if refresh {
-        for (index, (account, found)) in accounts.iter().zip(&found).enumerate() {
-            let Source::Token(_) = found.source else {
-                continue;
-            };
-            let entry = state.accounts.entry(account.uuid.to_string()).or_default();
-            if entry.next_call_at.is_none_or(|at| at <= now) {
-                entry.next_call_at = Some(now + secs(entry.interval_secs));
-                due.push(index);
-            }
+        let candidates = accounts
+            .iter()
+            .zip(&found)
+            .enumerate()
+            .filter_map(|(index, (account, found))| match &found.source {
+                Source::Token(token) => Some((account.uuid.to_string(), (index, token))),
+                _ => None,
+            })
+            .collect();
+        due = Rationing {
+            path: &state_path,
+            policy: CALLS,
+            table: |state| &mut state.accounts,
         }
-        if !due.is_empty() {
-            state::save(&state_path, &state, &mut warnings);
-        }
+        .run(
+            &mut state,
+            &mut warnings,
+            &|| env.now(),
+            candidates,
+            |(_, token)| env.call_usage_endpoint(token),
+            record,
+        )
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect();
     }
-
-    let mut outcomes = Vec::new();
-    for &index in &due {
-        let Source::Token(token) = &found[index].source else {
-            continue;
-        };
-        let reply = env.call_usage_endpoint(token);
-        outcomes.push((index, interpret(reply, env.now())));
-    }
-
     let now = env.now();
-    if !outcomes.is_empty() {
-        // Re-read: another mccboard may have written its own accounts meanwhile.
-        state = state::load(&state_path, &mut warnings);
-        for (index, outcome) in &outcomes {
-            let entry = state
-                .accounts
-                .entry(accounts[*index].uuid.to_string())
-                .or_default();
-            apply(entry, outcome, now);
-        }
-        state::save(&state_path, &state, &mut warnings);
-    }
 
     let accounts = accounts
         .into_iter()
@@ -384,22 +378,19 @@ fn interpret(reply: EndpointReply, now: Timestamp) -> Outcome {
     }
 }
 
-fn apply(entry: &mut state::AccountState, outcome: &Outcome, now: Timestamp) {
-    match outcome {
+/// Writes what a reply says into the account's entry: its reading, or why the call failed.
+fn record(entry: &mut state::AccountState, reply: EndpointReply, at: Timestamp) -> Verdict {
+    match interpret(reply, at) {
         Outcome::Read(reading) => {
-            entry.reading = Some(reading.clone());
+            entry.reading = Some(reading);
             entry.last_failure = None;
-            entry.interval_secs = BASE_INTERVAL_SECS;
-            entry.next_call_at = Some(now + secs(BASE_INTERVAL_SECS));
+            Verdict::Succeeded
         }
         Outcome::Failed(failure, retry_after) => {
-            entry.last_failure = Some(failure.clone());
-            entry.interval_secs =
-                (entry.interval_secs.max(BASE_INTERVAL_SECS) * 2).min(MAX_INTERVAL_SECS);
-            let retry_after = retry_after
-                .map_or(0, |d| d.as_secs())
-                .clamp(0, MAX_RETRY_AFTER_SECS);
-            entry.next_call_at = Some(now + secs(entry.interval_secs.max(retry_after)));
+            entry.last_failure = Some(failure);
+            Verdict::Failed {
+                wait_at_least: retry_after,
+            }
         }
     }
 }
@@ -417,7 +408,7 @@ fn view(
             entry
                 .last_failure
                 .map(|failure| UsageBlocker::RefreshFailed { failure }),
-            entry.next_call_at.filter(|at| *at > now),
+            entry.schedule.next_at().filter(|at| *at > now),
         ),
         Source::TokenExpired { .. } => (Some(UsageBlocker::TokenExpired), None),
         Source::CredentialsUnreadable => (Some(UsageBlocker::CredentialsUnreadable), None),
@@ -449,8 +440,4 @@ pub(crate) fn as_of(mut reading: UsageReading, now: Timestamp) -> UsageReading {
         reset(&mut window.utilization, &mut window.resets_at);
     }
     reading
-}
-
-fn secs(n: i64) -> SignedDuration {
-    SignedDuration::from_secs(n)
 }
