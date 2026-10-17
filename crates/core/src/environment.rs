@@ -44,6 +44,11 @@ pub trait Environment: Send + Sync {
     /// it isn't there or can't be read; the message names where it was looked for.
     fn launcher_shim(&self) -> io::Result<Vec<u8>>;
 
+    /// The CLI mccboard ships (`mccboard.exe`), which on Windows a launcher sync and the
+    /// app's start copy into the bin folder: where it is. It ships next to the app, as the
+    /// shim does. Errors when it isn't there; the message names where it was looked for.
+    fn shipped_cli(&self) -> io::Result<PathBuf>;
+
     /// Every running Claude Code process on this machine, each with the config directory it
     /// uses. The core matches them to instances (the session guard).
     fn claude_processes(&self) -> Vec<ClaudeProcess>;
@@ -310,6 +315,10 @@ impl Environment for SystemEnvironment {
 
     fn launcher_shim(&self) -> io::Result<Vec<u8>> {
         crate::system::launcher_shim()
+    }
+
+    fn shipped_cli(&self) -> io::Result<PathBuf> {
+        crate::system::shipped_cli()
     }
 
     fn claude_processes(&self) -> Vec<ClaudeProcess> {

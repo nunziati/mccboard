@@ -113,6 +113,30 @@ pub struct LauncherSync {
     pub removed: Vec<Launcher>,
     /// On Windows, when there are launchers: whether the bin folder is on the user PATH.
     pub user_path: Option<UserPathChange>,
+    /// On Windows: mccboard's CLI in the bin folder.
+    pub cli: Option<CliInstall>,
+}
+
+/// The CLI's name in the bin folder on Windows (`mccboard.exe`): no launcher can take it.
+pub(crate) const CLI_NAME: &str = "mccboard";
+
+/// The file beside the CLI's copy in the bin folder naming the folder it was copied from,
+/// the app's, where that copy finds the shim and the app (`crate::system::shipped_program`).
+pub(crate) const CLI_ORIGIN: &str = "mccboard.origin";
+
+/// mccboard's CLI in the bin folder on Windows, `mccboard.exe`, after a sync or the app's
+/// start: a copy of the CLI shipped with the app, so `mccboard` works in any new terminal
+/// and is always the same version as the app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CliInstall {
+    /// The copy was already the shipped CLI.
+    UpToDate,
+    /// Copied now: there was none, or it differed (an update of the app).
+    Copied,
+    /// The shipped CLI can't be found or read, or the copy can't be written: the bin
+    /// folder's copy, if any, stays as it was. Never fails a sync.
+    NotCopied { reason: String },
 }
 
 /// The bin folder and the user PATH, after a sync on Windows.
@@ -235,12 +259,31 @@ pub(crate) fn sync(
         Store::BinFolder(bin) if !wanted.is_empty() => Some(put_on_user_path(env, bin.path())),
         _ => None,
     };
+    let cli = match &store {
+        Store::BinFolder(bin) => Some(bin.install_cli(env.shipped_cli())),
+        Store::RcFile(_) => None,
+    };
     Ok(LauncherSync {
         created: changed(|s| *s == LauncherState::Missing),
         updated: changed(|s| matches!(s, LauncherState::Stale { .. })),
         removed: comparison.orphans.into_iter().map(launcher).collect(),
         user_path,
+        cli,
     })
+}
+
+/// On Windows, copies the CLI shipped with mccboard into the bin folder when it is missing
+/// there or differs, after deleting what earlier syncs moved aside; launchers are left to
+/// [`sync`]. `None` elsewhere: on Linux the CLI isn't copied anywhere.
+pub(crate) fn install_cli(paths: &Paths, env: &dyn Environment) -> Option<CliInstall> {
+    match env.os() {
+        OsKind::Windows => {
+            let bin = bin_folder::BinFolder::new(paths.bin_dir(), env.launcher_shim());
+            bin.sweep();
+            Some(bin.install_cli(env.shipped_cli()))
+        }
+        OsKind::Linux => None,
+    }
 }
 
 fn place(store: &Store, env: &dyn Environment) -> LauncherPlace {

@@ -211,9 +211,11 @@ pub(crate) fn validate_label(label: &str) -> Result<String, Error> {
     Ok(trimmed.to_owned())
 }
 
-/// A launcher name usable as a shell alias and a file name on every OS, and not `claude`
-/// itself, which stays the primary instance's.
+/// A launcher name usable as a shell alias and a file name on every OS, and none of the
+/// reserved ones: `claude` itself, which stays the primary instance's, and `mccboard`, the
+/// CLI's program in the bin folder on Windows.
 pub(crate) fn validate_launcher(name: &str) -> Result<String, Error> {
+    let reserved = ["claude", crate::launcher::CLI_NAME];
     let valid = name
         .chars()
         .next()
@@ -222,7 +224,7 @@ pub(crate) fn validate_launcher(name: &str) -> Result<String, Error> {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-        && !name.eq_ignore_ascii_case("claude");
+        && !reserved.iter().any(|r| name.eq_ignore_ascii_case(r));
     if valid {
         Ok(name.to_owned())
     } else {

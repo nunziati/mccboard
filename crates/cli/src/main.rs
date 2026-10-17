@@ -16,9 +16,9 @@ use clap::{Parser, Subcommand};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use mccboard_core::{
-    Account, AccountStatus, AccountUpdate, AccountUuid, Candidate, Color, Core, InstanceKind,
-    InstanceStatus, LauncherPlace, LauncherState, LauncherStatus, LauncherSync, LoginState,
-    Observation, Registry, SystemEnvironment, UserPathChange, Warning,
+    Account, AccountStatus, AccountUpdate, AccountUuid, Candidate, CliInstall, Color, Core,
+    InstanceKind, InstanceStatus, LauncherPlace, LauncherState, LauncherStatus, LauncherSync,
+    LoginState, Observation, Registry, SystemEnvironment, UserPathChange, Warning,
 };
 
 #[derive(Parser)]
@@ -127,7 +127,9 @@ enum LauncherCommand {
         json: bool,
     },
     /// Create missing launchers, fix stale ones and remove the ones nothing needs. Rename a
-    /// launcher with `mccboard account set <account> --launcher <name>`.
+    /// launcher with `mccboard account set <account> --launcher <name>`. On Windows, also
+    /// copy the CLI shipped with the app into the launchers' folder, so `mccboard` is on the
+    /// PATH.
     Sync {
         /// Print machine-readable JSON.
         #[arg(long)]
@@ -147,7 +149,8 @@ enum AccountCommand {
         /// New color, as #rrggbb.
         #[arg(long)]
         color: Option<String>,
-        /// Launcher name to use instead of the one derived from the label.
+        /// Launcher name to use instead of the one derived from the label (not `claude` or
+        /// `mccboard`).
         #[arg(long, conflicts_with = "default_launcher")]
         launcher: Option<String>,
         /// Drop the launcher name override, so the name follows the label again.
@@ -399,6 +402,16 @@ fn print_sync(place: &LauncherPlace, sync: &LauncherSync) {
             "Open a new terminal, or run `source {}`, to use them.",
             path.display()
         );
+    }
+    match (&sync.cli, place) {
+        (Some(CliInstall::Copied), LauncherPlace::BinFolder { path, .. }) => println!(
+            "Copied this version of mccboard's CLI into {}.",
+            path.display()
+        ),
+        (Some(CliInstall::NotCopied { reason }), _) => {
+            println!("mccboard's CLI in the bin folder is left as it was: {reason}.")
+        }
+        _ => {}
     }
 }
 
