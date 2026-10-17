@@ -483,6 +483,7 @@ fn the_registry_serializes_to_a_stable_json_shape() {
                 "login": { "state": "not_logged_in" },
                 "warnings": [],
                 "account_status": { "status": "changed", "registered": UUID_A },
+                "renewal": { "state": "quiet" },
             }],
         })
     );

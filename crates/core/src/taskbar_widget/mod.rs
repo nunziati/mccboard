@@ -28,8 +28,7 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
-use crate::usage::as_of;
-use crate::{AccountUsage, AccountUuid, Color, Language, UsageReport, UsageStatus, UsageWindow};
+use crate::{AccountUsage, AccountUuid, Color, Freshness, Language, UsageReport, UsageWindow};
 use text::Texts;
 
 /// The segments of a bar: one for each 10% of utilization.
@@ -306,11 +305,8 @@ pub(crate) fn view(
         .join("\n");
     let redraw_in = accounts
         .iter()
-        .filter_map(|usage| usage.reading.clone())
-        .flat_map(|reading| {
-            let reading = as_of(reading, now);
-            [reading.session, reading.weekly]
-        })
+        .filter_map(|usage| usage.at(now).reading)
+        .flat_map(|reading| [reading.session, reading.weekly])
         .flatten()
         .filter_map(|window| window.resets_at)
         .map(|at| next_change(at, now))
@@ -336,13 +332,14 @@ fn next_change(at: Timestamp, now: Timestamp) -> Duration {
 }
 
 fn column(usage: &AccountUsage, now: Timestamp) -> WidgetColumn {
-    let reading = usage.reading.clone().map(|r| as_of(r, now));
-    let state = match &reading {
-        Some(_) if usage.stale => ColumnState::Stale,
-        Some(_) => ColumnState::Current,
-        None if usage.status == UsageStatus::TokenExpired => ColumnState::TokenRenewal,
-        None => ColumnState::NoReading,
+    let situation = usage.at(now);
+    let state = match situation.freshness {
+        Freshness::Stale => ColumnState::Stale,
+        Freshness::Current => ColumnState::Current,
+        Freshness::NoReading if situation.token_expired() => ColumnState::TokenRenewal,
+        Freshness::NoReading => ColumnState::NoReading,
     };
+    let reading = situation.reading;
     let (session, weekly) = match &reading {
         Some(reading) => (reading.session, reading.weekly),
         None => (None, None),

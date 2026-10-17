@@ -24,11 +24,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::Serialize;
 
-use crate::usage::as_of;
-use crate::{
-    Account, AccountUsage, AccountUuid, Color, Error, Language, TokenRenewal, UsageReport,
-    UsageStatus,
-};
+use crate::{Account, AccountUuid, Color, Error, Freshness, Language, UsageReport, UsageSituation};
 use text::{Status, Texts};
 
 /// The Windows tray keeps at most this many UTF-16 units of a tooltip.
@@ -74,10 +70,8 @@ pub struct TrayIcon {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrayAccount {
     pub account: Account,
-    /// Where its usage stands, as the usage report says.
-    pub status: UsageStatus,
-    /// When its last reading was read, if it has one.
-    pub read_at: Option<Timestamp>,
+    /// Where its usage stands as of the view's time.
+    pub situation: UsageSituation,
     /// The higher of its session and weekly windows, when it has a reading.
     pub percent: Option<u8>,
     /// This account drives the icon: its weekly window is the highest.
@@ -86,8 +80,6 @@ pub struct TrayAccount {
     pub token_expired: bool,
     /// Session, weekly, then model windows, as last read; past resets read as zero.
     pub windows: Vec<TrayWindow>,
-    /// Claude Code renewing the account's expired token, as the usage report says.
-    pub renewal: Option<TokenRenewal>,
     /// The menu heading: label and percentage, or why there is none ("A · 35%").
     pub title: String,
     /// The menu lines under the heading: every window with its reset, then when it was read
@@ -178,13 +170,13 @@ pub(crate) fn view(
     let mut accounts: Vec<TrayAccount> = report
         .accounts
         .iter()
-        .map(|usage| account(usage, now, &texts))
+        .map(|usage| account(usage.account.clone(), usage.at(now), &texts))
         .collect();
 
     // The highest weekly window wins; on a tie the first in label order (`max_by` keeps the
     // last).
     let worst = (0..accounts.len())
-        .filter_map(|index| Some((index, weekly(&report.accounts[index], now)?)))
+        .filter_map(|index| Some((index, weekly(&accounts[index].situation)?)))
         .rev()
         .max_by(|(_, x), (_, y)| x.total_cmp(y));
     if let Some((index, _)) = worst {
@@ -240,14 +232,14 @@ fn percent(utilization: f64) -> u8 {
     utilization.clamp(0.0, 100.0).round() as u8
 }
 
-/// An account's weekly utilization as of `now`, unrounded.
-fn weekly(usage: &AccountUsage, now: Timestamp) -> Option<f64> {
-    Some(as_of(usage.reading.clone()?, now).weekly?.utilization)
+/// An account's weekly utilization, unrounded.
+fn weekly(situation: &UsageSituation) -> Option<f64> {
+    Some(situation.reading.as_ref()?.weekly?.utilization)
 }
 
-/// The higher of an account's session and weekly utilization as of `now`, unrounded.
-fn peak(usage: &AccountUsage, now: Timestamp) -> Option<f64> {
-    let reading = as_of(usage.reading.clone()?, now);
+/// The higher of an account's session and weekly utilization, unrounded.
+fn peak(situation: &UsageSituation) -> Option<f64> {
+    let reading = situation.reading.as_ref()?;
     [reading.session, reading.weekly]
         .into_iter()
         .flatten()
@@ -255,11 +247,9 @@ fn peak(usage: &AccountUsage, now: Timestamp) -> Option<f64> {
         .reduce(f64::max)
 }
 
-fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
-    let reading = usage.reading.clone().map(|r| as_of(r, now));
-    let token_expired = usage.status == UsageStatus::TokenExpired;
+fn account(account: Account, situation: UsageSituation, texts: &Texts) -> TrayAccount {
     let mut windows = Vec::new();
-    if let Some(reading) = &reading {
+    if let Some(reading) = &situation.reading {
         let main = [
             (WindowName::Session, reading.session),
             (WindowName::Weekly, reading.weekly),
@@ -284,56 +274,33 @@ fn account(usage: &AccountUsage, now: Timestamp, texts: &Texts) -> TrayAccount {
         }
     }
     let mut account = TrayAccount {
-        account: usage.account.clone(),
-        status: usage.status.clone(),
-        read_at: reading.as_ref().map(|r| r.read_at),
-        percent: peak(usage, now).map(percent),
+        account,
+        percent: peak(&situation).map(percent),
         worst: false,
-        stale: usage.stale,
-        token_expired,
+        stale: situation.freshness == Freshness::Stale,
+        token_expired: situation.token_expired(),
         windows,
-        renewal: usage.renewal.clone(),
+        situation,
         title: String::new(),
         lines: Vec::new(),
     };
-    account.title = texts.title(&account.account.label, account.percent, status_of(&account));
+    account.title = texts.title(
+        &account.account.label,
+        account.percent,
+        Status::of(&account.situation),
+    );
     account.lines = account
         .windows
         .iter()
         .map(|w| texts.window_line(w))
         .collect();
-    if let Some(read_at) = account.read_at.filter(|_| account.stale) {
-        account.lines.push(texts.read_at(read_at));
+    if let Some(reading) = account.situation.reading.as_ref().filter(|_| account.stale) {
+        account.lines.push(texts.read_at(reading.read_at));
     }
-    if let Some(line) = texts.renewal_line(&account) {
+    if let Some(line) = texts.renewal_line(&account.situation.renewal) {
         account.lines.push(line);
     }
     account
-}
-
-/// What the tray says about an account besides its numbers.
-fn status_of(account: &TrayAccount) -> Status {
-    if account.read_at.is_some() {
-        return if account.token_expired {
-            Status::TokenExpired
-        } else if account.stale {
-            Status::Stale
-        } else {
-            Status::Current
-        };
-    }
-    status_without_reading(&account.status)
-}
-
-/// What the tray says about an account that has no reading, from its usage status.
-pub(crate) fn status_without_reading(status: &UsageStatus) -> Status {
-    match status {
-        UsageStatus::Ok | UsageStatus::NeverRead => Status::NeverRead,
-        UsageStatus::TokenExpired => Status::TokenExpired,
-        UsageStatus::NotLoggedIn => Status::NotLoggedIn,
-        UsageStatus::CredentialsUnreadable => Status::CredentialsUnreadable,
-        UsageStatus::Failed { .. } => Status::Failed,
-    }
 }
 
 /// How much a tooltip says, from everything to the bare minimum.

@@ -3,6 +3,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { RenewalSituation } from './usage'
 
 export type InstanceKind = 'primary' | 'linked'
 
@@ -52,6 +53,8 @@ export interface InstanceStatus extends Observation {
   kind: InstanceKind
   registered_account: string | null
   account_status: AccountStatus
+  /** The token renewal that runs in this instance; 'quiet' for every other one. */
+  renewal: RenewalSituation
 }
 
 export interface Registry {

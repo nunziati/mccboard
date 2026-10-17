@@ -11,8 +11,8 @@ use common::{FIXTURE_REFRESH, FIXTURE_TOKEN, TempHome, UUID_A, UUID_B, now};
 use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
-    AccountUsage, AccountUuid, Core, EndpointReply, LoginState, UsageFailure, UsageReport,
-    UsageSource, UsageStatus, UsageWarning, UsageWindow,
+    AccountUsage, AccountUuid, Core, EndpointReply, Freshness, LoginState, UsageBlocker,
+    UsageFailure, UsageReport, UsageSource, UsageWarning, UsageWindow,
 };
 use serde_json::json;
 
@@ -90,8 +90,8 @@ fn only(report: &UsageReport) -> &AccountUsage {
     &report.accounts[0]
 }
 
-fn failed(failure: UsageFailure) -> UsageStatus {
-    UsageStatus::Failed { failure }
+fn failed(failure: UsageFailure) -> Option<UsageBlocker> {
+    Some(UsageBlocker::RefreshFailed { failure })
 }
 
 // --- Reading and mapping the reply -------------------------------------------------------
@@ -120,10 +120,10 @@ fn a_refresh_reads_session_weekly_and_model_windows_from_limits() {
 
     let usage = only(&report);
     assert_eq!(usage.account.uuid, AccountUuid::new(UUID_A));
-    assert_eq!(usage.status, UsageStatus::Ok);
+    assert_eq!(usage.as_reported().blocker, None);
     assert!(usage.called);
-    assert!(!usage.stale);
-    let reading = usage.reading.as_ref().unwrap();
+    assert_ne!(usage.as_reported().freshness, Freshness::Stale);
+    let reading = usage.as_reported().reading.as_ref().unwrap();
     assert_eq!(reading.source, UsageSource::Endpoint);
     assert_eq!(reading.read_at, now());
     assert_eq!(reading.session, window(35.0, SESSION_RESET));
@@ -148,7 +148,7 @@ fn the_flat_five_hour_and_seven_day_keys_are_read_when_limits_are_absent() {
 
     let report = core.refresh_usage().unwrap();
 
-    let reading = only(&report).reading.clone().unwrap();
+    let reading = only(&report).as_reported().reading.clone().unwrap();
     assert_eq!(reading.session, window(35.0, SESSION_RESET));
     assert_eq!(reading.weekly, window(14.0, WEEKLY_RESET));
     // No model name is hard-coded, so flat per-model keys don't become model windows.
@@ -168,7 +168,7 @@ fn limits_rows_win_over_flat_keys_and_flat_keys_fill_gaps() {
 
     let report = core.refresh_usage().unwrap();
 
-    let reading = only(&report).reading.clone().unwrap();
+    let reading = only(&report).as_reported().reading.clone().unwrap();
     assert_eq!(reading.session, window(35.0, SESSION_RESET));
     assert_eq!(reading.weekly, window(14.0, WEEKLY_RESET));
 }
@@ -180,7 +180,7 @@ fn utilization_outside_0_100_is_clamped() {
 
     let report = core.refresh_usage().unwrap();
 
-    let reading = only(&report).reading.clone().unwrap();
+    let reading = only(&report).as_reported().reading.clone().unwrap();
     assert_eq!(reading.session.unwrap().utilization, 100.0);
     assert_eq!(reading.weekly.unwrap().utilization, 0.0);
 }
@@ -203,8 +203,12 @@ fn malformed_replies_fail_as_malformed() {
         let report = core.refresh_usage().unwrap();
 
         let usage = only(&report);
-        assert_eq!(usage.status, failed(UsageFailure::Malformed), "{body}");
-        assert!(usage.reading.is_none());
+        assert_eq!(
+            usage.as_reported().blocker,
+            failed(UsageFailure::Malformed),
+            "{body}"
+        );
+        assert!(usage.as_reported().reading.is_none());
     }
 }
 
@@ -239,7 +243,12 @@ fn usage_is_read_once_per_account_not_once_per_instance() {
         env.usage_calls_with_token(TOKEN_A) + env.usage_calls_with_token(TOKEN_A2),
         1
     );
-    assert!(report.accounts.iter().all(|u| u.status == UsageStatus::Ok));
+    assert!(
+        report
+            .accounts
+            .iter()
+            .all(|u| u.as_reported().blocker.is_none())
+    );
 }
 
 #[test]
@@ -256,7 +265,10 @@ fn an_expired_token_reads_as_token_expired_and_no_call_is_made() {
     let report = core.refresh_usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::TokenExpired);
+    assert_eq!(
+        usage.as_reported().blocker,
+        Some(UsageBlocker::TokenExpired)
+    );
     assert!(!usage.called);
     assert_eq!(env.usage_calls(), 0);
     assert_eq!(primary.credentials_bytes(), before);
@@ -279,7 +291,7 @@ fn a_valid_token_from_another_instance_of_the_account_is_used() {
 
     let report = core.refresh_usage().unwrap();
 
-    assert_eq!(only(&report).status, UsageStatus::Ok);
+    assert_eq!(only(&report).as_reported().blocker, None);
     assert_eq!(env.usage_calls_with_token(TOKEN_A2), 1);
     assert_eq!(env.usage_calls_with_token(TOKEN_A), 0);
 }
@@ -294,7 +306,10 @@ fn an_account_with_no_logged_in_instance_is_not_logged_in() {
 
     let report = core.refresh_usage().unwrap();
 
-    assert_eq!(only(&report).status, UsageStatus::NotLoggedIn);
+    assert_eq!(
+        only(&report).as_reported().blocker,
+        Some(UsageBlocker::NotLoggedIn)
+    );
     assert_eq!(env.usage_calls(), 0);
 }
 
@@ -313,7 +328,10 @@ fn an_instance_now_logged_in_as_another_account_lends_no_token() {
     let report = core.refresh_usage().unwrap();
 
     assert_eq!(only(&report).account.uuid, AccountUuid::new(UUID_A));
-    assert_eq!(only(&report).status, UsageStatus::NotLoggedIn);
+    assert_eq!(
+        only(&report).as_reported().blocker,
+        Some(UsageBlocker::NotLoggedIn)
+    );
     assert_eq!(env.usage_calls(), 0);
 }
 
@@ -325,31 +343,31 @@ fn the_login_state_and_the_usage_status_agree_on_the_same_credentials() {
     let cases = [
         (
             format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","expiresAt":{future}}}}}"#),
-            UsageStatus::NeverRead,
+            None,
         ),
         (
             format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","expiresAt":{past}}}}}"#),
-            UsageStatus::TokenExpired,
+            Some(UsageBlocker::TokenExpired),
         ),
         (
             r#"{"claudeAiOauth":{"accessToken":"","expiresAt":0}}"#.to_owned(),
-            UsageStatus::NotLoggedIn,
+            Some(UsageBlocker::NotLoggedIn),
         ),
         (
             format!(r#"{{"claudeAiOauth":{{"expiresAt":{future}}}}}"#),
-            UsageStatus::NotLoggedIn,
+            Some(UsageBlocker::NotLoggedIn),
         ),
         (
             format!(r#"{{"claudeAiOauth":{{"accessToken":null,"expiresAt":{future}}}}}"#),
-            UsageStatus::NotLoggedIn,
+            Some(UsageBlocker::NotLoggedIn),
         ),
         (
             format!(r#"{{"claudeAiOauth":{{"accessToken":42,"expiresAt":{future}}}}}"#),
-            UsageStatus::CredentialsUnreadable,
+            Some(UsageBlocker::CredentialsUnreadable),
         ),
         (
             format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}"}}}}"#),
-            UsageStatus::CredentialsUnreadable,
+            Some(UsageBlocker::CredentialsUnreadable),
         ),
     ];
     for (credentials, status) in cases {
@@ -364,12 +382,12 @@ fn the_login_state_and_the_usage_status_agree_on_the_same_credentials() {
         let login = core.observe(&primary.dir).login;
         let usage = core.usage().unwrap();
 
-        assert_eq!(only(&usage).status, status, "{credentials}");
+        assert_eq!(only(&usage).as_reported().blocker, status, "{credentials}");
         let agrees = match login {
-            LoginState::LoggedIn { .. } => status == UsageStatus::NeverRead,
-            LoginState::Expired { .. } => status == UsageStatus::TokenExpired,
-            LoginState::NotLoggedIn => status == UsageStatus::NotLoggedIn,
-            LoginState::Unknown => status == UsageStatus::CredentialsUnreadable,
+            LoginState::LoggedIn { .. } => status.is_none(),
+            LoginState::Expired { .. } => status == Some(UsageBlocker::TokenExpired),
+            LoginState::NotLoggedIn => status == Some(UsageBlocker::NotLoggedIn),
+            LoginState::Unknown => status == Some(UsageBlocker::CredentialsUnreadable),
         };
         assert!(agrees, "{credentials}: {login:?} vs {status:?}");
         assert_eq!(env.usage_calls(), 0);
@@ -394,8 +412,8 @@ fn unreadable_credentials_make_no_call() {
         let report = core.refresh_usage().unwrap();
 
         assert_eq!(
-            only(&report).status,
-            UsageStatus::CredentialsUnreadable,
+            only(&report).as_reported().blocker,
+            Some(UsageBlocker::CredentialsUnreadable),
             "{credentials}"
         );
         assert_eq!(env.usage_calls(), 0);
@@ -414,7 +432,10 @@ fn an_emptied_token_reads_as_not_logged_in() {
 
     let report = core.refresh_usage().unwrap();
 
-    assert_eq!(only(&report).status, UsageStatus::NotLoggedIn);
+    assert_eq!(
+        only(&report).as_reported().blocker,
+        Some(UsageBlocker::NotLoggedIn)
+    );
     assert_eq!(env.usage_calls(), 0);
 }
 
@@ -425,8 +446,8 @@ fn reading_usage_without_refreshing_never_calls() {
     let report = core.usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::NeverRead);
-    assert!(usage.reading.is_none());
+    assert_eq!(usage.as_reported().blocker, None);
+    assert!(usage.as_reported().reading.is_none());
     assert!(!usage.called);
     assert_eq!(env.usage_calls(), 0);
 }
@@ -457,9 +478,9 @@ fn at_most_one_call_per_60_seconds_per_account_even_on_manual_refresh() {
     let usage = only(&report);
     assert_eq!(env.usage_calls(), 1);
     assert!(!usage.called);
-    assert_eq!(usage.status, UsageStatus::Ok);
+    assert_eq!(usage.as_reported().blocker, None);
     assert_eq!(usage.next_call_at, Some(now() + secs(60)));
-    assert_eq!(usage.reading.as_ref().unwrap().read_at, now());
+    assert_eq!(usage.as_reported().reading.as_ref().unwrap().read_at, now());
 
     env.advance(secs(1));
     let report = core.refresh_usage().unwrap();
@@ -468,6 +489,7 @@ fn at_most_one_call_per_60_seconds_per_account_even_on_manual_refresh() {
     assert!(only(&report).called);
     assert_eq!(
         only(&report)
+            .as_reported()
             .reading
             .as_ref()
             .unwrap()
@@ -506,14 +528,17 @@ fn after_a_429_the_next_call_waits_120_s_then_doubles_up_to_300_s_and_resets_on_
     env.set_now(at);
     env.push_usage_reply(ok(limits_body(10.0, 20.0)));
     let report = core.refresh_usage().unwrap();
-    assert_eq!(only(&report).status, UsageStatus::Ok);
+    assert_eq!(only(&report).as_reported().blocker, None);
     assert_eq!(only(&report).next_call_at, Some(at + secs(60)));
 
     // After a success, the next failure starts from 120 s again.
     env.set_now(at + secs(60));
     env.push_usage_reply(status(429));
     let report = core.refresh_usage().unwrap();
-    assert_eq!(only(&report).status, failed(UsageFailure::RateLimited));
+    assert_eq!(
+        only(&report).as_reported().blocker,
+        failed(UsageFailure::RateLimited)
+    );
     assert_eq!(only(&report).next_call_at, Some(at + secs(180)));
 }
 
@@ -543,9 +568,9 @@ fn rate_limits_and_readings_survive_a_restart() {
 
     assert_eq!(env2.usage_calls(), 0);
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::Ok);
+    assert_eq!(usage.as_reported().blocker, None);
     assert_eq!(
-        usage.reading.as_ref().unwrap().session,
+        usage.as_reported().reading.as_ref().unwrap().session,
         window(10.0, SESSION_RESET)
     );
     assert_eq!(restarted.usage().unwrap(), report);
@@ -572,7 +597,7 @@ fn errors_of_every_kind_back_off() {
 
         let report = core.refresh_usage().unwrap();
 
-        assert_eq!(only(&report).status, failed(failure));
+        assert_eq!(only(&report).as_reported().blocker, failed(failure));
         assert_eq!(only(&report).next_call_at, Some(now() + secs(120)));
     }
 }
@@ -591,11 +616,11 @@ fn a_failed_refresh_keeps_the_last_reading_marked_stale() {
 
     let usage = only(&report);
     assert_eq!(
-        usage.status,
+        usage.as_reported().blocker,
         failed(UsageFailure::HttpStatus { status: 500 })
     );
-    assert!(usage.stale);
-    let reading = usage.reading.as_ref().unwrap();
+    assert_eq!(usage.as_reported().freshness, Freshness::Stale);
+    let reading = usage.as_reported().reading.as_ref().unwrap();
     assert_eq!(reading.read_at, now());
     assert_eq!(reading.session, window(10.0, SESSION_RESET));
 
@@ -603,8 +628,8 @@ fn a_failed_refresh_keeps_the_last_reading_marked_stale() {
     let (restarted, env2) = home.core();
     env2.set_now(now() + secs(61));
     let usage = restarted.usage().unwrap().accounts.remove(0);
-    assert!(usage.stale);
-    assert!(usage.reading.is_some());
+    assert_eq!(usage.as_reported().freshness, Freshness::Stale);
+    assert!(usage.as_reported().reading.is_some());
 }
 
 #[test]
@@ -619,9 +644,12 @@ fn an_expired_token_keeps_the_last_reading_marked_stale() {
     let report = core.refresh_usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::TokenExpired);
-    assert!(usage.stale);
-    assert!(usage.reading.is_some());
+    assert_eq!(
+        usage.as_reported().blocker,
+        Some(UsageBlocker::TokenExpired)
+    );
+    assert_eq!(usage.as_reported().freshness, Freshness::Stale);
+    assert!(usage.as_reported().reading.is_some());
     assert_eq!(env.usage_calls(), 1);
 }
 
@@ -632,10 +660,16 @@ fn an_old_reading_is_stale_even_without_a_failure() {
     core.refresh_usage().unwrap();
 
     env.advance(SignedDuration::from_mins(9));
-    assert!(!only(&core.usage().unwrap()).stale);
+    assert_ne!(
+        only(&core.usage().unwrap()).as_reported().freshness,
+        Freshness::Stale
+    );
 
     env.advance(SignedDuration::from_mins(2));
-    assert!(only(&core.usage().unwrap()).stale);
+    assert_eq!(
+        only(&core.usage().unwrap()).as_reported().freshness,
+        Freshness::Stale
+    );
 }
 
 #[test]
@@ -647,7 +681,7 @@ fn a_window_whose_reset_time_passed_reads_as_zero() {
     env.set_now(ts(SESSION_RESET));
     let report = core.usage().unwrap();
 
-    let reading = only(&report).reading.clone().unwrap();
+    let reading = only(&report).as_reported().reading.clone().unwrap();
     assert_eq!(
         reading.session,
         Some(UsageWindow {
@@ -665,11 +699,11 @@ fn a_corrupt_state_file_is_discarded_with_a_warning() {
 
     let report = core.usage().unwrap();
     assert_eq!(report.warnings, vec![UsageWarning::StateDiscarded]);
-    assert_eq!(only(&report).status, UsageStatus::NeverRead);
+    assert_eq!(only(&report).as_reported().blocker, None);
 
     env.push_usage_reply(ok(limits_body(10.0, 20.0)));
     let report = core.refresh_usage().unwrap();
-    assert_eq!(only(&report).status, UsageStatus::Ok);
+    assert_eq!(only(&report).as_reported().blocker, None);
     // Replaced by a valid file: no warning the next time.
     assert!(core.usage().unwrap().warnings.is_empty());
 }

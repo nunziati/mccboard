@@ -285,7 +285,8 @@ fn a_window_whose_reset_passed_reads_as_zero_even_in_an_older_report() {
     let session = &view.accounts[0].windows[0];
     assert_eq!(session.percent, 0);
     assert_eq!(session.resets_at, None);
-    assert_eq!(view.accounts[0].title, "A · 20%");
+    // Drawn three hours after it was read, the reading is stale too.
+    assert_eq!(view.accounts[0].title, "A · 20% (stale)");
 
     // So does the weekly one, and the icon with it.
     env.set_now(ts(WEEKLY_RESET) + secs(60));

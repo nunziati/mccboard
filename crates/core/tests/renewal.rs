@@ -18,7 +18,7 @@ use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
     AccountUsage, Core, EndpointReply, Environment, InstanceKind, RenewalExit, RenewalFailure,
-    RenewalOutcome, UsageReport, UsageStatus,
+    RenewalSituation, UsageBlocker, UsageReport,
 };
 use serde_json::json;
 
@@ -118,15 +118,16 @@ fn an_expired_token_is_renewed_by_claude_code_then_usage_is_read_with_the_new_to
     assert!(renewals[0].working_dir.is_dir());
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::Ok);
+    assert_eq!(usage.as_reported().blocker, None);
     assert!(usage.called);
     assert_eq!(env.usage_calls_with_token(RENEWED_TOKEN), 1);
-    let renewal = usage.renewal.as_ref().unwrap();
-    assert!(renewal.attempted);
-    assert_eq!(renewal.config_dir, b.dir);
-    let last = renewal.last.as_ref().unwrap();
-    assert_eq!(last.at, now());
-    assert_eq!(last.outcome, RenewalOutcome::Renewed);
+    assert_eq!(
+        usage.as_reported().renewal,
+        RenewalSituation::Renewed {
+            config_dir: b.dir.clone(),
+            at: now()
+        }
+    );
 }
 
 #[test]
@@ -171,7 +172,10 @@ fn reading_usage_without_refreshing_never_renews() {
     let report = core.usage().unwrap();
 
     assert!(env.renewal_invocations().is_empty());
-    assert_eq!(only(&report).status, UsageStatus::TokenExpired);
+    assert_eq!(
+        only(&report).as_reported().blocker,
+        Some(UsageBlocker::TokenExpired)
+    );
 }
 
 #[test]
@@ -225,7 +229,12 @@ fn each_account_is_renewed_in_its_own_instance() {
         .collect();
     assert_eq!(dirs.len(), 2);
     assert!(dirs.contains(&b.dir) && dirs.contains(&c.dir));
-    assert!(report.accounts.iter().all(|a| a.status == UsageStatus::Ok));
+    assert!(
+        report
+            .accounts
+            .iter()
+            .all(|a| a.as_reported().blocker.is_none())
+    );
 }
 
 // --- The preference ----------------------------------------------------------------------
@@ -287,11 +296,16 @@ fn with_renewal_off_an_expired_token_reads_as_today() {
     let report = core.refresh_usage().unwrap();
 
     assert!(env.renewal_invocations().is_empty());
-    let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::TokenExpired);
-    assert!(usage.reading.is_some());
-    assert!(usage.stale);
-    assert_eq!(usage.renewal, None);
+    let situation = only(&report).as_reported();
+    assert_eq!(situation.blocker, Some(UsageBlocker::TokenExpired));
+    assert!(situation.reading.is_some());
+    assert_eq!(situation.freshness, mccboard_core::Freshness::Stale);
+    assert_eq!(
+        situation.renewal,
+        RenewalSituation::Off {
+            config_dir: b.dir.clone()
+        }
+    );
     assert_eq!(env.usage_calls(), 1);
 }
 
@@ -380,13 +394,19 @@ fn failure_after(setup: impl FnOnce(&FakeEnvironment)) -> RenewalFailure {
     setup(&env);
     let report = core.refresh_usage().unwrap();
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::TokenExpired);
+    assert_eq!(
+        usage.as_reported().blocker,
+        Some(UsageBlocker::TokenExpired)
+    );
     assert!(!usage.called);
-    let renewal = usage.renewal.as_ref().unwrap();
-    assert!(renewal.attempted);
-    assert_eq!(renewal.next_attempt_at, Some(now() + mins(30)));
-    match &renewal.last.as_ref().unwrap().outcome {
-        RenewalOutcome::Failed { failure } => failure.clone(),
+    assert_eq!(env.renewal_invocations().len(), 1);
+    match &usage.as_reported().renewal {
+        RenewalSituation::Failed {
+            failure, retry_at, ..
+        } => {
+            assert_eq!(*retry_at, Some(now() + mins(30)));
+            failure.clone()
+        }
         other => panic!("not a failure: {other:?}"),
     }
 }
@@ -432,18 +452,11 @@ fn a_token_valid_afterwards_counts_as_renewed_whatever_the_exit_code() {
     let report = core.refresh_usage().unwrap();
 
     let usage = only(&report);
-    assert_eq!(usage.status, UsageStatus::Ok);
-    assert_eq!(
-        usage
-            .renewal
-            .as_ref()
-            .unwrap()
-            .last
-            .as_ref()
-            .unwrap()
-            .outcome,
-        RenewalOutcome::Renewed
-    );
+    assert_eq!(usage.as_reported().blocker, None);
+    assert!(matches!(
+        usage.as_reported().renewal,
+        RenewalSituation::Renewed { .. }
+    ));
 }
 
 /// Claude Code's renewed credentials, as it would write them.
@@ -470,27 +483,30 @@ fn the_last_renewal_stays_known_while_the_token_is_valid() {
 
     let report = core.usage().unwrap();
 
-    let renewal = only(&report).renewal.as_ref().unwrap();
-    assert!(!renewal.attempted);
-    assert_eq!(renewal.config_dir, b.dir);
-    assert_eq!(renewal.last.as_ref().unwrap().at, now());
+    assert_eq!(env.renewal_invocations().len(), 1);
     assert_eq!(
-        renewal.last.as_ref().unwrap().outcome,
-        RenewalOutcome::Renewed
+        only(&report).as_reported().renewal,
+        RenewalSituation::Renewed {
+            config_dir: b.dir.clone(),
+            at: now()
+        }
     );
 }
 
 #[test]
 fn an_expired_token_not_yet_tried_has_a_renewal_due_now() {
-    let (_home, b, core, _env) = home_with_expired_b();
+    let (_home, b, core, env) = home_with_expired_b();
 
     let report = core.usage().unwrap();
 
-    let renewal = only(&report).renewal.as_ref().unwrap();
-    assert_eq!(renewal.config_dir, b.dir);
-    assert_eq!(renewal.last, None);
-    assert_eq!(renewal.next_attempt_at, None);
-    assert!(!renewal.attempted);
+    assert_eq!(
+        only(&report).as_reported().renewal,
+        RenewalSituation::Waiting {
+            config_dir: b.dir.clone(),
+            next_at: None
+        }
+    );
+    assert!(env.renewal_invocations().is_empty());
 }
 
 // --- Token rules -------------------------------------------------------------------------

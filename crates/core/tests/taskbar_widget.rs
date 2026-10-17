@@ -433,8 +433,8 @@ fn a_stale_reading_fades_its_column_and_keeps_its_values() {
     );
 }
 
-#[test]
-fn an_expired_token_without_a_reading_shows_dots_until_claude_code_renews_it() {
+/// The primary instance logged in as A with a token expired a second ago, registered.
+fn home_with_expired_a() -> (TempHome, Core) {
     let home = TempHome::new();
     let primary = home.primary();
     primary
@@ -442,9 +442,15 @@ fn an_expired_token_without_a_reading_shows_dots_until_claude_code_renews_it() {
         .credentials_with_token(TOKEN_A, now() - secs(1));
     let (core, _env) = home.core();
     core.register(&primary.dir).unwrap();
-    core.set_renew_expired_tokens(false).unwrap();
+    (home, core)
+}
 
-    let view = widget(&core, &core.refresh_usage().unwrap());
+#[test]
+fn an_expired_token_without_a_reading_shows_dots_until_claude_code_renews_it() {
+    let (_home, core) = home_with_expired_a();
+
+    // Read without refreshing: mccboard hasn't run Claude Code yet.
+    let view = widget(&core, &core.usage().unwrap());
 
     let column = &view.columns[0];
     assert_eq!(column.state, ColumnState::TokenRenewal);
@@ -452,6 +458,20 @@ fn an_expired_token_without_a_reading_shows_dots_until_claude_code_renews_it() {
     assert_eq!(
         view.tooltip,
         "A · token expired, waiting for Claude Code to renew it"
+    );
+}
+
+#[test]
+fn with_renewal_off_an_expired_token_promises_no_renewal_from_mccboard() {
+    let (_home, core) = home_with_expired_a();
+    core.set_renew_expired_tokens(false).unwrap();
+
+    let view = widget(&core, &core.refresh_usage().unwrap());
+
+    assert_eq!(view.columns[0].state, ColumnState::TokenRenewal);
+    assert_eq!(
+        view.tooltip,
+        "A · token expired, renewed the next time Claude Code runs with this account"
     );
 }
 

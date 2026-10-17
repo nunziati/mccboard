@@ -12,6 +12,7 @@
 
 mod endpoint;
 mod renewal;
+mod situation;
 mod state;
 mod token;
 
@@ -22,7 +23,8 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use endpoint::call as call_endpoint;
-pub use renewal::{RenewalAttempt, RenewalFailure, RenewalOutcome, TokenRenewal};
+pub use renewal::{RenewalAttempt, RenewalFailure, RenewalOutcome};
+pub use situation::{Freshness, RenewalSituation, UsageBlocker, UsageSituation};
 pub use token::AccessToken;
 #[cfg(feature = "testing")]
 pub(crate) use token::fingerprint;
@@ -35,8 +37,6 @@ pub(crate) const BASE_INTERVAL_SECS: i64 = 60;
 const MAX_INTERVAL_SECS: i64 = 300;
 /// The longest wait a `Retry-After` can impose.
 const MAX_RETRY_AFTER_SECS: i64 = 3600;
-/// A reading older than this is stale even if nothing failed: several refreshes were missed.
-const STALE_AFTER: SignedDuration = SignedDuration::from_mins(10);
 
 /// Every registered account's usage, in label order.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -46,45 +46,47 @@ pub struct UsageReport {
     pub warnings: Vec<UsageWarning>,
 }
 
-/// One account's usage as known now.
+impl UsageReport {
+    /// The token renewal that runs in the instance in `config_dir`, as of the report; `Quiet`
+    /// when none of the accounts' renewals is about it.
+    pub(crate) fn renewal_in(&self, config_dir: &Path) -> RenewalSituation {
+        self.accounts
+            .iter()
+            .map(|usage| &usage.as_reported().renewal)
+            .find(|renewal| {
+                renewal
+                    .config_dir()
+                    .is_some_and(|dir| paths::same(dir, config_dir))
+            })
+            .cloned()
+            .unwrap_or(RenewalSituation::Quiet)
+    }
+}
+
+/// One account's usage as of the report.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AccountUsage {
     pub account: Account,
-    pub status: UsageStatus,
-    /// The last known reading, with windows past their reset read as zero. Kept when a later
-    /// refresh fails or can't be made.
-    pub reading: Option<UsageReading>,
-    /// The reading is not current: the latest refresh failed or couldn't be made, or the
-    /// reading is more than 10 minutes old.
-    pub stale: bool,
     /// Whether this operation called the endpoint for this account.
     pub called: bool,
     /// When the endpoint may next be called for this account; `None` when it may be called
     /// now, or when there is no token to call it with.
     pub next_call_at: Option<Timestamp>,
-    /// Claude Code renewing the account's expired token: while it is expired, or after it was
-    /// renewed. `None` when the preference is off, or when no renewal was ever needed.
-    pub renewal: Option<TokenRenewal>,
+    /// As of the report's own time: what the JSON carries. Drawn later, see
+    /// [`AccountUsage::at`].
+    situation: UsageSituation,
 }
 
-/// Where an account's usage stands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum UsageStatus {
-    /// The last call succeeded.
-    Ok,
-    /// A token is available but no call has been made yet.
-    NeverRead,
-    /// Every token of the account is past its expiry. Claude Code renews it the next time it
-    /// runs, or when mccboard asks it to ([`AccountUsage::renewal`]); mccboard itself never
-    /// does, and makes no call.
-    TokenExpired,
-    /// No registered instance is logged in with this account.
-    NotLoggedIn,
-    /// An instance is logged in with this account, but its credentials can't be read.
-    CredentialsUnreadable,
-    /// The last call failed.
-    Failed { failure: UsageFailure },
+impl AccountUsage {
+    /// The account's usage situation as of `now`: what every view draws.
+    pub fn at(&self, now: Timestamp) -> UsageSituation {
+        self.situation.at(now)
+    }
+
+    /// The account's usage situation as of the report's own time, for a view drawn at once.
+    pub fn as_reported(&self) -> &UsageSituation {
+        &self.situation
+    }
 }
 
 /// Why a call to the usage endpoint failed. Never carries anything from the request, nor the
@@ -196,7 +198,8 @@ pub(crate) fn report(
         .sort_by(|a, b| (a.label.to_lowercase(), &a.uuid).cmp(&(b.label.to_lowercase(), &b.uuid)));
 
     // One refresh at a time in this process; the reservation below covers other processes.
-    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Only reading needs no lock: the state file is always replaced whole.
+    let _guard = refresh.then(|| lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     let state_path = paths.state_dir().join("usage.json");
     let mut warnings = Vec::new();
     let mut state = state::load(&state_path, &mut warnings);
@@ -209,10 +212,9 @@ pub(crate) fn report(
     };
     let mut found = find(now);
 
-    let mut renewed_in = Vec::new();
     if refresh && renewal_on {
         let expired: Vec<&Path> = found.iter().filter_map(Found::expired_in).collect();
-        renewed_in = renewal::run(
+        let renewed_in = renewal::run(
             home,
             paths,
             env,
@@ -281,13 +283,12 @@ pub(crate) fn report(
                 .cloned()
                 .unwrap_or_default();
             let called = due.contains(&index);
-            let renewal = renewal_on
-                .then(|| renewal::view(&state, found.expired_in(), &found.dirs, &renewed_in, now))
-                .flatten();
-            AccountUsage {
-                renewal,
-                ..view(account, &found.source, entry, called, now)
-            }
+            let renewal = RenewalSituation::of(
+                renewal::view(&state, found.expired_in(), &found.dirs),
+                found.expired_in(),
+                renewal_on,
+            );
+            view(account, &found.source, entry, renewal, called, now)
         })
         .collect();
     Ok(UsageReport { accounts, warnings })
@@ -407,36 +408,26 @@ fn view(
     account: Account,
     source: &Source,
     entry: state::AccountState,
+    renewal: RenewalSituation,
     called: bool,
     now: Timestamp,
 ) -> AccountUsage {
-    let (status, next_call_at) = match source {
-        Source::Token(_) => {
-            let status = match (&entry.last_failure, &entry.reading) {
-                (Some(failure), _) => UsageStatus::Failed {
-                    failure: failure.clone(),
-                },
-                (None, Some(_)) => UsageStatus::Ok,
-                (None, None) => UsageStatus::NeverRead,
-            };
-            (status, entry.next_call_at.filter(|at| *at > now))
-        }
-        Source::TokenExpired { .. } => (UsageStatus::TokenExpired, None),
-        Source::CredentialsUnreadable => (UsageStatus::CredentialsUnreadable, None),
-        Source::NotLoggedIn => (UsageStatus::NotLoggedIn, None),
+    let (blocker, next_call_at) = match source {
+        Source::Token(_) => (
+            entry
+                .last_failure
+                .map(|failure| UsageBlocker::RefreshFailed { failure }),
+            entry.next_call_at.filter(|at| *at > now),
+        ),
+        Source::TokenExpired { .. } => (Some(UsageBlocker::TokenExpired), None),
+        Source::CredentialsUnreadable => (Some(UsageBlocker::CredentialsUnreadable), None),
+        Source::NotLoggedIn => (Some(UsageBlocker::NotLoggedIn), None),
     };
-    let stale = entry
-        .reading
-        .as_ref()
-        .is_some_and(|r| status != UsageStatus::Ok || now.duration_since(r.read_at) > STALE_AFTER);
     AccountUsage {
         account,
-        status,
-        reading: entry.reading.map(|reading| as_of(reading, now)),
-        stale,
         called,
         next_call_at,
-        renewal: None,
+        situation: UsageSituation::new(entry.reading, blocker, renewal, now),
     }
 }
 

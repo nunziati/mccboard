@@ -2,9 +2,9 @@
   // Claude Code renewing an instance's expired token, as the core reports it (#30): when it
   // did, or why it couldn't and when it tries again.
   import { formatClock, t } from './i18n.svelte'
-  import type { RenewalFailure, TokenRenewal } from './usage'
+  import type { RenewalFailure, RenewalSituation } from './usage'
 
-  let { renewal, expired }: { renewal: TokenRenewal; expired: boolean } = $props()
+  let { renewal }: { renewal: RenewalSituation } = $props()
 
   function reason(failure: RenewalFailure): string {
     switch (failure.kind) {
@@ -17,27 +17,31 @@
     }
   }
 
-  function next(renewal: TokenRenewal): string {
-    return renewal.next_attempt_at
-      ? t('renewal.next_at', { time: formatClock(renewal.next_attempt_at) })
-      : t('renewal.next_refresh')
+  function next(at: string | null): string {
+    return at ? t('renewal.next_at', { time: formatClock(at) }) : t('renewal.next_refresh')
   }
 
-  function text(renewal: TokenRenewal, expired: boolean): { line: string; failed: boolean } | null {
-    const last = renewal.last
-    if (!expired) {
-      return last?.outcome === 'renewed'
-        ? { line: t('renewal.renewed', { time: formatClock(last.at) }), failed: false }
-        : null
+  function text(renewal: RenewalSituation): { line: string; failed: boolean } | null {
+    switch (renewal.state) {
+      case 'renewed':
+        return { line: t('renewal.renewed', { time: formatClock(renewal.at) }), failed: false }
+      case 'failed':
+        return {
+          line: `${t('renewal.failed', { reason: reason(renewal.failure) })} ${next(renewal.retry_at)}`,
+          failed: true,
+        }
+      case 'waiting':
+        return {
+          line: renewal.next_at ? next(renewal.next_at) : t('renewal.pending'),
+          failed: false,
+        }
+      case 'off':
+      case 'quiet':
+        return null
     }
-    if (last?.outcome === 'failed') {
-      return { line: `${t('renewal.failed', { reason: reason(last.failure) })} ${next(renewal)}`, failed: true }
-    }
-    if (renewal.next_attempt_at) return { line: next(renewal), failed: false }
-    return { line: t('renewal.pending'), failed: false }
   }
 
-  let shown = $derived(text(renewal, expired))
+  let shown = $derived(text(renewal))
 </script>
 
 {#if shown}

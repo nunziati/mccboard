@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::account::{self, Account, AccountUpdate, AccountUuid};
 use crate::config::{ConfigFile, InstanceEntry};
 use crate::instance::{self, InstanceKind, Observation};
-use crate::{Environment, Error, ObservedAccount, paths};
+use crate::{Environment, Error, ObservedAccount, RenewalSituation, paths};
 
 /// Everything registered: accounts by label, instances primary first then by path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -27,6 +27,9 @@ pub struct InstanceStatus {
     #[serde(flatten)]
     pub observation: Observation,
     pub account_status: AccountStatus,
+    /// The token renewal that runs in this instance: Claude Code renewing its account's
+    /// expired token here. `Quiet` for every other instance, and in a registration's result.
+    pub renewal: RenewalSituation,
 }
 
 /// How the observed account compares with the one the instance was registered with.
@@ -276,5 +279,6 @@ fn status_with(home: &Path, entry: &InstanceEntry, observation: Observation) -> 
         registered_account: entry.account.clone(),
         observation,
         account_status,
+        renewal: RenewalSituation::Quiet,
     }
 }

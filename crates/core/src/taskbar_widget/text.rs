@@ -4,10 +4,8 @@
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
-use crate::tray::status_without_reading;
 use crate::tray::text::{Status, Texts as TrayTexts};
-use crate::usage::as_of;
-use crate::{AccountUsage, Language, UsageStatus, UsageWindow};
+use crate::{AccountUsage, Freshness, Language, RenewalSituation, UsageWindow};
 
 /// Texts in one language, with times relative to `now` and shown in `tz`.
 pub(super) struct Texts {
@@ -36,16 +34,21 @@ impl Texts {
     /// 21:00 · Fable 4% · read 9 min ago".
     pub fn account_line(&self, usage: &AccountUsage) -> String {
         let label = &usage.account.label;
-        let Some(reading) = usage.reading.clone().map(|r| as_of(r, self.now)) else {
-            let status = if usage.status == UsageStatus::TokenExpired {
-                self.pick(
+        let situation = usage.at(self.now);
+        let Some(reading) = situation.reading.clone() else {
+            let status = match (&situation.renewal, situation.token_expired()) {
+                (RenewalSituation::Off { .. }, true) => self.pick(
+                    "token expired, renewed the next time Claude Code runs with this account",
+                    "token scaduto, si rinnova la prossima volta che usi Claude Code con questo account",
+                ),
+                (_, true) => self.pick(
                     "token expired, waiting for Claude Code to renew it",
                     "token scaduto, in attesa che Claude Code lo rinnovi",
-                )
-            } else {
-                self.tray
-                    .status(status_without_reading(&usage.status))
-                    .unwrap_or_default()
+                ),
+                _ => self
+                    .tray
+                    .status(Status::of(&situation))
+                    .unwrap_or_default(),
             };
             return format!("{label} · {status}");
         };
@@ -64,8 +67,8 @@ impl Texts {
                 model.utilization.clamp(0.0, 100.0).round() as u8
             )
         }));
-        if usage.stale {
-            if usage.status == UsageStatus::TokenExpired {
+        if situation.freshness == Freshness::Stale {
+            if situation.token_expired() {
                 parts.extend(self.tray.status(Status::TokenExpired).map(str::to_owned));
             }
             parts.push(self.age(reading.read_at));
