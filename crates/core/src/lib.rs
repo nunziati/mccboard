@@ -41,6 +41,7 @@ mod scan;
 mod session_guard;
 mod sharing;
 mod system;
+mod taskbar_widget;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod tray;
@@ -53,6 +54,8 @@ pub mod windows_profile_tray;
 mod windows_shell;
 #[cfg(windows)]
 pub mod windows_taskbar;
+#[cfg(windows)]
+pub mod windows_taskbar_widget;
 #[cfg(windows)]
 mod windows_user_path;
 
@@ -87,7 +90,9 @@ pub use environment::{
     LoginTerminal, OsKind, RenewalExit, RenewalInvocation, SystemEnvironment,
 };
 pub use error::Error;
-pub use icon::{IconCache, IconSources, Image, PackageLogos, ProfileIcons};
+pub use icon::{
+    IconCache, IconSources, Image, LogoStyle, PackageLogos, ProfileIcons, mccboard_logo,
+};
 pub use instance::{InstanceKind, LoginState, Observation, Warning};
 pub use language::Language;
 pub use launcher::{
@@ -101,6 +106,10 @@ pub use repair::{RepairOutcome, RepairReport, RepairedItem};
 pub use scan::Candidate;
 pub use session_guard::{ClaudeProcess, ProcessConfigDir};
 pub use sharing::{SharingAnswer, SharingQuestion};
+pub use taskbar_widget::{
+    AccountInk, ColumnState, FADED_OPACITY, ResetPart, SEGMENTS, TaskbarTheme, TaskbarWidget,
+    TimeToReset, WidgetColumn, WidgetPalette, WidgetRow,
+};
 pub use tray::profiles::{TrayProfile, TrayProfiles};
 pub use tray::{
     LanguageChoice, TOOLTIP_MAX_UTF16, TrayAccount, TrayIcon, TrayMenu, TrayView, TrayWindow,
@@ -650,10 +659,64 @@ impl Core {
         file.save()
     }
 
+    /// Whether the taskbar widget is shown (`taskbar_widget` in `config.toml`'s
+    /// `[preferences]`; on unless set to false). Windows only: elsewhere it has no effect.
+    pub fn taskbar_widget_on(&self) -> Result<bool, Error> {
+        Ok(config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .taskbar_widget)
+    }
+
+    /// Saves whether the taskbar widget is shown, keeping everything else in `config.toml`.
+    pub fn set_taskbar_widget_on(&self, on: bool) -> Result<(), Error> {
+        let mut file = config::ConfigFile::load(&self.paths().config_file())?;
+        file.set_taskbar_widget(on);
+        file.save()
+    }
+
+    /// Whether the taskbar widget shows each account's label (`taskbar_widget_labels` in
+    /// `config.toml`'s `[preferences]`; off unless set to true).
+    pub fn taskbar_widget_labels(&self) -> Result<bool, Error> {
+        Ok(config::ConfigFile::load(&self.paths().config_file())?
+            .config
+            .taskbar_widget_labels)
+    }
+
+    /// Saves whether the taskbar widget shows each account's label, keeping everything else
+    /// in `config.toml`.
+    pub fn set_taskbar_widget_labels(&self, on: bool) -> Result<(), Error> {
+        let mut file = config::ConfigFile::load(&self.paths().config_file())?;
+        file.set_taskbar_widget_labels(on);
+        file.save()
+    }
+
+    /// What the taskbar widget shows for `report` (from [`Core::usage`] or
+    /// [`Core::refresh_usage`]), as of now: one column per account in `config.toml` order,
+    /// each with its session and weekly windows' bar, pace and time to reset, its state and
+    /// its colors for both taskbar themes; the tooltip in `language` with reset times shown in
+    /// `tz`; and when to compute it again. Reads `config.toml`; calls nothing.
+    pub fn taskbar_widget(
+        &self,
+        report: &UsageReport,
+        language: Language,
+        tz: &jiff::tz::TimeZone,
+    ) -> Result<TaskbarWidget, Error> {
+        let config = config::ConfigFile::load(&self.paths().config_file())?.config;
+        Ok(taskbar_widget::view(
+            report,
+            &config.account_order,
+            config.taskbar_widget,
+            config.taskbar_widget_labels,
+            language,
+            tz,
+            self.env.now(),
+        ))
+    }
+
     /// What the tray shows for `report` (from [`Core::usage`] or [`Core::refresh_usage`]),
-    /// as of now: the worst account's percentage and color for the icon, a tooltip that fits
-    /// the Windows tray, every account's windows as menu lines, and "no instances" when none
-    /// is registered. Texts are in `language`, with reset times shown in `tz`. Windows whose
+    /// as of now: the weekly window and color of the account closest to its weekly limit for
+    /// the icon, a tooltip that fits the Windows tray, every account's windows as menu lines,
+    /// and "no instances" when none is registered. Texts are in `language`, with reset times shown in `tz`. Windows whose
     /// reset passed since the report read as zero. Reads `config.toml`; calls nothing.
     pub fn tray_view(
         &self,

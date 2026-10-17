@@ -12,6 +12,7 @@
 //!   gets a new file name and Explorer's icon cache can't serve the old picture.
 
 mod ico;
+mod logo;
 mod package;
 mod pixels;
 
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+pub use logo::{LogoStyle, mccboard_logo};
 pub use package::PackageLogos;
 use pixels::MarkIn;
 

@@ -9,7 +9,7 @@ use crate::{Language, RenewalFailure, RenewalOutcome};
 
 /// What the tray says about an account besides its numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Status {
+pub(crate) enum Status {
     /// A current reading: nothing to say.
     Current,
     Stale,
@@ -21,7 +21,7 @@ pub(super) enum Status {
 }
 
 /// Texts in one language, with times relative to `now` and shown in `tz`.
-pub(super) struct Texts {
+pub(crate) struct Texts {
     language: Language,
     tz: TimeZone,
     now: Timestamp,
@@ -93,7 +93,7 @@ impl Texts {
     }
 
     /// An account's status in lowercase, or `None` for a current reading.
-    fn status(&self, status: Status) -> Option<&'static str> {
+    pub(crate) fn status(&self, status: Status) -> Option<&'static str> {
         Some(match status {
             Status::Current => return None,
             Status::Stale => self.pick("stale", "non aggiornato"),
@@ -384,8 +384,13 @@ impl Texts {
         }
     }
 
+    /// Whether `at` falls on today's date in the time zone.
+    pub(crate) fn is_today(&self, at: Timestamp) -> bool {
+        at.to_zoned(self.tz.clone()).date() == self.now.to_zoned(self.tz.clone()).date()
+    }
+
     /// A time in the time zone: "15:00" today, "Mon 14:00" on another day.
-    fn clock(&self, at: Timestamp) -> String {
+    pub(crate) fn clock(&self, at: Timestamp) -> String {
         let zoned = at.to_zoned(self.tz.clone());
         let today = self.now.to_zoned(self.tz.clone()).date();
         let time = format!("{:02}:{:02}", zoned.hour(), zoned.minute());
