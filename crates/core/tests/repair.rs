@@ -812,6 +812,44 @@ fn a_private_item_is_unlinked_by_its_id_alone() {
 }
 
 #[test]
+fn unlinking_credentials_linked_to_the_primary_leaves_the_instance_logged_out() {
+    let (home, core, _env, p) = setup();
+    home.primary()
+        .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
+    let primary_credentials = home.primary().credentials_bytes();
+    write(p.join("daemon-auth-cooldown"), "a's cooldown");
+    let b = bare_linked(&home, &core, ".claude-b");
+    core.repair(&b, None).unwrap();
+    fs::remove_file(b.join(".credentials.json")).unwrap();
+    link(p.join(".credentials.json"), b.join(".credentials.json"));
+    link(
+        p.join("daemon-auth-cooldown"),
+        b.join("daemon-auth-cooldown"),
+    );
+
+    let report = core.repair(&b, None).unwrap();
+
+    assert_eq!(
+        done(&report),
+        vec!["private:.credentials.json", "private:daemon-auth-cooldown"]
+    );
+    let logged_out: Vec<_> = report
+        .items
+        .iter()
+        .filter(|i| i.logged_out)
+        .map(|i| i.id.as_str())
+        .collect();
+    assert_eq!(logged_out, vec!["private:.credentials.json"]);
+    assert!(fs::symlink_metadata(b.join(".credentials.json")).is_err());
+    // The primary's credentials are exactly as they were.
+    assert_eq!(home.primary().credentials_bytes(), primary_credentials);
+    assert_eq!(report.drift.items, vec![]);
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("\"logged_out\":true"), "{json}");
+    assert!(!json.contains("FIXTURE"));
+}
+
+#[test]
 fn unlinking_a_private_file_needs_no_developer_mode() {
     let (home, core, env, p) = setup();
     write(p.join("daemon-auth-status.json"), "{}");

@@ -132,6 +132,40 @@ fn a_private_item_still_linked_to_the_primary_is_reported_then_unlinked() {
 }
 
 #[test]
+fn unlinking_credentials_shared_with_the_primary_says_to_log_in_again() {
+    let home = fixture_home();
+    assert!(mccboard(home.path(), &["repair"]).status.success());
+    let primary_credentials = home.path().join(".claude").join(".credentials.json");
+    fs::write(&primary_credentials, "{}").unwrap();
+    let at = home.path().join(".claude-b").join(".credentials.json");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&primary_credentials, &at).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&primary_credentials, &at).unwrap();
+
+    let doctor = mccboard(home.path(), &["doctor", "--no-ask"]);
+    assert_eq!(doctor.status.code(), Some(2), "{}", text(&doctor));
+    let printed = text(&doctor);
+    assert!(printed.contains("[private:.credentials.json]"), "{printed}");
+    assert!(printed.contains("logged out"), "{printed}");
+    assert!(printed.contains("mccboard login"), "{printed}");
+
+    let out = mccboard(home.path(), &["repair", "~/.claude-b"]);
+
+    assert!(out.status.success(), "{}", text(&out));
+    let printed = text(&out);
+    assert!(printed.contains("now logged out"), "{printed}");
+    // The folder as it was given, quoted when it has a space.
+    assert!(
+        printed.contains("`mccboard login ~/.claude-b`"),
+        "{printed}"
+    );
+    assert!(!printed.contains("logout"), "{printed}");
+    assert!(fs::symlink_metadata(&at).is_err());
+    assert_eq!(fs::read_to_string(&primary_credentials).unwrap(), "{}");
+}
+
+#[test]
 fn an_unknown_item_or_a_missing_path_fails_with_1() {
     let home = fixture_home();
 

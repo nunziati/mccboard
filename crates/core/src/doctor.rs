@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::claude_files::CREDENTIALS;
 use crate::config::{Config, ConfigFile};
 use crate::instance::InstanceKind;
 use crate::launcher::{LauncherPlace, LauncherState, LauncherStatus};
@@ -508,7 +509,13 @@ fn explain(item: &str, problem: &Problem) -> String {
                  the primary instance's {item}, so this instance shares it with the primary.",
                 target.display()
             );
-            if *ignored_answer {
+            if item == CREDENTIALS {
+                format!(
+                    "{shared} This instance uses the primary instance's login. Repairing it leaves \
+                     this instance logged out: it must then be logged in again, with \"Log in\" in the \
+                     app or `mccboard login` in a terminal."
+                )
+            } else if *ignored_answer {
                 format!(
                     "{shared} The answer \"link\" for {item} in config.toml is now ignored: \
                      {item} is private, so that line can be deleted."
@@ -579,6 +586,12 @@ fn explain_repair(item: &str, repair: &Repair) -> String {
         Repair::MigratePlugins => "Give this instance its own plugins folder; its plugins are \
              then reinstalled with Claude Code's own `claude plugin` commands."
             .to_owned(),
+        Repair::Unlink { target } if item == CREDENTIALS => format!(
+            "Remove the link to {}, leaving the primary instance's login as it is. This \
+             instance is then logged out: log it in again with \"Log in\" in the app or \
+             `mccboard login` in a terminal.",
+            target.display()
+        ),
         Repair::Unlink { target } => format!(
             "Remove the link to {}, leaving what it leads to as it is; Claude Code then creates \
              this instance's own {item}.",

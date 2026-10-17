@@ -261,6 +261,8 @@ export interface RepairedItem {
   item: string
   repair: Repair
   outcome: RepairOutcome
+  /** The repair removed a `.credentials.json` link to the primary's: the instance must log in again. */
+  logged_out: boolean
 }
 
 export interface RepairReport {

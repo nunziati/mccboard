@@ -16,6 +16,9 @@
     onrepair?: (id: string) => void
   } = $props()
 
+  /** Claude Code's credentials file: unlinking it leaves the instance logged out. */
+  const CREDENTIALS = '.credentials.json'
+
   function translated(key: string, vars: Record<string, string>, fallback: string): string {
     return key in en ? t(key as Key, vars) : fallback
   }
@@ -27,6 +30,7 @@
       case 'whole_folder_link':
         return `drift.problem.whole_folder_link.${item.item}`
       case 'linked_private_item':
+        if (item.item === CREDENTIALS) return 'drift.problem.linked_private_item_credentials'
         return problem.ignored_answer
           ? 'drift.problem.linked_private_item_ignored_answer'
           : 'drift.problem.linked_private_item'
@@ -86,8 +90,11 @@
       case 'create_link':
       case 'replace_link':
       case 'backup_and_link':
+        vars.target = repair.target
+        break
       case 'unlink':
         vars.target = repair.target
+        if (item.item === CREDENTIALS) key = 'drift.repair.unlink_credentials'
         break
       case 'migrate_skills':
         vars.skills = repair.skills.join(', ')

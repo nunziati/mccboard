@@ -120,6 +120,18 @@ fn print_result(dir: &std::path::Path, result: &Result<RepairReport, Error>) {
                         println!("  FAILED  [{}] {reason}", item.id)
                     }
                 }
+                if item.logged_out {
+                    let folder = dir.display().to_string();
+                    let folder = if folder.contains(char::is_whitespace) {
+                        format!("\"{folder}\"")
+                    } else {
+                        folder
+                    };
+                    println!(
+                        "          This instance is now logged out: log it in again with \
+                         `mccboard login {folder}`."
+                    );
+                }
             }
             match report.drift.drift_count {
                 0 => println!("  No drift left."),

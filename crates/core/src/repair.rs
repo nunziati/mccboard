@@ -24,6 +24,7 @@ use serde::Serialize;
 
 use crate::alignment::{self, PluginRun};
 use crate::backup::Backup;
+use crate::claude_files::CREDENTIALS;
 use crate::config::{Config, ConfigFile};
 use crate::doctor::{self, DriftItem, InstanceDrift, Repair};
 use crate::instance::{self, InstanceKind};
@@ -63,6 +64,9 @@ pub struct RepairedItem {
     /// What the repair set out to do.
     pub repair: Repair,
     pub outcome: RepairOutcome,
+    /// Whether the repair left the instance logged out: its `.credentials.json` was a link to
+    /// the primary's and was removed. It must be logged in again (`mccboard login`).
+    pub logged_out: bool,
 }
 
 /// How repairing one item went.
@@ -219,7 +223,11 @@ fn run(
                 reason: error.to_string(),
             },
         };
+        let logged_out = matches!(outcome, RepairOutcome::Done { .. })
+            && matches!(item.repair, Repair::Unlink { .. })
+            && item.item == CREDENTIALS;
         items.push(RepairedItem {
+            logged_out,
             id: item.id.clone(),
             item: item.item.clone(),
             repair: item.repair.clone(),

@@ -1010,7 +1010,41 @@ fn private_items_by_name_prefix_or_suffix_linked_to_the_primary_are_drift() {
             "{}",
             found.explanation
         );
+        // Only the credentials file warns of a login to redo.
+        assert!(!found.explanation.contains("logged out"));
+        assert!(!found.repair_explanation.contains("logged out"));
     }
+}
+
+#[test]
+fn credentials_linked_to_the_primary_are_drift_that_warns_of_the_login_to_redo() {
+    let home = TempHome::new();
+    let p = full_primary(&home);
+    home.primary()
+        .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
+    let b = safe_linked(&home, ".claude-b", &p);
+    fs::remove_file(b.join(".credentials.json")).unwrap();
+    link(p.join(".credentials.json"), b.join(".credentials.json"));
+    let (core, _env) = home.core();
+
+    let drift = drift_of(&core, &b);
+
+    assert_eq!(ids(&drift), vec!["private:.credentials.json"]);
+    let credentials = item(&drift, "private:.credentials.json");
+    assert_eq!(
+        credentials.repair,
+        Repair::Unlink {
+            target: p.join(".credentials.json")
+        }
+    );
+    for text in [&credentials.explanation, &credentials.repair_explanation] {
+        assert!(text.contains("logged out"), "{text}");
+        assert!(text.contains("\"Log in\""), "{text}");
+        assert!(text.contains("mccboard login"), "{text}");
+        assert!(!text.contains("logout"), "{text}");
+    }
+    let json = serde_json::to_string(&drift).unwrap();
+    assert!(!json.contains("FIXTURE"));
 }
 
 #[test]
