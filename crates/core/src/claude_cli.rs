@@ -9,8 +9,8 @@
 //! The login is the exception: it is interactive, so it runs in a terminal the user sees (the
 //! CLI's own, or a new window), and mccboard reads nothing it prints.
 //!
-//! The token renewal (`claude auth status`) runs hidden like a background run, but in a folder
-//! of mccboard's own and with its output discarded, since it names the account.
+//! The token renewal (a minimal `claude -p`) runs hidden like a background run, but in a folder
+//! of mccboard's own and with its output discarded.
 
 use std::env;
 use std::ffi::OsString;
@@ -177,14 +177,31 @@ fn is_program(path: &Path) -> bool {
     path.is_file()
 }
 
-/// Claude Code's auth status: with an expired token it renews it first. No model call.
-const RENEW_ARGS: &[&str] = &["auth", "status"];
+/// The smallest one-shot prompt (#51): Claude Code needs a valid token before it can call the
+/// model, so with an expired one it renews it first. It counts as a little usage and may start
+/// the session window. `auth status` would be free, but it exits before its startup refresh
+/// is done and leaves the token expired.
+///
+/// The cheapest model and a one-line system prompt; no session saved in the instance's
+/// history; safe mode, so no hooks, MCP servers, plugins or `CLAUDE.md`; no tools.
+const RENEW_ARGS: &[&str] = &[
+    "-p",
+    ".",
+    "--model",
+    "haiku",
+    "--system-prompt",
+    "Reply with a single dot.",
+    "--no-session-persistence",
+    "--safe-mode",
+    "--tools",
+    "",
+];
 
-/// About a second when it works; a minute covers a slow network.
+/// A few seconds when it works; a minute covers a slow network.
 const RENEW_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Runs `claude auth status` in the instance, in the background, so Claude Code renews its own
-/// expired token. Its output names the account, so it goes nowhere: only the exit code is kept.
+/// Runs a minimal prompt in the instance, in the background, so Claude Code renews its own
+/// expired token. Its output goes nowhere: only the exit code is kept.
 pub(crate) fn renew(renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
     renew_with(renewal, &Lookup::from_env(), RENEW_TIMEOUT)
 }
@@ -214,7 +231,7 @@ fn renew_with(
             let _ = child.wait();
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "Claude Code didn't finish its auth status in time",
+                "Claude Code didn't finish its renewal prompt in time",
             ));
         }
         thread::sleep(Duration::from_millis(50));
@@ -516,7 +533,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_renewal_runs_auth_status_in_the_instance_from_the_neutral_folder() {
+    fn a_renewal_runs_the_minimal_prompt_in_the_instance_from_the_neutral_folder() {
         let (_home, bin, dir, neutral, out) = renewal_home();
         write_program(
             &bin.join("claude"),
@@ -539,7 +556,12 @@ mod tests {
         let seen = fs::read_to_string(out.join("claude")).unwrap();
         assert_eq!(
             seen.trim(),
-            format!("{}|{}|auth status|unset", dir.display(), neutral.display())
+            format!(
+                "{}|{}|{}|unset",
+                dir.display(),
+                neutral.display(),
+                RENEW_ARGS.join(" ")
+            )
         );
     }
 
@@ -613,7 +635,13 @@ mod tests {
         let seen = fs::read_to_string(out.join("claude")).unwrap();
         assert_eq!(
             seen.trim().to_lowercase(),
-            format!("{}|{}|auth status", dir.display(), neutral.display()).to_lowercase()
+            format!(
+                "{}|{}|-p . --model haiku --system-prompt \"reply with a single dot.\" \
+                 --no-session-persistence --safe-mode --tools \"\"",
+                dir.display(),
+                neutral.display()
+            )
+            .to_lowercase()
         );
     }
 

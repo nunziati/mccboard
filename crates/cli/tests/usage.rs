@@ -250,7 +250,8 @@ fn an_expired_token_is_handed_to_claude_code_once_and_the_outcome_shown() {
     };
     same(fields[1], home.path());
     same(fields[2], &home.path().join(".mccboard/state/renewal"));
-    assert_eq!(fields[3], "auth status");
+    // The minimal prompt (#51).
+    assert!(fields[3].starts_with("-p . --model haiku"), "{fields:?}");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("token expired"), "{text}");
     assert!(text.contains("the token is still expired"), "{text}");
