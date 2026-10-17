@@ -1,7 +1,8 @@
-//! Letting Claude Code renew an expired token (#30, ADR 0002).
+//! Letting Claude Code renew an expired token (#30, #51, ADR 0002).
 //!
 //! When a usage refresh finds every token of an account expired, mccboard runs Claude Code's
-//! `auth status` in the account's usage instance: the one whose token expired last. Claude Code
+//! `mcp get` with a missing name in the account's usage instance: the one whose token expired
+//! last. Claude Code
 //! renews its own token and rewrites its own credentials; mccboard then reads the token again.
 //! mccboard itself never refreshes a token and never writes credentials.
 //!

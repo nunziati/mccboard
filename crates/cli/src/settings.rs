@@ -9,8 +9,8 @@ use serde_json::json;
 #[derive(Args)]
 pub struct SettingsArgs {
     /// Let Claude Code renew an expired token when usage is refreshed: `on` or `off`. mccboard
-    /// then runs `claude auth status` in the account's instance, hidden; it never touches the
-    /// credentials itself.
+    /// then runs `claude mcp get` with a missing name in the account's instance, hidden; it
+    /// never touches the credentials itself.
     #[arg(long, value_name = "on|off", value_parser = BoolishValueParser::new())]
     renew_expired_tokens: Option<bool>,
     /// Show the taskbar widget, every account's usage windows on the Windows taskbar: `on` or

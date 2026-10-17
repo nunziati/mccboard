@@ -1,5 +1,5 @@
 //! Letting Claude Code renew an expired token (#30): when a usage reading is due and every
-//! token of an account has expired, mccboard runs `claude auth status` in the account's usage
+//! token of an account has expired, mccboard runs `claude mcp get` in the account's usage
 //! instance, hidden, so that Claude Code renews its own token; then reads the token again and
 //! calls the endpoint. mccboard itself never refreshes the token and never writes credentials.
 //!

@@ -21,7 +21,7 @@
   "login.not_logged_in": "Login non effettuato",
   "login.unknown": "Sconosciuto",
   "settings.renew_tokens": "Lascia che Claude Code rinnovi un token scaduto",
-  "settings.renew_tokens_hint": "Quando il token di un account è scaduto, mccboard avvia Claude Code in quell'istanza, nascosto (claude auth status), così che Claude Code rinnovi il token da solo. mccboard non tocca mai le credenziali.",
+  "settings.renew_tokens_hint": "Quando il token di un account è scaduto, mccboard avvia Claude Code in quell'istanza, nascosto (claude mcp get), così che Claude Code rinnovi il token da solo. mccboard non tocca mai le credenziali.",
   "settings.taskbar_widget": "Mostra il widget sulla barra delle applicazioni",
   "settings.taskbar_widget_hint": "Le finestre di sessione e settimanali di ogni account, a sinistra dell'area di notifica. Mentre è visibile, l'icona nel tray è il logo di mccboard; altrimenti mostra la finestra settimanale più alta.",
   "settings.taskbar_widget_labels": "Mostra le etichette degli account",

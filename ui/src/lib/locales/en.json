@@ -21,7 +21,7 @@
   "login.not_logged_in": "Not logged in",
   "login.unknown": "Unknown",
   "settings.renew_tokens": "Let Claude Code renew an expired token",
-  "settings.renew_tokens_hint": "When an account's token has expired, mccboard runs Claude Code in that instance, hidden (claude auth status), so that Claude Code renews the token itself. mccboard never touches the credentials.",
+  "settings.renew_tokens_hint": "When an account's token has expired, mccboard runs Claude Code in that instance, hidden (claude mcp get), so that Claude Code renews the token itself. mccboard never touches the credentials.",
   "settings.taskbar_widget": "Show the widget on the taskbar",
   "settings.taskbar_widget_hint": "Every account's session and weekly windows, left of the notification area. While it is shown the tray icon is mccboard's logo; otherwise the tray icon shows the worst weekly window.",
   "settings.taskbar_widget_labels": "Show account labels",
