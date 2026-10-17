@@ -1,9 +1,11 @@
 //! The tray view model (stories 60–64): everything the tray shows, computed here so the app
 //! only renders it.
 //!
-//! - **Icon:** the percentage of the account closest to a limit, the higher of its session and
-//!   weekly windows, in that account's color. Model windows don't count. A tie goes to the
-//!   first account in label order, so the icon doesn't flicker between equal accounts.
+//! - **Icon:** the weekly window of the account closest to its weekly limit, in that account's
+//!   color (#45). Session and model windows don't count: the session window resets within
+//!   hours, the weekly one is what runs out. A tie goes to the first account in label order, so
+//!   the icon doesn't flicker between equal accounts. On Windows the app shows mccboard's logo
+//!   instead while the taskbar widget is shown, since the widget carries every window.
 //! - **Tooltip:** every account with its windows and reset times, compact enough for the
 //!   Windows tray (127 UTF-16 units): detail is dropped step by step until it fits, but every
 //!   account stays named. A single account reads as a plain usage indicator, without label.
@@ -16,7 +18,7 @@
 //! time zone.
 
 pub(crate) mod profiles;
-mod text;
+pub(crate) mod text;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -53,8 +55,8 @@ pub struct TrayView {
 /// What the tray icon draws.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrayIcon {
-    /// The worst account's highest session or weekly window, 0–100; `None` when no account
-    /// has a reading.
+    /// The worst account's weekly window, 0–100; `None` when no account has a reading with a
+    /// weekly window.
     pub percent: Option<u8>,
     /// The worst account's color; a single account's color, or a neutral gray, when no
     /// account has a reading.
@@ -78,7 +80,7 @@ pub struct TrayAccount {
     pub read_at: Option<Timestamp>,
     /// The higher of its session and weekly windows, when it has a reading.
     pub percent: Option<u8>,
-    /// This account drives the icon.
+    /// This account drives the icon: its weekly window is the highest.
     pub worst: bool,
     pub stale: bool,
     pub token_expired: bool,
@@ -179,23 +181,21 @@ pub(crate) fn view(
         .map(|usage| account(usage, now, &texts))
         .collect();
 
-    // The highest percentage wins; on a tie the first in label order (`max_by` keeps the last).
-    let worst = accounts
-        .iter()
-        .enumerate()
-        .filter_map(|(index, a)| Some((index, peak(&report.accounts[index], now)?, a)))
+    // The highest weekly window wins; on a tie the first in label order (`max_by` keeps the
+    // last).
+    let worst = (0..accounts.len())
+        .filter_map(|index| Some((index, weekly(&report.accounts[index], now)?)))
         .rev()
-        .max_by(|(_, x, _), (_, y, _)| x.total_cmp(y))
-        .map(|(index, _, _)| index);
-    if let Some(index) = worst {
+        .max_by(|(_, x), (_, y)| x.total_cmp(y));
+    if let Some((index, _)) = worst {
         accounts[index].worst = true;
     }
 
     let icon = match worst {
-        Some(index) => {
+        Some((index, utilization)) => {
             let a = &accounts[index];
             TrayIcon {
-                percent: a.percent,
+                percent: Some(percent(utilization)),
                 color: a.account.color.clone(),
                 account: Some(a.account.uuid.clone()),
                 stale: a.stale,
@@ -238,6 +238,11 @@ fn neutral() -> Color {
 
 fn percent(utilization: f64) -> u8 {
     utilization.clamp(0.0, 100.0).round() as u8
+}
+
+/// An account's weekly utilization as of `now`, unrounded.
+fn weekly(usage: &AccountUsage, now: Timestamp) -> Option<f64> {
+    Some(as_of(usage.reading.clone()?, now).weekly?.utilization)
 }
 
 /// The higher of an account's session and weekly utilization as of `now`, unrounded.
@@ -317,7 +322,12 @@ fn status_of(account: &TrayAccount) -> Status {
             Status::Current
         };
     }
-    match &account.status {
+    status_without_reading(&account.status)
+}
+
+/// What the tray says about an account that has no reading, from its usage status.
+pub(crate) fn status_without_reading(status: &UsageStatus) -> Status {
+    match status {
         UsageStatus::Ok | UsageStatus::NeverRead => Status::NeverRead,
         UsageStatus::TokenExpired => Status::TokenExpired,
         UsageStatus::NotLoggedIn => Status::NotLoggedIn,

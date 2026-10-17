@@ -32,6 +32,8 @@
 //! [preferences]
 //! language = "it"               # the app's language, "en" or "it"; absent: the system's
 //! renew_expired_tokens = true   # let Claude Code renew an expired token; absent: true
+//! taskbar_widget = true         # show the taskbar widget (Windows); absent: true
+//! taskbar_widget_labels = false # the account labels in the taskbar widget; absent: false
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,6 +82,13 @@ pub(crate) struct Config {
     pub language: Option<Language>,
     /// Whether mccboard asks Claude Code to renew an expired token (#30).
     pub renew_expired_tokens: bool,
+    /// Whether the taskbar widget is shown (#45).
+    pub taskbar_widget: bool,
+    /// Whether the taskbar widget shows each account's label (#45).
+    pub taskbar_widget_labels: bool,
+    /// The accounts' UUIDs in the order their tables come in the file: the order of the taskbar
+    /// widget's columns.
+    pub account_order: Vec<AccountUuid>,
 }
 
 impl Default for Config {
@@ -92,6 +101,9 @@ impl Default for Config {
             ignored_link_answers: BTreeSet::new(),
             language: None,
             renew_expired_tokens: true,
+            taskbar_widget: true,
+            taskbar_widget_labels: false,
+            account_order: Vec::new(),
         }
     }
 }
@@ -192,10 +204,11 @@ impl ConfigFile {
                 None => message,
             })
         })?;
-        let config = raw.validate().map_err(corrupt)?;
+        let mut config = raw.validate().map_err(corrupt)?;
         let doc = original
             .parse::<DocumentMut>()
             .map_err(|e| corrupt(e.message().trim().to_owned()))?;
+        config.account_order = account_order(&doc);
         Ok(Self {
             path: path.to_path_buf(),
             original,
@@ -261,7 +274,10 @@ impl ConfigFile {
             .find(|a| a.uuid == account.uuid)
         {
             Some(existing) => *existing = account.clone(),
-            None => self.config.accounts.push(account.clone()),
+            None => {
+                self.config.accounts.push(account.clone());
+                self.config.account_order.push(account.uuid.clone());
+            }
         }
     }
 
@@ -384,6 +400,28 @@ impl ConfigFile {
         self.config.renew_expired_tokens = on;
     }
 
+    /// Sets whether the taskbar widget is shown, in `[preferences]`, keeping the comment after
+    /// an existing value.
+    pub fn set_taskbar_widget(&mut self, on: bool) {
+        set_bool(self.preferences(), "taskbar_widget", on);
+        self.config.taskbar_widget = on;
+    }
+
+    /// Sets whether the taskbar widget shows the account labels, in `[preferences]`, keeping
+    /// the comment after an existing value.
+    pub fn set_taskbar_widget_labels(&mut self, on: bool) {
+        set_bool(self.preferences(), "taskbar_widget_labels", on);
+        self.config.taskbar_widget_labels = on;
+    }
+
+    fn preferences(&mut self) -> &mut dyn TableLike {
+        self.doc
+            .entry("preferences")
+            .or_insert_with(|| Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut()
+            .expect("validated: preferences is a table")
+    }
+
     /// Stores a new desktop profile, `open_at_start` written out so it can be found by hand.
     pub fn add_desktop_profile(&mut self, entry: &DesktopProfileEntry) {
         let folder = entry.data_folder.to_string_lossy();
@@ -479,6 +517,19 @@ impl ConfigFile {
     }
 }
 
+/// The UUIDs of the accounts' tables in the order they come in the file (`toml` sorts them).
+fn account_order(doc: &DocumentMut) -> Vec<AccountUuid> {
+    doc.get("accounts")
+        .and_then(Item::as_table_like)
+        .map(|accounts| {
+            accounts
+                .iter()
+                .map(|(uuid, _)| AccountUuid::new(uuid))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The key of the desktop profiles' list.
 const DESKTOP_PROFILES: &str = "desktop_profiles";
 
@@ -572,6 +623,8 @@ struct RawDesktopProfile {
 struct RawPreferences {
     language: Option<String>,
     renew_expired_tokens: Option<bool>,
+    taskbar_widget: Option<bool>,
+    taskbar_widget_labels: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -704,6 +757,10 @@ impl RawConfig {
             ignored_link_answers,
             language,
             renew_expired_tokens: self.preferences.renew_expired_tokens.unwrap_or(true),
+            taskbar_widget: self.preferences.taskbar_widget.unwrap_or(true),
+            taskbar_widget_labels: self.preferences.taskbar_widget_labels.unwrap_or(false),
+            // Filled from the document, which keeps the file's order.
+            account_order: Vec::new(),
         })
     }
 }

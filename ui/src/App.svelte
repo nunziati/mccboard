@@ -52,7 +52,10 @@
     onUsageChanged,
     renewExpiredTokens,
     setRenewExpiredTokens,
+    setTaskbarWidget,
+    taskbarWidget,
     usage as loadUsage,
+    type TaskbarWidgetSettings,
     type UsageReport,
   } from './lib/usage'
 
@@ -87,6 +90,8 @@
   let usageReport = $state<UsageReport | null>(null)
   /** Whether mccboard lets Claude Code renew an expired token (config.toml). */
   let renewTokens = $state(true)
+  /** The taskbar widget's preferences (config.toml); null until loaded or off Windows. */
+  let widget = $state<TaskbarWidgetSettings | null>(null)
   /** The default desktop profile's account, from the desktop profiles section. */
   let defaultProfileAccount = $state<string | null>(null)
 
@@ -170,6 +175,7 @@
   async function reloadUsage() {
     try {
       renewTokens = await renewExpiredTokens()
+      widget = await taskbarWidget()
       usageReport = await loadUsage()
     } catch {
       usageReport = null
@@ -179,6 +185,14 @@
   function chooseRenewal(on: boolean) {
     renewTokens = on
     setRenewExpiredTokens(on).catch((error: unknown) => {
+      actionError = asCoreError(error)
+      reloadUsage()
+    })
+  }
+
+  function chooseWidget(change: { on?: boolean; labels?: boolean }) {
+    if (widget) widget = { ...widget, ...change }
+    setTaskbarWidget(change).catch((error: unknown) => {
       actionError = asCoreError(error)
       reloadUsage()
     })
@@ -408,6 +422,26 @@
         />
         {t('settings.renew_tokens')}
       </label>
+      {#if widget?.supported}
+        <label title={t('settings.taskbar_widget_hint')}>
+          <input
+            type="checkbox"
+            checked={widget.on}
+            onchange={(e) => chooseWidget({ on: (e.currentTarget as HTMLInputElement).checked })}
+          />
+          {t('settings.taskbar_widget')}
+        </label>
+        <label title={t('settings.taskbar_widget_labels_hint')}>
+          <input
+            type="checkbox"
+            checked={widget.labels}
+            disabled={!widget.on}
+            onchange={(e) =>
+              chooseWidget({ labels: (e.currentTarget as HTMLInputElement).checked })}
+          />
+          {t('settings.taskbar_widget_labels')}
+        </label>
+      {/if}
       <button onclick={reload} disabled={busy}>{t('instances.rescan')}</button>
     </div>
   </header>
