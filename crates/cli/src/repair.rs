@@ -13,7 +13,7 @@ pub struct RepairArgs {
     #[arg(value_name = "PATH")]
     paths: Vec<PathBuf>,
     /// Repair only this drift item, by the id `mccboard doctor` shows (`link:settings.json`,
-    /// `config:diffTool`, `plugin:review@tools`).
+    /// `private:downloads`, `config:diffTool`, `plugin:review@tools`).
     /// Needs exactly one PATH.
     #[arg(long, value_name = "ID")]
     item: Option<String>,
@@ -119,6 +119,18 @@ fn print_result(dir: &std::path::Path, result: &Result<RepairReport, Error>) {
                     RepairOutcome::Failed { reason } => {
                         println!("  FAILED  [{}] {reason}", item.id)
                     }
+                }
+                if item.logged_out {
+                    let folder = dir.display().to_string();
+                    let folder = if folder.contains(char::is_whitespace) {
+                        format!("\"{folder}\"")
+                    } else {
+                        folder
+                    };
+                    println!(
+                        "          This instance is now logged out: log it in again with \
+                         `mccboard login {folder}`."
+                    );
                 }
             }
             match report.drift.drift_count {

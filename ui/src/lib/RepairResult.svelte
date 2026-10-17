@@ -30,6 +30,8 @@
             <span class="bad">{t('repair.item_failed', { reason: item.outcome.reason })}</span>
           {:else if item.outcome.backup}
             <span class="muted">{t('repair.item_backup', { backup: item.outcome.backup })}</span>
+          {:else if item.logged_out}
+            <span class="warn">{t('repair.item_logged_out')}</span>
           {:else}
             <span class="muted">{t('repair.item_done')}</span>
           {/if}
@@ -63,5 +65,8 @@
   }
   .muted {
     color: var(--muted);
+  }
+  .warn {
+    color: var(--warn);
   }
 </style>

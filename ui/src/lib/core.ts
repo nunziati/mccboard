@@ -184,6 +184,8 @@ export type Problem =
   | { kind: 'link_chain'; target: string }
   | { kind: 'not_a_link' }
   | { kind: 'whole_folder_link'; target: string | null }
+  /** A private item that is a link to the primary's; `ignored_answer` when config.toml still answers "link" for it. */
+  | { kind: 'linked_private_item'; target: string; ignored_answer: boolean }
   | { kind: 'missing_launcher' }
   | { kind: 'stale_launcher'; found: string | null }
   /** A Global config key of `.claude.json` differs: the primary's value and this instance's (null when unset). */
@@ -198,6 +200,8 @@ export type Repair =
   | { action: 'backup_and_link'; target: string }
   | { action: 'migrate_skills'; skills: string[] }
   | { action: 'migrate_plugins' }
+  /** Remove the link to `target`, leaving the item absent; nothing is copied. */
+  | { action: 'unlink'; target: string }
   | { action: 'sync_launchers' }
   | { action: 'align_key'; key: string; value: unknown }
   /** `source` is null when mccboard can't tell how to add the marketplace. */
@@ -264,6 +268,8 @@ export interface RepairedItem {
   item: string
   repair: Repair
   outcome: RepairOutcome
+  /** The repair removed a `.credentials.json` link to the primary's: the instance must log in again. */
+  logged_out: boolean
 }
 
 export interface RepairReport {

@@ -40,6 +40,10 @@ fn write(path: impl AsRef<Path>, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
+fn mkdir(path: impl AsRef<Path>) {
+    fs::create_dir_all(path).unwrap();
+}
+
 fn read(path: impl AsRef<Path>) -> String {
     fs::read_to_string(path).unwrap()
 }
@@ -716,6 +720,188 @@ fn migration_keeps_the_synced_skills_of_a_folder_the_instance_had_to_itself() {
     // The old folder is left as it was.
     assert_eq!(read(own.join("review/SKILL.md")), "an old review");
     assert_eq!(read(own.join("synced/org_x/mine/SKILL.md")), "b's synced");
+    assert_eq!(report.drift.items, vec![]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unlinking a private item that is still a link to the primary's (#28)
+
+/// The issue's case: `downloads = "link"` stored from before it became private, and the link
+/// repair made back then still in place.
+fn linked_downloads(home: &TempHome, core: &Core, p: &Path) -> PathBuf {
+    write(p.join("downloads/file.zip"), "the primary's download");
+    let b = bare_linked(home, core, ".claude-b");
+    let config = home.config_text().unwrap();
+    home.write_config(&format!(
+        "{config}\n[sharing.items]\ndownloads = \"link\"\n"
+    ));
+    core.repair(&b, None).unwrap();
+    link(p.join("downloads"), b.join("downloads"));
+    b
+}
+
+#[test]
+fn a_private_item_linked_to_the_primary_is_unlinked_and_the_primary_kept() {
+    let (home, core, _env, p) = setup();
+    let b = linked_downloads(&home, &core, &p);
+    let config = home.config_text().unwrap();
+    let primary_before = snapshot(&p);
+    assert_eq!(
+        core.drift(&b)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["private:downloads"]
+    );
+
+    let report = core.repair(&b, None).unwrap();
+
+    assert_eq!(done(&report), vec!["private:downloads"]);
+    assert_eq!(
+        report.items[0].outcome,
+        RepairOutcome::Done { backup: None }
+    );
+    assert!(matches!(report.items[0].repair, Repair::Unlink { .. }));
+    // The link is gone and nothing takes its place: Claude Code recreates the folder.
+    assert!(fs::symlink_metadata(b.join("downloads")).is_err());
+    assert_eq!(report.drift.items, vec![]);
+    assert_eq!(core.doctor().unwrap().drift_count, 0);
+    // The primary's downloads, and everything else of the primary, untouched.
+    assert_eq!(read(p.join("downloads/file.zip")), "the primary's download");
+    assert_eq!(snapshot(&p), primary_before);
+    // The stale answer stays as written; nothing is backed up.
+    assert_eq!(home.config_text().unwrap(), config);
+    assert!(!home.path().join(".mccboard/state/backups").exists());
+
+    // Idempotent.
+    assert_eq!(core.repair(&b, None).unwrap().items, vec![]);
+}
+
+#[test]
+fn a_private_item_is_unlinked_by_its_id_alone() {
+    let (home, core, _env, p) = setup();
+    write(p.join("daemon-auth-cooldown"), "a's cooldown");
+    mkdir(p.join("scratch"));
+    let b = bare_linked(&home, &core, ".claude-b");
+    core.repair(&b, None).unwrap();
+    link(
+        p.join("daemon-auth-cooldown"),
+        b.join("daemon-auth-cooldown"),
+    );
+    link(p.join("scratch"), b.join("scratch"));
+
+    let report = core
+        .repair(&b, Some("private:daemon-auth-cooldown"))
+        .unwrap();
+
+    assert_eq!(done(&report), vec!["private:daemon-auth-cooldown"]);
+    assert!(fs::symlink_metadata(b.join("daemon-auth-cooldown")).is_err());
+    assert_eq!(read(p.join("daemon-auth-cooldown")), "a's cooldown");
+    assert!(is_link(&b.join("scratch")));
+    assert_eq!(
+        report
+            .drift
+            .items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["private:scratch"]
+    );
+}
+
+#[test]
+fn unlinking_credentials_linked_to_the_primary_leaves_the_instance_logged_out() {
+    let (home, core, _env, p) = setup();
+    home.primary()
+        .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
+    let primary_credentials = home.primary().credentials_bytes();
+    write(p.join("daemon-auth-cooldown"), "a's cooldown");
+    let b = bare_linked(&home, &core, ".claude-b");
+    core.repair(&b, None).unwrap();
+    fs::remove_file(b.join(".credentials.json")).unwrap();
+    link(p.join(".credentials.json"), b.join(".credentials.json"));
+    link(
+        p.join("daemon-auth-cooldown"),
+        b.join("daemon-auth-cooldown"),
+    );
+
+    let report = core.repair(&b, None).unwrap();
+
+    assert_eq!(
+        done(&report),
+        vec!["private:.credentials.json", "private:daemon-auth-cooldown"]
+    );
+    let logged_out: Vec<_> = report
+        .items
+        .iter()
+        .filter(|i| i.logged_out)
+        .map(|i| i.id.as_str())
+        .collect();
+    assert_eq!(logged_out, vec!["private:.credentials.json"]);
+    assert!(fs::symlink_metadata(b.join(".credentials.json")).is_err());
+    // The primary's credentials are exactly as they were.
+    assert_eq!(home.primary().credentials_bytes(), primary_credentials);
+    assert_eq!(report.drift.items, vec![]);
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("\"logged_out\":true"), "{json}");
+    assert!(!json.contains("FIXTURE"));
+}
+
+#[test]
+fn unlinking_a_private_file_needs_no_developer_mode() {
+    let (home, core, env, p) = setup();
+    write(p.join("daemon-auth-status.json"), "{}");
+    let b = bare_linked(&home, &core, ".claude-b");
+    core.repair(&b, None).unwrap();
+    link(
+        p.join("daemon-auth-status.json"),
+        b.join("daemon-auth-status.json"),
+    );
+    env.set_developer_mode(false);
+
+    let report = core.repair(&b, None).unwrap();
+
+    assert_eq!(done(&report), vec!["private:daemon-auth-status.json"]);
+    assert!(fs::symlink_metadata(b.join("daemon-auth-status.json")).is_err());
+    assert_eq!(read(p.join("daemon-auth-status.json")), "{}");
+}
+
+#[test]
+fn unlinking_a_private_item_refuses_while_claude_code_uses_the_instance() {
+    let (home, core, env, p) = setup();
+    let b = linked_downloads(&home, &core, &p);
+    env.add_process(claude(4242, dir(&b)));
+    let before = snapshot(&b);
+
+    let error = core.repair(&b, Some("private:downloads")).unwrap_err();
+
+    assert!(matches!(error, Error::InstanceInUse { .. }), "{error}");
+    assert_eq!(snapshot(&b), before);
+    assert!(is_link(&b.join("downloads")));
+
+    env.set_processes(vec![]);
+    assert_eq!(
+        done(&core.repair(&b, None).unwrap()),
+        vec!["private:downloads"]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_to_the_primary_private_folder_is_removed_and_its_target_kept() {
+    let (home, core, _env, p) = setup();
+    write(p.join("downloads/file.zip"), "the primary's download");
+    let b = bare_linked(&home, &core, ".claude-b");
+    core.repair(&b, None).unwrap();
+    junction::create(p.join("downloads"), b.join("downloads")).unwrap();
+
+    let report = core.repair(&b, None).unwrap();
+
+    assert_eq!(done(&report), vec!["private:downloads"]);
+    assert!(fs::symlink_metadata(b.join("downloads")).is_err());
+    assert_eq!(read(p.join("downloads/file.zip")), "the primary's download");
     assert_eq!(report.drift.items, vec![]);
 }
 

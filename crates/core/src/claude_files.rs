@@ -15,7 +15,7 @@ use crate::InstanceKind;
 /// File name of Claude Code's global config.
 const GLOBAL_CONFIG: &str = ".claude.json";
 /// File name of Claude Code's credentials, inside the config directory.
-const CREDENTIALS: &str = ".credentials.json";
+pub(crate) const CREDENTIALS: &str = ".credentials.json";
 
 /// Where an instance's global config lives: next to the config directory for the primary
 /// instance (`~/.claude.json`), inside it for any other (`$CLAUDE_CONFIG_DIR/.claude.json`).

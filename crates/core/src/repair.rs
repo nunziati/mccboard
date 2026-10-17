@@ -12,7 +12,9 @@
 //! is moved to a backup first. Aligned items are brought in line with the primary: only the
 //! listed keys of `.claude.json` are written, and plugins are installed with Claude Code's
 //! own `claude plugin` commands. Private items are never touched: repairs act only on the
-//! items the doctor reports, which are never private.
+//! items the doctor reports. The one exception is a private item that is a link to the
+//! primary's: only the link is removed, never what it leads to, and nothing is copied in its
+//! place.
 
 use std::fs;
 use std::io;
@@ -22,6 +24,7 @@ use serde::Serialize;
 
 use crate::alignment::{self, PluginRun};
 use crate::backup::Backup;
+use crate::claude_files::CREDENTIALS;
 use crate::config::{Config, ConfigFile};
 use crate::doctor::{self, DriftItem, InstanceDrift, Repair};
 use crate::instance::{self, InstanceKind};
@@ -61,6 +64,9 @@ pub struct RepairedItem {
     /// What the repair set out to do.
     pub repair: Repair,
     pub outcome: RepairOutcome,
+    /// Whether the repair left the instance logged out: its `.credentials.json` was a link to
+    /// the primary's and was removed. It must be logged in again (`mccboard login`).
+    pub logged_out: bool,
 }
 
 /// How repairing one item went.
@@ -153,8 +159,7 @@ fn run(
     if !config_dir.is_dir() {
         return Err(Error::NotADirectory { path: config_dir });
     }
-    let answers = &config.sharing;
-    let drift = doctor::drift(home, &config_dir, answers, launchers().as_ref());
+    let drift = doctor::drift(home, &config_dir, config, launchers().as_ref());
 
     let selected: Vec<&DriftItem> = match select {
         Select::All => drift.items.iter().collect(),
@@ -218,7 +223,11 @@ fn run(
                 reason: error.to_string(),
             },
         };
+        let logged_out = matches!(outcome, RepairOutcome::Done { .. })
+            && matches!(item.repair, Repair::Unlink { .. })
+            && item.item == CREDENTIALS;
         items.push(RepairedItem {
+            logged_out,
             id: item.id.clone(),
             item: item.item.clone(),
             repair: item.repair.clone(),
@@ -227,7 +236,7 @@ fn run(
     }
 
     Ok(RepairReport {
-        drift: doctor::drift(home, &config_dir, answers, launchers().as_ref()),
+        drift: doctor::drift(home, &config_dir, config, launchers().as_ref()),
         config_dir,
         items,
     })
@@ -246,9 +255,10 @@ pub(crate) fn needs_file_link(repair: &Repair) -> bool {
         Repair::CreateLink { target }
         | Repair::ReplaceLink { target }
         | Repair::BackupAndLink { target } => links::is_file_link(target),
-        // Skills are folders; plugins get no link.
+        // Skills are folders; plugins get no link; removing a link makes none.
         Repair::MigrateSkills { .. }
         | Repair::MigratePlugins
+        | Repair::Unlink { .. }
         | Repair::SyncLaunchers
         | Repair::AlignKey { .. }
         | Repair::AddMarketplace { .. }
@@ -306,6 +316,12 @@ fn apply(
             expect(at, links::is_link(at), "a link")?;
             links::remove_link(at)?;
             fs::create_dir(at)?;
+            Ok(None)
+        }
+        Repair::Unlink { .. } => {
+            // Only the link goes; the primary's item it led to stays as it is.
+            expect(at, links::is_link(at), "a link")?;
+            links::remove_link(at)?;
             Ok(None)
         }
         Repair::SyncLaunchers => {
