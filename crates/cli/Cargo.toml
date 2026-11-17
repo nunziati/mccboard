@@ -16,7 +16,20 @@ anyhow.workspace = true
 clap.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
+# The TUI (ADR 0010): ratatui draws, crossterm drives the terminal (Windows terminals too).
+# ratatui's crossterm backend uses this same crossterm. Without the calendar widget and the
+# macros, which the TUI doesn't use.
+ratatui = { version = "0.30.2", default-features = false, features = [
+    "crossterm",
+    "layout-cache",
+    "underline-color",
+] }
+crossterm = "0.29.0"
+# The TUI's language when config.toml chooses none, as in the app.
+sys-locale = "0.3"
 
 [dev-dependencies]
+# The TUI's tests run the dashboard on temporary homes through the fake environment port.
+mccboard-core = { workspace = true, features = ["testing"] }
 serde_json.workspace = true
 tempfile.workspace = true

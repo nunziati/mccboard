@@ -3,7 +3,9 @@
 //! clicks.
 //!
 //! - **Columns**: one per account, in `config.toml` order. Each has two rows, the session
-//!   window on top and the weekly window below, and each row a bar and a time to reset.
+//!   window on top and the weekly window below, and each row a bar and a time to reset. The
+//!   model windows have rows too, after those two: the taskbar has no room for them, the
+//!   terminal dashboard shows them.
 //! - **Bar**: [`SEGMENTS`] segments, one filled for each 10% of utilization (at least one above
 //!   0%), and the pace: how much of the window's time has passed. No pace for an idle window
 //!   (no reset time: a session window nobody used for 5 hours).
@@ -17,8 +19,9 @@
 //!   taskbar, and the taskbar's own text, dim and track colors ([`TaskbarTheme::palette`]).
 //! - **Tooltip**: every account's windows with their resets as clock times, the model
 //!   windows, and the age of a stale reading.
-//! - **Redraw**: [`TaskbarWidget::redraw_in`] says when a text changes next: every second
-//!   while a time to reset is in its last minute, else at the next minute.
+//! - **Redraw**: [`TaskbarWidget::redraw_in`] says when a text changes next, model rows
+//!   included: every second while a time to reset is in its last minute, else at the next
+//!   minute.
 
 mod text;
 
@@ -100,6 +103,17 @@ pub struct WidgetColumn {
     pub session: WidgetRow,
     /// The weekly window's row.
     pub weekly: WidgetRow,
+    /// The model windows' rows, in the reading's order. The taskbar draws only the two rows
+    /// above. A front end with room for every window draws these too.
+    pub models: Vec<WidgetModelRow>,
+}
+
+/// A model window's row: a 7-day window that applies to one model.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WidgetModelRow {
+    /// The model, as the endpoint names it.
+    pub model: String,
+    pub row: WidgetRow,
 }
 
 impl WidgetColumn {
@@ -303,12 +317,18 @@ pub(crate) fn view(
         .map(|usage| texts.account_line(usage))
         .collect::<Vec<_>>()
         .join("\n");
+    // Model rows show a time to reset too: their resets count.
     let redraw_in = accounts
         .iter()
         .filter_map(|usage| usage.at(now).reading)
-        .flat_map(|reading| [reading.session, reading.weekly])
+        .flat_map(|reading| {
+            let models = reading.models.into_iter().map(|model| model.resets_at);
+            [reading.session, reading.weekly]
+                .into_iter()
+                .map(|window| window.and_then(|w| w.resets_at))
+                .chain(models)
+        })
         .flatten()
-        .filter_map(|window| window.resets_at)
         .map(|at| next_change(at, now))
         .fold(REDRAW_AT_MOST_EVERY, Duration::min);
     TaskbarWidget {
@@ -344,6 +364,21 @@ fn column(usage: &AccountUsage, now: Timestamp) -> WidgetColumn {
         Some(reading) => (reading.session, reading.weekly),
         None => (None, None),
     };
+    let models = reading
+        .iter()
+        .flat_map(|reading| &reading.models)
+        .map(|model| WidgetModelRow {
+            model: model.model.clone(),
+            row: row(
+                Some(UsageWindow {
+                    utilization: model.utilization,
+                    resets_at: model.resets_at,
+                }),
+                WEEKLY_LENGTH,
+                now,
+            ),
+        })
+        .collect();
     let color = &usage.account.color;
     WidgetColumn {
         account: usage.account.uuid.clone(),
@@ -353,6 +388,7 @@ fn column(usage: &AccountUsage, now: Timestamp) -> WidgetColumn {
         state,
         session: row(session, SESSION_LENGTH, now),
         weekly: row(weekly, WEEKLY_LENGTH, now),
+        models,
     }
 }
 

@@ -113,7 +113,7 @@ pub use session_guard::{ClaudeProcess, ProcessConfigDir};
 pub use sharing::{SharingAnswer, SharingQuestion};
 pub use taskbar_widget::{
     AccountInk, ColumnState, FADED_OPACITY, ResetPart, SEGMENTS, TaskbarTheme, TaskbarWidget,
-    TimeToReset, WidgetColumn, WidgetPalette, WidgetRow,
+    TimeToReset, WidgetColumn, WidgetModelRow, WidgetPalette, WidgetRow,
 };
 pub use tray::profiles::{TrayProfile, TrayProfiles};
 pub use tray::{

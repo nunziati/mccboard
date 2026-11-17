@@ -7,6 +7,7 @@ mod doctor;
 mod remove;
 mod repair;
 mod settings;
+mod tui;
 mod usage;
 
 use std::path::{Path, PathBuf};
@@ -121,6 +122,10 @@ enum Command {
         #[command(subcommand)]
         command: desktop::DesktopCommand,
     },
+    /// Show each account's usage windows and each instance's state on one screen, refreshed
+    /// every minute within the rate limits. Needs a terminal: without one, use `mccboard
+    /// usage` and `mccboard list`.
+    Dashboard,
 }
 
 #[derive(Subcommand)]
@@ -197,6 +202,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Repair(args) => repair::repair(&core, args)?,
         Command::Remove(args) => remove::remove(&core, args)?,
         Command::Desktop { command } => desktop::run(&core, command)?,
+        Command::Dashboard => tui::dashboard(&core)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {
