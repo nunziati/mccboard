@@ -20,7 +20,7 @@ mccboard comes in two forms: (1) the desktop app, with the tray icon, the taskba
 |---|---|---|
 | A Linux server, or any Linux terminal (x86_64, aarch64) | The CLI | [One command](#in-a-terminal-on-linux) |
 | A Windows desktop | The app, which brings the CLI | [An installer](#the-desktop-app-on-windows) |
-| A Linux desktop | The app, and the CLI on its own | [A .deb, .rpm or AppImage](#the-desktop-app-on-linux) |
+| A Linux desktop (x86_64) | The app, and the CLI on its own | [A .deb, .rpm or AppImage](#the-desktop-app-on-linux) |
 
 The CLI also builds [from source](#the-cli-from-source) on Linux and Windows.
 
@@ -45,30 +45,35 @@ Running the same command again updates mccboard. Options go after `sh -s --`, as
 - `MCCBOARD_INSTALL_DIR` installs in another folder;
 - `MCCBOARD_DOWNLOAD_URL` downloads from a mirror, together with `MCCBOARD_VERSION`.
 
-The script downloads from GitHub Releases. Pushing a tag `v<version>` equal to the workspace version builds the CLI as static Linux binaries and publishes them with their checksums (`.github/workflows/release.yml`), and a version with a pre-release part, such as `0.2.0-rc.1`, becomes a pre-release, which the script installs only when `MCCBOARD_VERSION` names it.
-
 ### The desktop app on Windows
 
-No release holds the app yet, and for now its installers come from CI or from a build of your own.
+Download the setup `.exe` or the `.msi` from the [latest release](https://github.com/nunziati/mccboard/releases/latest) and run it. Neither installer is signed, and when Windows SmartScreen stops one, **More info** and then **Run anyway** let it start. The installer also brings the `mccboard` CLI, which the app copies next to the launchers in `~\.mccboard\bin`. On Windows, linked items need Developer Mode, which mccboard checks for and explains how to turn on ([ADR 0006](docs/adr/0006-windows-developer-mode.md)).
 
-- **From CI.** Every push to `main` builds them, and the run keeps them as the artifact `mccboard-windows`. Open the latest run on `main` of the [CI workflow](https://github.com/nunziati/mccboard/actions/workflows/ci.yml), download the artifact (GitHub asks you to sign in) and unzip it.
-- **From source,** with Rust (stable) and Node.js 22+, in PowerShell:
+A version not released yet comes from CI, which keeps the installers of every push to `main` as the artifact `mccboard-windows` (in the latest run on `main` of the [CI workflow](https://github.com/nunziati/mccboard/actions/workflows/ci.yml), where GitHub asks you to sign in). It also comes from a build of your own, with Rust (stable) and Node.js 22+, in PowerShell:
 
-  ```powershell
-  git clone https://github.com/nunziati/mccboard
-  cd mccboard\ui
-  npm ci
-  $env:TAURI_APP_PATH = '..\src-tauri'
-  npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json
-  ```
+```powershell
+git clone https://github.com/nunziati/mccboard
+cd mccboard\ui
+npm ci
+$env:TAURI_APP_PATH = '..\src-tauri'
+npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json
+```
 
-  The installers land in `target\release\bundle\nsis\` and `target\release\bundle\msi\`, at the root of the clone.
-
-Run the setup `.exe` or the `.msi`. Neither installer is signed, and when Windows SmartScreen stops the one downloaded from CI, **More info** and then **Run anyway** let it start. The installer also brings the `mccboard` CLI, which the app copies next to the launchers in `~\.mccboard\bin`. On Windows, linked items need Developer Mode, which mccboard checks for and explains how to turn on ([ADR 0006](docs/adr/0006-windows-developer-mode.md)).
+The installers then sit in `target\release\bundle\nsis\` and `target\release\bundle\msi\`, at the root of the clone.
 
 ### The desktop app on Linux
 
-The same two ways give the Linux packages: a `.deb`, an `.rpm` and an AppImage. CI keeps them as the artifact `mccboard-linux`, and a build of your own needs Rust (stable), Node.js 22+ and the Tauri system packages, listed for Debian and Ubuntu in [Build and test](#build-and-test):
+The [latest release](https://github.com/nunziati/mccboard/releases/latest) holds the app for x86_64 as a `.deb`, an `.rpm` and an AppImage. Download the one for your distribution and install it from the folder where it landed, or run the AppImage, which needs no install:
+
+```sh
+sudo apt install ./mccboard_*_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./mccboard-*.x86_64.rpm     # Fedora
+chmod +x mccboard_*_amd64.AppImage && ./mccboard_*_amd64.AppImage
+```
+
+On Linux the app has the tray icon and the Instances window, while the taskbar widget and the desktop profiles need Windows. The packages hold the app alone, and the `mccboard` command comes from the [install script](#in-a-terminal-on-linux) or from source.
+
+As on Windows, a version not released yet comes from CI, as the artifact `mccboard-linux`, or from a build of your own, which needs Rust (stable), Node.js 22+ and the Tauri system packages, listed for Debian and Ubuntu in [Build and test](#build-and-test):
 
 ```sh
 git clone https://github.com/nunziati/mccboard
@@ -77,15 +82,7 @@ npm ci
 TAURI_APP_PATH=../src-tauri npm run tauri build
 ```
 
-The packages then sit in `target/release/bundle/`, with the same folders as in the unzipped artifact. From that folder, install the package of your distribution, or run the AppImage, which needs no install:
-
-```sh
-sudo apt install ./deb/mccboard_*.deb      # Debian, Ubuntu
-sudo dnf install ./rpm/mccboard-*.rpm      # Fedora
-chmod +x appimage/mccboard_*.AppImage && ./appimage/mccboard_*.AppImage
-```
-
-On Linux the app has the tray icon and the Instances window, while the taskbar widget and the desktop profiles need Windows. The packages hold the app alone, and the `mccboard` command comes from the [install script](#in-a-terminal-on-linux) or from source.
+The packages then sit in the folders `deb`, `rpm` and `appimage` of `target/release/bundle/`, the same folders as in the unzipped artifact.
 
 ### The CLI from source
 
@@ -97,6 +94,10 @@ cargo install --locked --path crates/shim    # on Windows only
 ```
 
 On Windows the launchers are copies of the shim, which mccboard looks for next to its own program ([ADR 0007](docs/adr/0007-windows-launchers-are-a-shim.md)).
+
+### Releases
+
+Pushing a tag `v<version>` equal to the workspace version publishes a GitHub Release (`.github/workflows/release.yml`) with (1) the CLI as static Linux binaries for x86_64 and aarch64, (2) the Windows installers of the app, and (3) its Linux packages for x86_64. Next to each file, the release holds its SHA-256 in a file with the same name and `.sha256` at the end, which `sha256sum -c` checks. A version with a pre-release part, such as `0.2.0-rc.1`, becomes a pre-release, which the install script installs only when `MCCBOARD_VERSION` names it. Its app comes without the `.msi` and the `.rpm`, because neither format accepts such a version.
 
 ## On a server or in a terminal
 
