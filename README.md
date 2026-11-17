@@ -31,7 +31,7 @@ Options go after `sh -s --`, as in `curl -fsSL …/install.sh | sh -s -- --no-se
 
 `mccboard setup` goes through eight steps, each showing what is already done:
 1. Claude Code, installed with its official installer once you confirm;
-2. the instances to register;
+2. the instances to register, or the login of the primary instance where Claude Code has never run;
 3. the accounts to add, each with its login in the same terminal;
 4. the unknown items of the primary instance, to link or keep private;
 5. the drift of each instance, repaired once you confirm;
