@@ -16,7 +16,7 @@ Personal project of Giacomo.
 - **One app on the main machine**; remote machines optional, over agentless SSH (ADR 0001).
 - **Cargo workspace** (ADR 0004):
   - `crates/core`: domain, data sources, setup operations, token rules. No Tauri dependency.
-  - `crates/cli`: command-line front end over the core.
+  - `crates/cli`: command-line front end over the core, with the terminal UI (`mccboard setup`, `mccboard dashboard`) for servers and terminal users (ADR 0010).
   - `crates/shim`: the small program a Windows launcher is a copy of (ADR 0007). std only, plus the Windows console API.
   - `src-tauri`: thin binding of the core to Tauri commands, tray and windows.
   - `ui/`: Svelte.
