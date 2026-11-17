@@ -161,7 +161,11 @@ jobs:
       - name: Publish the archives and their checksums
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* --title "mccboard $VERSION" --verify-tag --generate-notes
+          # A version with a pre-release part (0.2.0-rc.1) is published as a pre-release, which
+          # releases/latest, and with it install.sh, never picks.
+          set -- "$GITHUB_REF_NAME" dist/* --title "mccboard $VERSION" --verify-tag --generate-notes
+          case "$VERSION" in *-*) set -- "$@" --prerelease ;; esac
+          gh release create "$@"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
