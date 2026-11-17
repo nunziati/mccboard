@@ -15,6 +15,7 @@ mod atomic_file;
 mod background;
 mod backup;
 mod claude_cli;
+mod claude_code;
 mod claude_files;
 mod config;
 mod desktop_app;
@@ -67,6 +68,9 @@ pub use account::{
 };
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
+pub use claude_code::{
+    CLAUDE_CODE_INSTALL_COMMAND, CLAUDE_CODE_WINDOWS_INSTALL_COMMAND, ClaudeCode,
+};
 pub use desktop_identity::{
     AppArgs, OPEN_PROFILE_ARG, RunningProfile, Saved, Shortcut, ShortcutSync, ShortcutWarning,
     ShortcutsNotSynced, WindowIdentity, app_user_model_id, command_line, open_profile_args,
@@ -86,8 +90,9 @@ pub use desktop_tray::{
 pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
-    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
-    LoginTerminal, OsKind, RenewalExit, RenewalInvocation, SystemEnvironment,
+    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, InstallerExit, InstallerInvocation,
+    LoginExit, LoginInvocation, LoginTerminal, OsKind, RenewalExit, RenewalInvocation,
+    SystemEnvironment,
 };
 pub use error::Error;
 pub use icon::{

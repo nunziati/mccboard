@@ -1,6 +1,6 @@
 //! Test support: the fake environment port. Enabled by the `testing` feature.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AccessToken, ClaudeInvocation, ClaudeProcess, ClaudeRun, DesktopLaunch, DesktopPackage,
-    EndpointReply, Environment, Image, InstanceKind, LoginExit, LoginInvocation, OsKind,
-    ProcessListing, RenewalExit, RenewalInvocation, Shortcut,
+    EndpointReply, Environment, Image, InstallerExit, InstallerInvocation, InstanceKind, LoginExit,
+    LoginInvocation, OsKind, ProcessListing, RenewalExit, RenewalInvocation, Shortcut,
 };
 
 /// The first pid a fake launch of the desktop app returns; each launch gets the next one.
@@ -28,11 +28,15 @@ pub const FAKE_MCCBOARD_APP: &str = r"C:\Program Files\mccboard\mccboard.exe";
 /// The launcher shim [`FakeEnvironment`] ships unless told otherwise.
 pub const FAKE_LAUNCHER_SHIM: &[u8] = b"MZ fake mccboard-shim.exe, version 1";
 
+/// What a fake `claude --version` prints unless told otherwise.
+pub const FAKE_CLAUDE_VERSION: &str = "2.1.301 (Claude Code)";
+
 /// A scriptable [`Environment`] for tests. Clones share state, so a test can keep a handle
 /// after giving one to [`crate::Core::new`] and keep steering it.
 ///
 /// It starts as a Linux machine with no login shell and an empty user PATH, whatever OS the
-/// tests run on, shipping [`FAKE_LAUNCHER_SHIM`] as the launcher shim.
+/// tests run on, shipping [`FAKE_LAUNCHER_SHIM`] as the launcher shim. Its PATH holds no
+/// program: Claude Code, `curl` and `bash` are missing until a test puts them there.
 #[derive(Debug, Clone)]
 pub struct FakeEnvironment {
     state: Arc<Mutex<State>>,
@@ -72,6 +76,13 @@ struct State {
     login_handler: LoginHandler,
     renewal_invocations: Vec<RenewalInvocation>,
     renewal_handler: RenewalHandler,
+    /// The PATH: each program by name.
+    programs: BTreeMap<String, PathBuf>,
+    /// The program of each `--version` run.
+    version_runs: Vec<PathBuf>,
+    version_handler: VersionHandler,
+    installer_invocations: Vec<InstallerInvocation>,
+    installer_handler: InstallerHandler,
 }
 
 type HandlerFn = dyn Fn(&ClaudeInvocation) -> io::Result<ClaudeRun> + Send + Sync;
@@ -95,6 +106,30 @@ struct RenewalHandler(Arc<RenewalFn>);
 impl std::fmt::Debug for RenewalHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("RenewalHandler")
+    }
+}
+
+type VersionFn = dyn Fn(&Path) -> io::Result<ClaudeRun> + Send + Sync;
+
+/// What a fake `claude --version` does. By default it prints [`FAKE_CLAUDE_VERSION`].
+#[derive(Clone)]
+struct VersionHandler(Arc<VersionFn>);
+
+impl std::fmt::Debug for VersionHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VersionHandler")
+    }
+}
+
+type InstallerFn = dyn Fn(&InstallerInvocation) -> io::Result<InstallerExit> + Send + Sync;
+
+/// What Claude Code's fake installer does. By default it exits 0 and installs nothing.
+#[derive(Clone)]
+struct InstallerHandler(Arc<InstallerFn>);
+
+impl std::fmt::Debug for InstallerHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InstallerHandler")
     }
 }
 
@@ -160,6 +195,18 @@ impl FakeEnvironment {
                 renewal_invocations: Vec::new(),
                 renewal_handler: RenewalHandler(Arc::new(|_| {
                     Ok(RenewalExit { exit_code: Some(0) })
+                })),
+                programs: BTreeMap::new(),
+                version_runs: Vec::new(),
+                version_handler: VersionHandler(Arc::new(|_| {
+                    Ok(ClaudeRun::ok(&format!("{FAKE_CLAUDE_VERSION}\n")))
+                })),
+                installer_invocations: Vec::new(),
+                installer_handler: InstallerHandler(Arc::new(|_| {
+                    Ok(InstallerExit {
+                        download_exit_code: Some(0),
+                        exit_code: Some(0),
+                    })
                 })),
             })),
         }
@@ -416,6 +463,47 @@ impl FakeEnvironment {
         self.state().renewal_invocations.clone()
     }
 
+    /// Puts the program `name` (`claude`, `curl`, `bash`) on the fake PATH as `path`, or takes
+    /// it off with `None`. The path need not exist: what the fake runs is scripted.
+    pub fn set_program(&self, name: &str, path: Option<&Path>) {
+        let mut state = self.state();
+        match path {
+            Some(path) => state.programs.insert(name.to_owned(), path.to_path_buf()),
+            None => state.programs.remove(name),
+        };
+    }
+
+    /// Scripts what `claude --version` does: `handler` gets the program and returns how the
+    /// run ended, or an error as when it can't be started or hangs (`TimedOut`). Without it,
+    /// it prints [`FAKE_CLAUDE_VERSION`] and exits 0.
+    pub fn on_claude_version(
+        &self,
+        handler: impl Fn(&Path) -> io::Result<ClaudeRun> + Send + Sync + 'static,
+    ) {
+        self.state().version_handler = VersionHandler(Arc::new(handler));
+    }
+
+    /// The program of every `--version` run so far, in order.
+    pub fn claude_version_runs(&self) -> Vec<PathBuf> {
+        self.state().version_runs.clone()
+    }
+
+    /// Scripts what Claude Code's official installer does: `handler` gets each run and returns
+    /// how it ended, or an error as when `curl` or `bash` can't be started. It may write files,
+    /// playing the installer (`~/.local/bin/claude` in the invocation's home) or put `claude`
+    /// on the PATH. Without it, the installer exits 0 and installs nothing.
+    pub fn on_claude_install(
+        &self,
+        handler: impl Fn(&InstallerInvocation) -> io::Result<InstallerExit> + Send + Sync + 'static,
+    ) {
+        self.state().installer_handler = InstallerHandler(Arc::new(handler));
+    }
+
+    /// Every run of Claude Code's official installer so far, in order.
+    pub fn installer_invocations(&self) -> Vec<InstallerInvocation> {
+        self.state().installer_invocations.clone()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
@@ -594,5 +682,27 @@ impl Environment for FakeEnvironment {
             state.renewal_handler.clone()
         };
         (handler.0)(renewal)
+    }
+
+    fn find_program(&self, name: &str) -> Option<PathBuf> {
+        self.state().programs.get(name).cloned()
+    }
+
+    fn claude_version(&self, program: &Path) -> io::Result<ClaudeRun> {
+        let handler = {
+            let mut state = self.state();
+            state.version_runs.push(program.to_path_buf());
+            state.version_handler.clone()
+        };
+        (handler.0)(program)
+    }
+
+    fn install_claude_code(&self, install: &InstallerInvocation) -> io::Result<InstallerExit> {
+        let handler = {
+            let mut state = self.state();
+            state.installer_invocations.push(install.clone());
+            state.installer_handler.clone()
+        };
+        (handler.0)(install)
     }
 }

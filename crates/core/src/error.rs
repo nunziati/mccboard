@@ -306,6 +306,44 @@ pub enum Error {
 
     #[error("cannot write the Start-menu shortcut {}: {reason}", path.display())]
     ShortcutNotWritten { path: PathBuf, reason: String },
+
+    /// On Windows Claude Code's official installer is a PowerShell command, which the user
+    /// runs ([`crate::CLAUDE_CODE_WINDOWS_INSTALL_COMMAND`], also in [`Error::detail`]).
+    #[error(
+        "on Windows Claude Code's official installer runs in PowerShell: run `{}` there, then \
+         open a new terminal",
+        crate::CLAUDE_CODE_WINDOWS_INSTALL_COMMAND
+    )]
+    ClaudeInstallerOnWindows,
+
+    #[error(
+        "Claude Code's official installer needs {program}, which isn't on the PATH: install \
+         it, then try again. Nothing was run"
+    )]
+    ClaudeInstallerNeedsProgram { program: String },
+
+    #[error("cannot run Claude Code's official installer: {reason}")]
+    ClaudeInstallerNotStarted { reason: String },
+
+    #[error(
+        "Claude Code's official installer couldn't be downloaded from claude.ai (curl ended \
+         with {}): check the connection, then try again",
+        describe_exit(*exit_code)
+    )]
+    ClaudeInstallerNotDownloaded { exit_code: Option<i32> },
+
+    #[error(
+        "Claude Code's official installer failed ({}): its own messages above say why",
+        describe_exit(*exit_code)
+    )]
+    ClaudeInstallerFailed { exit_code: Option<i32> },
+}
+
+fn describe_exit(exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => format!("exit code {code}"),
+        None => "no exit code: it was stopped".to_owned(),
+    }
 }
 
 fn describe_desktop_processes(processes: &[DesktopProcess]) -> String {
@@ -382,6 +420,11 @@ impl Error {
             Error::StartMenuNotFound { .. } => "start_menu_not_found",
             Error::AppProgramNotFound { .. } => "app_program_not_found",
             Error::ShortcutNotWritten { .. } => "shortcut_not_written",
+            Error::ClaudeInstallerOnWindows => "claude_installer_on_windows",
+            Error::ClaudeInstallerNeedsProgram { .. } => "claude_installer_needs_program",
+            Error::ClaudeInstallerNotStarted { .. } => "claude_installer_not_started",
+            Error::ClaudeInstallerNotDownloaded { .. } => "claude_installer_not_downloaded",
+            Error::ClaudeInstallerFailed { .. } => "claude_installer_failed",
         }
     }
 
@@ -443,10 +486,16 @@ impl Error {
     /// error), for [`Error::LoginNotOpened`] and [`Error::DesktopAppNotOpened`], and why a
     /// Start-menu shortcut couldn't be written, for the shortcut errors; the label of
     /// the account the folder belongs to, for [`Error::FolderHasAnotherAccount`]; the
-    /// account's label, for the desktop profile errors about an account.
+    /// account's label, for the desktop profile errors about an account. For Claude Code's
+    /// installer: the PowerShell command to run ([`Error::ClaudeInstallerOnWindows`]), the
+    /// program missing ([`Error::ClaudeInstallerNeedsProgram`]) and why it couldn't start
+    /// ([`Error::ClaudeInstallerNotStarted`]).
     pub fn detail(&self) -> Option<&str> {
         match self {
             Error::ConfigCorrupt { detail, .. } => Some(detail),
+            Error::ClaudeInstallerOnWindows => Some(crate::CLAUDE_CODE_WINDOWS_INSTALL_COMMAND),
+            Error::ClaudeInstallerNeedsProgram { program } => Some(program),
+            Error::ClaudeInstallerNotStarted { reason } => Some(reason),
             Error::FolderHasAnotherAccount { label, .. }
             | Error::NoLocalInstance { label }
             | Error::DesktopProfileExists { label }

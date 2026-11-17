@@ -1,6 +1,7 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod add;
+mod claude_code;
 mod desktop;
 mod doctor;
 mod remove;
@@ -34,6 +35,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Claude Code itself: whether it is installed, and its official installer.
+    ClaudeCode {
+        #[command(subcommand)]
+        command: claude_code::ClaudeCodeCommand,
+    },
     /// List instance candidates in the home: ~/.claude and ~/.claude-*. Registers nothing.
     Scan {
         /// Print machine-readable JSON.
@@ -185,6 +191,7 @@ fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Add(args) => add::add(&core, args)?,
         Command::Login(args) => add::login(&core, args)?,
+        Command::ClaudeCode { command } => claude_code::run(&core, command)?,
         Command::Doctor(args) => doctor::doctor(&core, args)?,
         Command::Share(args) => doctor::share(&core, args)?,
         Command::Repair(args) => repair::repair(&core, args)?,

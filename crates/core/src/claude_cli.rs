@@ -11,6 +11,9 @@
 //!
 //! The token renewal (`claude mcp get` with a missing name) runs hidden like a background run,
 //! but in a folder of mccboard's own and with its output discarded.
+//!
+//! Outside any instance, `claude --version` runs hidden too, and Claude Code's official
+//! installer (`curl … | bash`) runs in the current terminal, as the login does.
 
 use std::env;
 use std::ffi::OsString;
@@ -22,8 +25,8 @@ use std::time::{Duration, Instant};
 
 use crate::instance::InstanceKind;
 use crate::{
-    ClaudeInvocation, ClaudeRun, LoginExit, LoginInvocation, LoginTerminal, RenewalExit,
-    RenewalInvocation,
+    ClaudeInvocation, ClaudeRun, InstallerExit, InstallerInvocation, LoginExit, LoginInvocation,
+    LoginTerminal, RenewalExit, RenewalInvocation,
 };
 
 /// Variables that make Claude Code use another login than the instance's.
@@ -56,6 +59,16 @@ fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<Claude
     for name in LOGIN_OVERRIDES {
         command.env_remove(name);
     }
+    output(
+        &mut command,
+        TIMEOUT,
+        "Claude Code didn't finish within 10 minutes",
+    )
+}
+
+/// Starts `command`, whose output is piped, and waits for it to exit, keeping what it printed.
+/// When it runs longer than `timeout` it is stopped, and the error says `too_slow`.
+fn output(command: &mut Command, timeout: Duration, too_slow: &str) -> io::Result<ClaudeRun> {
     let mut child = command.spawn()?;
 
     let stdout = child.stdout.take().map(drain);
@@ -65,13 +78,10 @@ fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<Claude
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started.elapsed() > TIMEOUT {
+        if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Claude Code didn't finish within 10 minutes",
-            ));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, too_slow));
         }
         thread::sleep(Duration::from_millis(50));
     };
@@ -93,6 +103,72 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
         let mut bytes = Vec::new();
         let _ = pipe.read_to_end(&mut bytes);
         String::from_utf8_lossy(&bytes).into_owned()
+    })
+}
+
+/// The program `name` on the PATH, found as `claude` is for the login and background runs.
+pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
+    Lookup::from_env().find(name)
+}
+
+/// `claude --version` answers at once. A few seconds cover a slow disk.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs `<program> --version` in the background and keeps what it printed.
+pub(crate) fn version(program: &Path) -> io::Result<ClaudeRun> {
+    version_with(program, VERSION_TIMEOUT)
+}
+
+fn version_with(program: &Path, timeout: Duration) -> io::Result<ClaudeRun> {
+    let mut command = crate::background::command(program);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    output(
+        &mut command,
+        timeout,
+        "Claude Code didn't print its version in time",
+    )
+}
+
+/// What `curl` gets in the official installer's command: fail on an HTTP error, print only
+/// errors, follow redirects, and the address of the installer script. The command shown to
+/// users ([`crate::CLAUDE_CODE_INSTALL_COMMAND`]) is the same.
+const INSTALLER_DOWNLOAD_ARGS: &[&str] = &["-fsSL", "https://claude.ai/install.sh"];
+
+/// Runs `curl … | bash` as two children joined by a pipe, and keeps each exit code: `curl`
+/// failing leaves `bash` an empty script, which it runs with success. Both share mccboard's
+/// terminal. `bash`'s output goes to mccboard's standard error, as the login's does.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn install(invocation: &InstallerInvocation) -> io::Result<InstallerExit> {
+    let mut curl = Command::new(&invocation.curl)
+        .args(INSTALLER_DOWNLOAD_ARGS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let script = curl
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("curl's output wasn't piped"))?;
+    let mut command = Command::new(&invocation.bash);
+    command
+        .stdin(script)
+        .stdout(io::stderr())
+        .env(HOME_VAR, &invocation.home);
+    let bash = command.spawn();
+    // The command held the pipe's other end. Once it is dropped the pipe is bash's alone, and a
+    // bash that stops early can't leave curl writing into a pipe nobody reads.
+    drop(command);
+    let installed = bash.and_then(|mut bash| bash.wait());
+    if installed.is_err() {
+        let _ = curl.kill();
+    }
+    let downloaded = curl.wait()?;
+    Ok(InstallerExit {
+        download_exit_code: downloaded.code(),
+        exit_code: installed?.code(),
     })
 }
 
@@ -166,14 +242,16 @@ impl Lookup {
     }
 }
 
+/// Whether `path` is a file that can be run: on Unix, one with an execute bit.
 #[cfg(unix)]
-fn is_program(path: &Path) -> bool {
+pub(crate) fn is_program(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
+/// Whether `path` is a file that can be run: on Windows, any file.
 #[cfg(not(unix))]
-fn is_program(path: &Path) -> bool {
+pub(crate) fn is_program(path: &Path) -> bool {
     path.is_file()
 }
 
@@ -724,6 +802,231 @@ mod tests {
             &lookup(&bin, Some("no-such-terminal")),
         )
         .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    /// A home with a `bin` folder, the temporary PATH, and an `out` folder where fake
+    /// programs write what they saw.
+    fn bin_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let [bin, out] = ["bin", "out"].map(|name| {
+            let path = home.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            path
+        });
+        (home, bin, out)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_version_run_starts_claude_found_on_the_path_with_version_and_keeps_its_output() {
+        let (_home, bin, out) = bin_home();
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/claude'\n\
+                 echo '2.1.301 (Claude Code)'\necho 'a warning' >&2\n",
+                out.display()
+            ),
+        );
+        let claude = lookup(&bin, None).find("claude").unwrap();
+
+        let run = version_with(&claude, VERSION_TIMEOUT).unwrap();
+
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.stdout, "2.1.301 (Claude Code)\n");
+        assert_eq!(run.stderr, "a warning\n");
+        let args = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(args, "--version\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_version_run_that_hangs_is_stopped_and_times_out() {
+        let (_home, bin, _out) = bin_home();
+        write_program(&bin.join("claude"), "#!/bin/sh\nexec sleep 30\n");
+
+        let started = Instant::now();
+        let error = version_with(&bin.join("claude"), Duration::from_millis(300)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_version_run_starts_an_npm_claude_cmd() {
+        let (_home, bin, _out) = bin_home();
+        fs::write(
+            bin.join("claude.cmd"),
+            "@echo off\r\necho 2.1.301 (Claude Code) %*\r\n",
+        )
+        .unwrap();
+        let claude = lookup(&bin, None).find("claude").unwrap();
+
+        let run = version_with(&claude, VERSION_TIMEOUT).unwrap();
+
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.stdout.trim(), "2.1.301 (Claude Code) --version");
+    }
+
+    #[test]
+    fn the_installer_runs_the_command_users_are_shown() {
+        assert_eq!(
+            format!("curl {} | bash", INSTALLER_DOWNLOAD_ARGS.join(" ")),
+            crate::CLAUDE_CODE_INSTALL_COMMAND
+        );
+    }
+
+    /// Fake `curl` and `bash` on the temporary PATH: `curl` records its arguments and runs
+    /// `curl_body`, and `bash` records its `HOME`, then runs `bash_body`.
+    #[cfg(unix)]
+    fn installer(
+        bin: &Path,
+        out: &Path,
+        home: &Path,
+        curl_body: &str,
+        bash_body: &str,
+    ) -> InstallerInvocation {
+        write_program(
+            &bin.join("curl"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/curl'\n{curl_body}\n",
+                out.display()
+            ),
+        );
+        write_program(
+            &bin.join("bash"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > '{out}/home'\n{bash_body}\n",
+                out = out.display()
+            ),
+        );
+        let lookup = lookup(bin, None);
+        InstallerInvocation {
+            curl: lookup.find("curl").unwrap(),
+            bash: lookup.find("bash").unwrap(),
+            home: home.to_path_buf(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_installer_pipes_the_official_script_from_curl_into_bash_in_the_home() {
+        let (home, bin, out) = bin_home();
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "printf 'echo installing\\n'",
+            &format!("cat > '{}/script'", out.display()),
+        );
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(
+            exit,
+            InstallerExit {
+                download_exit_code: Some(0),
+                exit_code: Some(0),
+            }
+        );
+        let curl = fs::read_to_string(out.join("curl")).unwrap();
+        assert_eq!(curl, "-fsSL https://claude.ai/install.sh\n");
+        let script = fs::read_to_string(out.join("script")).unwrap();
+        assert_eq!(script, "echo installing\n");
+        let seen_home = fs::read_to_string(out.join("home")).unwrap();
+        assert_eq!(seen_home.trim(), home.path().display().to_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_installer_reports_bashs_exit_code() {
+        let (home, bin, out) = bin_home();
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "printf 'exit 3\\n'",
+            "cat > /dev/null\nexit 3",
+        );
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(exit.exit_code, Some(3));
+        assert_eq!(exit.download_exit_code, Some(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_download_reports_curls_exit_code_while_bash_ends_well() {
+        let (home, bin, out) = bin_home();
+        // `curl -f` on an HTTP error: nothing on its output, exit code 22.
+        let invocation = installer(&bin, &out, home.path(), "exit 22", "cat > /dev/null");
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(
+            exit,
+            InstallerExit {
+                download_exit_code: Some(22),
+                exit_code: Some(0),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bash_that_stops_early_does_not_leave_curl_writing_forever() {
+        let (home, bin, out) = bin_home();
+        // Far more than a pipe holds, to a bash that reads none of it.
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "i=0\nwhile [ $i -lt 20000 ]; do printf 'echo %0100d\\n' $i || exit 23; i=$((i+1)); done",
+            "exit 4",
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || sender.send(install(&invocation).unwrap()));
+        let exit = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the installer still waits for curl");
+
+        assert_eq!(exit.exit_code, Some(4));
+        assert_ne!(exit.download_exit_code, Some(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installer_whose_bash_cannot_start_fails_and_stops_curl() {
+        let (home, bin, out) = bin_home();
+        let mut invocation = installer(&bin, &out, home.path(), "exec sleep 30", "exit 0");
+        invocation.bash = bin.join("no-such-bash");
+
+        let started = Instant::now();
+        let error = install(&invocation).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_system_installer_is_unsupported() {
+        use crate::Environment;
+        let home = tempfile::tempdir().unwrap();
+        let invocation = InstallerInvocation {
+            curl: home.path().join("curl.exe"),
+            bash: home.path().join("bash.exe"),
+            home: home.path().to_path_buf(),
+        };
+
+        let error = crate::SystemEnvironment
+            .install_claude_code(&invocation)
+            .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }

@@ -129,6 +129,50 @@ pub trait Environment: Send + Sync {
     /// it doesn't finish within a minute (it is then stopped), with another kind when it can't
     /// be started.
     fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit>;
+
+    /// The program `name` as the login, the background runs and the token renewal find
+    /// `claude`: the first one on the PATH (on Windows the first of `name.exe`, `name.cmd`, …
+    /// in PATHEXT order). `None` when it isn't on the PATH.
+    fn find_program(&self, name: &str) -> Option<PathBuf>;
+
+    /// Runs `<program> --version`, where `program` is Claude Code's `claude`, as background
+    /// runs are: hidden (no console window), with no input and its output kept in memory.
+    /// Waits for it to exit. Errors when it can't be started, and with `TimedOut` when it
+    /// doesn't finish within a few seconds (it is then stopped).
+    fn claude_version(&self, program: &Path) -> io::Result<ClaudeRun>;
+
+    /// Runs Claude Code's official installer, `curl -fsSL https://claude.ai/install.sh | bash`,
+    /// with the `curl` and `bash` of `install` and `HOME` set to `install.home`, and waits for
+    /// both to exit. It runs attached to the current terminal: `bash` reads the script from
+    /// `curl`, as in the official command, and its output goes to mccboard's standard error.
+    /// mccboard's standard output carries only its own report (`--json`). Only a front end
+    /// calls it, through [`crate::Core::install_claude_code`], once the user has confirmed.
+    ///
+    /// Errors with `Unsupported` on Windows, where the official installer is a PowerShell
+    /// command, and with another kind when `curl` or `bash` can't be started.
+    fn install_claude_code(&self, install: &InstallerInvocation) -> io::Result<InstallerExit>;
+}
+
+/// Claude Code's official installer, to run in the current terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InstallerInvocation {
+    /// `curl`, found on the PATH: it downloads the installer script.
+    pub curl: PathBuf,
+    /// `bash`, found on the PATH: it runs the script `curl` downloads.
+    pub bash: PathBuf,
+    /// The home the installer works in (`HOME`): the core's own, where Claude Code then lands
+    /// in `.local/bin`.
+    pub home: PathBuf,
+}
+
+/// How the official installer ended. The core trusts only what it finds afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct InstallerExit {
+    /// `curl`'s exit code, not 0 when the script couldn't be downloaded. `None` when it was
+    /// ended by a signal.
+    pub download_exit_code: Option<i32>,
+    /// `bash`'s exit code, the installer's own. `None` when it was ended by a signal.
+    pub exit_code: Option<i32>,
 }
 
 /// Claude Code's own renewal, to run in an instance whose token has expired.
@@ -409,5 +453,26 @@ impl Environment for SystemEnvironment {
 
     fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
         crate::claude_cli::renew(renewal)
+    }
+
+    fn find_program(&self, name: &str) -> Option<PathBuf> {
+        crate::claude_cli::find_program(name)
+    }
+
+    fn claude_version(&self, program: &Path) -> io::Result<ClaudeRun> {
+        crate::claude_cli::version(program)
+    }
+
+    #[cfg(not(windows))]
+    fn install_claude_code(&self, install: &InstallerInvocation) -> io::Result<InstallerExit> {
+        crate::claude_cli::install(install)
+    }
+
+    #[cfg(windows)]
+    fn install_claude_code(&self, _install: &InstallerInvocation) -> io::Result<InstallerExit> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "on Windows Claude Code's official installer is a PowerShell command",
+        ))
     }
 }
