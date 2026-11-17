@@ -7,19 +7,32 @@
 //!   always gives it back, and the way to hand it to an interactive program.
 //! - [`app`]: the loop a screen runs in.
 //! - [`texts`]: the labels, in English and Italian.
+//! - [`widgets`]: pieces of drawing the screens share.
 //! - [`dashboard`]: `mccboard dashboard`.
+//! - [`setup`]: `mccboard setup`.
+//!
+//! The two screens open each other in the same terminal ([`show`]): `s` in the dashboard
+//! opens the setup, and the setup ends on the dashboard.
 
 pub mod app;
 mod dashboard;
+mod setup;
 pub mod terminal;
 pub mod texts;
+mod widgets;
 
 use std::io::IsTerminal;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use mccboard_core::{Core, Language};
+use ratatui::backend::Backend;
 
+use app::Events;
 pub use dashboard::run as dashboard;
+use setup::Console;
+pub use setup::run as setup;
+use terminal::Tui;
 pub use texts::Texts;
 
 /// The language the app would show: the one in `config.toml`, else the system's.
@@ -37,5 +50,46 @@ pub fn require_terminal(message: impl FnOnce() -> String) -> Result<()> {
         Ok(())
     } else {
         bail!(message())
+    }
+}
+
+/// What the TUI shows next, once a screen ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Show {
+    Dashboard,
+    Setup,
+    Quit,
+}
+
+/// Shows `first` in `tui`, then each screen the user opens from the one before, until one
+/// quits. Each screen starts in the language mccboard uses at that moment: the setup may
+/// have changed it.
+pub fn show<B>(
+    core: &Core,
+    tui: &mut Tui<B>,
+    events: &mut dyn Events,
+    console: &mut dyn Console,
+    first: Show,
+) -> Result<()>
+where
+    B: Backend,
+    B::Error: Send + Sync + 'static,
+{
+    let mut next = first;
+    loop {
+        next = match next {
+            Show::Dashboard => dashboard::show(core, tui, events)?,
+            Show::Setup => setup::show(core, tui, events, console)?,
+            Show::Quit => return Ok(()),
+        };
+    }
+}
+
+/// `path` as shown: `~/…` under `home`, else whole.
+pub fn shown_path(home: &Path, path: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        Err(_) => path.display().to_string(),
     }
 }

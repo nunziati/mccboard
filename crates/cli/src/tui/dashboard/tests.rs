@@ -286,7 +286,7 @@ fn the_dashboard_speaks_italian_when_asked() {
         "login effettuato",
         "nessuna differenza",
         "1 elemento da sistemare",
-        "r aggiorna  p ripara  l lingua  q esci  ↑↓ seleziona",
+        "r aggiorna  p ripara  s configura  l lingua  q esci  ↑↓ seleziona",
     ] {
         assert!(screen.contains(text), "{text:?} missing in:\n{screen}");
     }
@@ -447,6 +447,24 @@ fn p_asks_before_repairing_and_n_leaves_everything_as_it_was() {
     press(&mut dashboard, KeyCode::Esc);
     assert!(dashboard.confirm.is_none());
     assert!(screen(&dashboard).contains("Riparazione annullata."));
+}
+
+#[test]
+fn s_opens_the_setup_unless_a_repair_runs() {
+    let home = Home::new();
+    let mut dashboard = home.dashboard(Language::English);
+    assert!(screen(&dashboard).contains("s setup"));
+
+    assert_eq!(
+        press(&mut dashboard, KeyCode::Char('s')),
+        Some(Request::Setup)
+    );
+
+    press(&mut dashboard, KeyCode::Down);
+    press(&mut dashboard, KeyCode::Char('p'));
+    press(&mut dashboard, KeyCode::Char('y'));
+    // The setup would change the instance under the repair.
+    assert_eq!(press(&mut dashboard, KeyCode::Char('s')), None);
 }
 
 #[test]

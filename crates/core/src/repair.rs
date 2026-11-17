@@ -204,7 +204,7 @@ fn run(
 
     let primary = doctor::primary_dir(home);
     let mut backup = Backup::new(paths.backups_dir(), env.now(), home, &config_dir);
-    let mut plugins = PluginRun::new(env, &primary, &config_dir);
+    let mut plugins = PluginRun::new(env, home, &primary, &config_dir);
     let mut items = Vec::new();
     for item in selected {
         let applied = apply(

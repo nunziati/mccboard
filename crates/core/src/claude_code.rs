@@ -1,8 +1,9 @@
 //! Claude Code itself on this machine, as a setup needs it: whether it is installed, its
 //! version, and its official installer (#62).
 //!
-//! Claude Code is looked for on the PATH, as the login and the background runs find it, then
-//! in `~/.local/bin`, where its official installer puts it before the PATH knows that folder.
+//! Claude Code is looked for on the PATH, then in `~/.local/bin`, where its official installer
+//! puts it before the PATH knows that folder. The login, the background runs and the token
+//! renewal find it in the same two places.
 //! Its version comes from `claude --version`, run in the background. Nothing here opens a
 //! file of any instance: no credential is ever read.
 //!
@@ -34,9 +35,10 @@ pub enum ClaudeCode {
         /// `claude` on the PATH (on Windows `claude.exe`, or an npm install's `claude.cmd`),
         /// else `~/.local/bin/claude` (`claude.exe` on Windows).
         program: PathBuf,
-        /// Whether it is on the PATH, where the login, the background runs and the launchers
-        /// find it. `false` when it is only in `~/.local/bin` and the PATH lacks that folder:
-        /// a new terminal, or the line the installer gave for the shell profile, adds it.
+        /// Whether it is on the PATH, where the launchers and the user's own shell find it.
+        /// `false` when it is only in `~/.local/bin` and the PATH lacks that folder: the login,
+        /// the background runs and the token renewal find it there all the same, and a new
+        /// terminal, or the line the installer gave for the shell profile, adds it.
         on_path: bool,
         /// The first line of `claude --version` (`2.1.301 (Claude Code)`), `None` when it
         /// couldn't be read.
@@ -55,8 +57,9 @@ impl ClaudeCode {
 
 impl Core {
     /// Whether Claude Code is installed, where, and its version. `claude` is looked for on
-    /// the PATH, as the login and Claude Code's background runs find it, then in `.local/bin`
-    /// of this core's home (`claude.exe` on Windows), where the official installer puts it.
+    /// the PATH, then in `.local/bin` of this core's home (`claude.exe` on Windows), where the
+    /// official installer puts it: the login and Claude Code's background runs find it the
+    /// same way.
     /// The version is the first line of `claude --version`, run hidden, with no input, and
     /// stopped after a few seconds. A version that can't be read leaves Claude Code found,
     /// without one. Opens no file of any instance.
@@ -64,11 +67,7 @@ impl Core {
         let (program, on_path) = match self.env.find_program("claude") {
             Some(program) => (program, true),
             None => {
-                let name = match self.env.os() {
-                    OsKind::Windows => "claude.exe",
-                    OsKind::Linux => "claude",
-                };
-                let local = self.home.join(".local").join("bin").join(name);
+                let local = crate::claude_cli::installed_claude(&self.home, self.env.os());
                 if !crate::claude_cli::is_program(&local) {
                     return ClaudeCode::Missing;
                 }

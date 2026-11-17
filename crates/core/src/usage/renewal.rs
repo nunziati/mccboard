@@ -115,6 +115,7 @@ pub(super) fn run(
                 config_dir: dir.clone(),
                 kind: InstanceKind::of(home, dir),
                 working_dir: working_dir.clone(),
+                home: home.to_path_buf(),
             });
             match token::read(dir, env.now()) {
                 TokenRead::Valid { .. } => RenewalOutcome::Renewed,

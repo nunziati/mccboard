@@ -202,8 +202,8 @@ impl Core {
     /// writes them.
     ///
     /// Errors before opening anything when the instance's folder is gone
-    /// ([`Error::InstanceFolderMissing`]), when `claude` isn't on the PATH
-    /// ([`Error::ClaudeNotInstalled`]), and when there is no such terminal
+    /// ([`Error::InstanceFolderMissing`]), when `claude` is neither on the PATH nor in
+    /// `.local/bin` of the home ([`Error::ClaudeNotInstalled`]), and when there is no such terminal
     /// ([`Error::LoginNeedsTerminal`]: no terminal for the current one, no terminal emulator
     /// on Linux for a new window).
     pub fn login(&self, config_dir: &Path, terminal: LoginTerminal) -> Result<LoginReport, Error> {
@@ -328,6 +328,7 @@ impl Core {
             },
             kind,
             terminal,
+            home: self.home.clone(),
         };
         match self.env.open_login(&invocation) {
             Ok(exit) => Ok(LoginRun::Ran {

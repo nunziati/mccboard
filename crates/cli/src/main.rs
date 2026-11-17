@@ -126,6 +126,11 @@ enum Command {
     /// every minute within the rate limits. Needs a terminal: without one, use `mccboard
     /// usage` and `mccboard list`.
     Dashboard,
+    /// Set mccboard up one step at a time: Claude Code, instances, accounts with their login,
+    /// sharing, drift, launchers and preferences, then a summary that opens the dashboard.
+    /// Each step shows what is done already, and the setup can stop at any step and run again.
+    /// Needs a terminal: without one, it lists the commands that do the same steps.
+    Setup,
 }
 
 #[derive(Subcommand)]
@@ -203,6 +208,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Remove(args) => remove::remove(&core, args)?,
         Command::Desktop { command } => desktop::run(&core, command)?,
         Command::Dashboard => tui::dashboard(&core)?,
+        Command::Setup => tui::setup(&core)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {

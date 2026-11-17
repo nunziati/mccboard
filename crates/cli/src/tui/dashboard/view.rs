@@ -27,24 +27,25 @@
 //! Each account is drawn in its color as the taskbar widget adjusts it for a dark taskbar,
 //! the usual terminal. A stale reading is drawn dim, as the widget fades it.
 
-use mccboard_core::{
-    InstanceKind, InstanceStatus, LauncherState, LoginState, Registry, SEGMENTS, TaskbarTheme,
-    TimeToReset, Warning, WidgetColumn, WidgetRow,
-};
+use mccboard_core::{SEGMENTS, TaskbarTheme, TimeToReset, WidgetColumn, WidgetRow};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Paragraph, TableState};
 
 use super::state::{Confirm, Dashboard};
 use crate::tui::texts::Texts;
+use crate::tui::widgets::{self, Instances, dim, key_hints, rgb};
 
 /// The widest a window's name is shown (model names can be long).
 const NAME_WIDTH: usize = 16;
 
 /// The drift items a repair question lists before "… and N more".
 const ITEMS_SHOWN: usize = 8;
+
+/// The mark before the selected instance.
+const SELECTED: &str = "› ";
 
 pub fn draw(dashboard: &Dashboard, frame: &mut Frame) {
     let texts = dashboard.texts();
@@ -91,28 +92,6 @@ fn draw_header(dashboard: &Dashboard, texts: Texts, frame: &mut Frame, area: Rec
             area,
         );
     }
-}
-
-/// "r refresh  p repair …", keys bold.
-fn key_hints(keys: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    for (index, (key, action)) in keys.iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::raw((*key).to_owned()).bold());
-        spans.push(Span::raw(format!(" {action}")).dim());
-    }
-    Line::from(spans)
-}
-
-fn dim() -> Style {
-    Style::new().add_modifier(Modifier::DIM)
-}
-
-fn rgb(color: &mccboard_core::Color) -> Color {
-    let [r, g, b] = color.rgb();
-    Color::Rgb(r, g, b)
 }
 
 /// Every account with its windows, in the taskbar widget's order (`config.toml`'s).
@@ -243,116 +222,22 @@ fn draw_instances(dashboard: &Dashboard, texts: Texts, frame: &mut Frame, area: 
         }
         Ok(registry) => registry,
     };
-    let header = texts.instance_columns().map(str::to_owned);
-    let rows: Vec<[(String, Style); 6]> = registry
-        .instances
-        .iter()
-        .map(|instance| instance_cells(dashboard, texts, registry, instance))
-        .collect();
-    let widths: Vec<Constraint> = (0..header.len())
-        .map(|i| {
-            let widest = rows
-                .iter()
-                .map(|row| row[i].0.chars().count())
-                .chain([header[i].chars().count()])
-                .max()
-                .unwrap_or(0);
-            Constraint::Length(widest as u16)
-        })
-        .collect();
-    let rows = rows.into_iter().map(|cells| {
-        Row::new(
-            cells
-                .into_iter()
-                .map(|(text, style)| Cell::from(text).style(style)),
-        )
-    });
-    let table = Table::new(rows, widths)
-        .header(Row::new(header).bold())
-        .column_spacing(2)
+    let instances = Instances {
+        home: dashboard.core.home(),
+        registry,
+        doctor: dashboard.doctor.as_ref(),
+        launchers: dashboard.launchers.as_ref(),
+    };
+    // Inside the borders, after the column of the selection mark.
+    let width = area
+        .width
+        .saturating_sub(2 + SELECTED.chars().count() as u16);
+    let table = widgets::instances_table(texts, &instances, width)
         .block(block)
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("› ");
+        .highlight_symbol(SELECTED);
     let mut state = TableState::default().with_selected(Some(dashboard.selected));
     frame.render_stateful_widget(table, area, &mut state);
-}
-
-/// Folder, type, account, login, drift and launcher of an instance, each with its style.
-fn instance_cells(
-    dashboard: &Dashboard,
-    texts: Texts,
-    registry: &Registry,
-    instance: &InstanceStatus,
-) -> [(String, Style); 6] {
-    let plain = Style::new();
-    let warn = Style::new().fg(Color::Yellow);
-    let path = dashboard.shown_path(&instance.config_dir);
-    let kind = match instance.kind {
-        InstanceKind::Primary => texts.primary(),
-        InstanceKind::Linked => texts.linked(),
-    };
-    let account = instance.registered_account.as_ref().map(|uuid| {
-        match registry.accounts.iter().find(|a| &a.uuid == uuid) {
-            Some(account) => (account.label.clone(), Style::new().fg(rgb(&account.color))),
-            // Registered with an account no longer in config.toml.
-            None => (uuid.as_str().chars().take(8).collect(), plain),
-        }
-    });
-    let account = account.unwrap_or_else(|| (texts.no_account().to_owned(), dim()));
-    let login = if instance
-        .observation
-        .warnings
-        .contains(&Warning::ConfigDirMissing)
-    {
-        (
-            texts.folder_missing().to_owned(),
-            Style::new().fg(Color::Red),
-        )
-    } else {
-        match &instance.observation.login {
-            LoginState::LoggedIn { .. } => (texts.logged_in().to_owned(), plain),
-            LoginState::Expired { .. } => (texts.token_expired().to_owned(), warn),
-            LoginState::NotLoggedIn => (texts.not_logged_in().to_owned(), warn),
-            LoginState::Unknown => (texts.login_unknown().to_owned(), warn),
-        }
-    };
-    let drift = dashboard
-        .doctor
-        .as_ref()
-        .and_then(|doctor| {
-            doctor
-                .instances
-                .iter()
-                .find(|d| d.config_dir == instance.config_dir)
-        })
-        .map_or(("?".to_owned(), dim()), |drift| match drift.drift_count {
-            0 => (texts.drift(0), dim()),
-            count => (texts.drift(count), warn),
-        });
-    let launcher = match instance.kind {
-        // The primary instance keeps plain `claude`.
-        InstanceKind::Primary => ("claude".to_owned(), plain),
-        InstanceKind::Linked => match dashboard
-            .launchers
-            .as_ref()
-            .and_then(|launchers| launchers.instance(&instance.config_dir))
-        {
-            Some(launcher) => match &launcher.state {
-                LauncherState::Ok => (launcher.name.clone(), plain),
-                LauncherState::Missing => (texts.launcher_missing(&launcher.name), warn),
-                LauncherState::Stale { .. } => (texts.launcher_stale(&launcher.name), warn),
-            },
-            None => ("?".to_owned(), dim()),
-        },
-    };
-    [
-        (path, plain),
-        (kind.to_owned(), plain),
-        account,
-        login,
-        drift,
-        launcher,
-    ]
 }
 
 /// The repair question over the screen: the instance, the items it would fix, the answers.
@@ -378,12 +263,5 @@ fn draw_confirm(
         lines.push(Line::default());
     }
     lines.push(key_hints(&texts.confirm_keys()));
-    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
-    let height = lines.len() as u16 + 2;
-    let popup = area.centered(Constraint::Length(width), Constraint::Length(height));
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().border_style(Style::new().fg(Color::Yellow))),
-        popup,
-    );
+    widgets::question(frame, area, lines);
 }

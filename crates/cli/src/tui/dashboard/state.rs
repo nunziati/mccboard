@@ -24,6 +24,8 @@ pub enum Request {
     Refresh,
     /// Repair every drift item of the instance in this folder.
     Repair(PathBuf),
+    /// Open the setup in place of the dashboard.
+    Setup,
     Quit,
 }
 
@@ -198,6 +200,8 @@ impl Dashboard {
                 self.switch_language();
                 None
             }
+            // Not while a repair runs: the setup would change the instance under it.
+            KeyCode::Char('s') if self.repairing.is_none() => Some(Request::Setup),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
                 None
@@ -361,7 +365,7 @@ impl Dashboard {
 
     /// The instance's folder as shown: under the home, starting with `~`.
     pub fn shown_path(&self, path: &Path) -> String {
-        shown_path(self.core.home(), path)
+        crate::tui::shown_path(self.core.home(), path)
     }
 
     /// The notice in the language in use.
@@ -434,13 +438,4 @@ fn outcome(report: &UsageReport) -> Option<Notice> {
         .filter_map(|usage| usage.next_call_at)
         .min()
         .map(Notice::NextCallAt)
-}
-
-/// `path` as shown: `~/…` under `home`, else whole.
-pub fn shown_path(home: &Path, path: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
-        Err(_) => path.display().to_string(),
-    }
 }

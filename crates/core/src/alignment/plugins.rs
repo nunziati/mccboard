@@ -153,15 +153,23 @@ pub(crate) fn drift(primary: &Path, config_dir: &Path) -> Vec<DriftItem> {
 /// a marketplace that couldn't be added fail with that reason without trying again.
 pub(crate) struct PluginRun<'a> {
     env: &'a dyn Environment,
+    /// The home the core works in, where Claude Code may be only in `.local/bin`.
+    home: &'a Path,
     primary: &'a Path,
     config_dir: &'a Path,
     added: HashMap<String, Result<(), String>>,
 }
 
 impl<'a> PluginRun<'a> {
-    pub(crate) fn new(env: &'a dyn Environment, primary: &'a Path, config_dir: &'a Path) -> Self {
+    pub(crate) fn new(
+        env: &'a dyn Environment,
+        home: &'a Path,
+        primary: &'a Path,
+        config_dir: &'a Path,
+    ) -> Self {
         Self {
             env,
+            home,
             primary,
             config_dir,
             added: HashMap::new(),
@@ -223,6 +231,7 @@ impl<'a> PluginRun<'a> {
         let invocation = ClaudeInvocation {
             config_dir: self.config_dir.to_path_buf(),
             args: args.iter().map(|a| (*a).to_owned()).collect(),
+            home: self.home.to_path_buf(),
         };
         let run = match self.env.run_claude(&invocation) {
             Ok(run) => run,

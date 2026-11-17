@@ -97,8 +97,10 @@ pub trait Environment: Send + Sync {
     /// with `CLAUDE_CONFIG_DIR` set to it, without the variables that would override its own
     /// login (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`), with no
     /// input, and waits for it to exit. Never for the primary instance, whose global config
-    /// lives outside its folder. Errors when `claude` can't be started (`NotFound` when it
-    /// isn't installed) or doesn't finish in time.
+    /// lives outside its folder. `claude` is the one on the PATH, else the one in `.local/bin`
+    /// of `invocation.home`, where Claude Code's official installer puts it. Errors when
+    /// `claude` can't be started (`NotFound` when it is in neither place) or doesn't finish in
+    /// time.
     fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun>;
 
     /// Opens Claude Code's official login (`claude auth login`) in the instance
@@ -107,11 +109,13 @@ pub trait Environment: Send + Sync {
     /// itself, and mccboard never sees them. For a linked instance `CLAUDE_CONFIG_DIR` is set
     /// to its folder; for the primary instance it is unset and the home is the folder's
     /// parent. The variables that would override the instance's own login are removed.
+    /// `claude` is found as [`Environment::run_claude`] finds it, in `login.home`.
     ///
-    /// Errors, before anything starts, with `NotFound` only when `claude` itself isn't found
-    /// on the PATH; with `Unsupported` when there is no such terminal (no terminal for the
-    /// current one, no terminal emulator for a new window on Linux); with another kind when
-    /// the instance's folder is missing or the program can't be started.
+    /// Errors before anything starts: (1) with `NotFound` only when `claude` itself is neither
+    /// on the PATH nor in `.local/bin`, (2) with `Unsupported` when there is no such terminal
+    /// (no terminal for the current one, no terminal emulator for a new window on Linux), and
+    /// (3) with another kind when the instance's folder is missing or the program can't be
+    /// started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
 
     /// Runs `claude mcp get` with a missing name in the instance `renewal.config_dir`, so that
@@ -123,16 +127,18 @@ pub trait Environment: Send + Sync {
     /// none, with the home set to its folder's parent; the variables that would override the
     /// instance's own login are removed. Unlike it, the command runs in the background: hidden
     /// (no console window), with no input, in `renewal.working_dir`, and its output is
-    /// discarded unread, since it names the account. Waits for it to exit.
+    /// discarded unread, since it names the account. Waits for it to exit. `claude` is found
+    /// as [`Environment::run_claude`] finds it, in `renewal.home`.
     ///
-    /// Errors with `NotFound` only when `claude` isn't found on the PATH, with `TimedOut` when
-    /// it doesn't finish within a minute (it is then stopped), with another kind when it can't
-    /// be started.
+    /// Errors with `NotFound` only when `claude` is neither on the PATH nor in `.local/bin`,
+    /// with `TimedOut` when it doesn't finish within a minute (it is then stopped), with
+    /// another kind when it can't be started.
     fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit>;
 
-    /// The program `name` as the login, the background runs and the token renewal find
-    /// `claude`: the first one on the PATH (on Windows the first of `name.exe`, `name.cmd`, …
-    /// in PATHEXT order). `None` when it isn't on the PATH.
+    /// The program `name` on the PATH, as the login, the background runs and the token renewal
+    /// look for `claude` there first: the first one on the PATH (on Windows the first of
+    /// `name.exe`, `name.cmd`, … in PATHEXT order). `None` when it isn't on the PATH. Unlike
+    /// those runs, it never looks in `.local/bin`.
     fn find_program(&self, name: &str) -> Option<PathBuf>;
 
     /// Runs `<program> --version`, where `program` is Claude Code's `claude`, as background
@@ -185,6 +191,9 @@ pub struct RenewalInvocation {
     /// A folder of mccboard's own to run in (`~/.mccboard/state/renewal/`), so no project's
     /// settings, hooks or `CLAUDE.md` apply.
     pub working_dir: PathBuf,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// How the renewal command ended. The core doesn't trust it: it reads the token again.
@@ -202,6 +211,9 @@ pub struct LoginInvocation {
     /// Primary (Claude Code's default folder, no `CLAUDE_CONFIG_DIR`) or linked.
     pub kind: InstanceKind,
     pub terminal: LoginTerminal,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// Where the login runs. The front end chooses: the app, which has no terminal, a new
@@ -232,6 +244,9 @@ pub struct ClaudeInvocation {
     pub config_dir: PathBuf,
     /// The arguments after `claude` (`plugin install review@tools --json`).
     pub args: Vec<String>,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// How a `claude` command ended.

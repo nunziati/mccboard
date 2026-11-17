@@ -14,6 +14,11 @@
 //!
 //! Outside any instance, `claude --version` runs hidden too, and Claude Code's official
 //! installer (`curl … | bash`) runs in the current terminal, as the login does.
+//!
+//! The login, the background runs and the renewal find `claude` on the PATH, else in
+//! `.local/bin` of the core's home, as [`crate::Core::claude_code`] does. The official
+//! installer puts it there before the PATH has that folder, and the setup logs in right after
+//! installing it.
 
 use std::env;
 use std::ffi::OsString;
@@ -26,7 +31,7 @@ use std::time::{Duration, Instant};
 use crate::instance::InstanceKind;
 use crate::{
     ClaudeInvocation, ClaudeRun, InstallerExit, InstallerInvocation, LoginExit, LoginInvocation,
-    LoginTerminal, RenewalExit, RenewalInvocation,
+    LoginTerminal, OsKind, RenewalExit, RenewalInvocation,
 };
 
 /// Variables that make Claude Code use another login than the instance's.
@@ -47,7 +52,7 @@ pub(crate) fn run(invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
 /// Windows an npm install's `claude.cmd` too, which std runs through `cmd.exe /d /c` in the
 /// same hidden console.
 fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<ClaudeRun> {
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&invocation.home).ok_or_else(not_found)?;
     let mut command = crate::background::command(claude);
     command
         .args(&invocation.args)
@@ -106,7 +111,8 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
     })
 }
 
-/// The program `name` on the PATH, found as `claude` is for the login and background runs.
+/// The program `name` on the PATH, found as the login and background runs look for `claude`
+/// there before trying `.local/bin`.
 pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
     Lookup::from_env().find(name)
 }
@@ -181,8 +187,21 @@ pub(crate) fn login(login: &LoginInvocation) -> io::Result<LoginExit> {
     login_with(login, &Lookup::from_env())
 }
 
-fn not_on_path() -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, "claude is not on the PATH")
+fn not_found() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        "claude is neither on the PATH nor in ~/.local/bin",
+    )
+}
+
+/// Where Claude Code's official installer puts it in `home`: `.local/bin/claude`, or
+/// `.local/bin/claude.exe` on Windows.
+pub(crate) fn installed_claude(home: &Path, os: OsKind) -> PathBuf {
+    let name = match os {
+        OsKind::Windows => "claude.exe",
+        OsKind::Linux => "claude",
+    };
+    home.join(".local").join("bin").join(name)
 }
 
 /// Where Claude Code and, for a new login window on Linux, the terminal are looked for: the
@@ -217,6 +236,20 @@ impl Lookup {
                 .map(|dir| dir.join(name))
                 .find(|candidate| is_program(candidate))
         }
+    }
+
+    /// Claude Code for a core working in `home`: `claude` on the PATH, else the one its
+    /// official installer put in `.local/bin` of `home` before the PATH had that folder.
+    fn claude(&self, home: &Path) -> Option<PathBuf> {
+        self.find("claude").or_else(|| {
+            let os = if cfg!(windows) {
+                OsKind::Windows
+            } else {
+                OsKind::Linux
+            };
+            let installed = installed_claude(home, os);
+            is_program(&installed).then_some(installed)
+        })
     }
 
     /// The terminal emulator for a new window on Linux: `$TERMINAL` (a name on the PATH or a
@@ -279,7 +312,7 @@ fn renew_with(
     lookup: &Lookup,
     timeout: Duration,
 ) -> io::Result<RenewalExit> {
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&renewal.home).ok_or_else(not_found)?;
     let mut command = crate::background::command(claude);
     command
         .args(RENEW_ARGS)
@@ -352,7 +385,7 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         LoginTerminal::CurrentTerminal => None,
         LoginTerminal::NewWindow => Some(window(lookup)?),
     };
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&login.home).ok_or_else(not_found)?;
     let mut command = match window {
         None => {
             let mut command = Command::new(&claude);
@@ -454,11 +487,152 @@ mod tests {
         }
     }
 
+    /// The home of a core whose `.local/bin` has no Claude Code.
+    const NO_LOCAL_CLAUDE: &str = "/nowhere";
+
+    /// Where the official installer puts Claude Code in `home`, with its folder created.
+    fn local_claude(home: &Path) -> PathBuf {
+        let os = if cfg!(windows) {
+            crate::OsKind::Windows
+        } else {
+            crate::OsKind::Linux
+        };
+        let program = installed_claude(home, os);
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        program
+    }
+
+    #[test]
+    fn claude_only_in_local_bin_of_the_home_is_found_there() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let local = local_claude(home.path());
+        #[cfg(unix)]
+        write_program(&local, "#!/bin/sh\nexit 0\n");
+        #[cfg(not(unix))]
+        fs::write(&local, "fake claude.exe").unwrap();
+
+        assert_eq!(lookup(&bin, None).claude(home.path()), Some(local));
+        // Other programs are looked for on the PATH only.
+        assert_eq!(lookup(&bin, None).find("claude"), None);
+        // Another home's `.local/bin` is not this one.
+        assert_eq!(lookup(&bin, None).claude(Path::new(NO_LOCAL_CLAUDE)), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_on_the_path_comes_before_the_one_in_local_bin() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        write_program(&bin.join("claude"), "#!/bin/sh\nexit 0\n");
+        write_program(&local_claude(home.path()), "#!/bin/sh\nexit 0\n");
+
+        assert_eq!(
+            lookup(&bin, None).claude(home.path()),
+            Some(bin.join("claude"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_local_bin_that_cannot_run_is_not_claude() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(local_claude(home.path()), "not a program").unwrap();
+
+        assert_eq!(lookup(&bin, None).claude(home.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_background_run_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        write_program(
+            &local_claude(home.path()),
+            "#!/bin/sh\nprintf '%s\\n' \"local|$*\"\nexit 3\n",
+        );
+
+        let invocation = ClaudeInvocation {
+            home: home.path().to_path_buf(),
+            ..claude_invocation(&dir)
+        };
+        let run = run_with(&invocation, &lookup(&bin, None)).unwrap();
+
+        assert_eq!(run.exit_code, Some(3));
+        assert_eq!(run.stdout.trim(), "local|plugin list");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_login_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        let out = home.path().join("out");
+        for folder in [&bin, &dir, &out] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        // A terminal emulator that runs the program after `-e`.
+        write_program(&bin.join("my-term"), "#!/bin/sh\nshift\nexec \"$@\"\n");
+        let local = local_claude(home.path());
+        write_program(
+            &local,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$0|$*\" > '{}/claude'\nexit 0\n",
+                out.display()
+            ),
+        );
+
+        let login = LoginInvocation {
+            home: home.path().to_path_buf(),
+            ..invocation(&dir, LoginTerminal::NewWindow)
+        };
+        let exit = login_with(&login, &lookup(&bin, Some("my-term"))).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(
+            seen.trim(),
+            format!("{}|auth login --claudeai", local.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renewal_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let (home, bin, dir, neutral, out) = renewal_home();
+        write_program(
+            &local_claude(home.path()),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/claude'\nexit 1\n",
+                out.display()
+            ),
+        );
+
+        let invocation = RenewalInvocation {
+            home: home.path().to_path_buf(),
+            ..renewal(&dir, InstanceKind::Linked, &neutral)
+        };
+        let exit = renew_with(&invocation, &lookup(&bin, None), RENEW_TIMEOUT).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(seen.trim(), RENEW_ARGS.join(" "));
+    }
+
     fn invocation(config_dir: &Path, terminal: LoginTerminal) -> LoginInvocation {
         LoginInvocation {
             config_dir: config_dir.to_path_buf(),
             kind: InstanceKind::Linked,
             terminal,
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 
@@ -497,6 +671,7 @@ mod tests {
         ClaudeInvocation {
             config_dir: config_dir.to_path_buf(),
             args: vec!["plugin".into(), "list".into()],
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 
@@ -573,6 +748,7 @@ mod tests {
             config_dir: config_dir.to_path_buf(),
             kind,
             working_dir: working_dir.to_path_buf(),
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 

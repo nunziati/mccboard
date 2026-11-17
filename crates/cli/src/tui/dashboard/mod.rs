@@ -23,25 +23,45 @@ use mccboard_core::Core;
 use ratatui::Frame;
 use ratatui::backend::Backend;
 
-use super::app::{self, Flow, Screen, TerminalEvents};
+use super::app::{self, Events, Flow, Screen, TerminalEvents};
+use super::setup::TerminalConsole;
 use super::terminal::Tui;
+use super::{Show, Texts};
 pub use state::{Dashboard, Message, Request};
 
 /// How often usage is refreshed, as in the tray. The core's rate limits hold for every
 /// refresh, this one and the user's.
 pub const REFRESH_EVERY: Duration = Duration::from_secs(60);
 
-/// Runs the dashboard in this terminal until the user quits.
+/// Runs the dashboard in this terminal until the user quits. From the dashboard `s` opens the
+/// setup, in the same terminal.
 pub fn run(core: &Core) -> Result<()> {
     let language = super::language(core);
     super::require_terminal(|| {
-        let texts = super::Texts::new(language);
+        let texts = Texts::new(language);
         texts.needs_terminal("dashboard", texts.dashboard_without_terminal())
     })?;
-    let dashboard = Dashboard::new(core.clone(), TimeZone::system(), language);
-    let mut screen = Runner::start(dashboard, REFRESH_EVERY)?;
     let mut tui = Tui::enter()?;
-    app::run(&mut tui, &mut TerminalEvents, &mut screen)
+    super::show(
+        core,
+        &mut tui,
+        &mut TerminalEvents,
+        &mut TerminalConsole,
+        Show::Dashboard,
+    )
+}
+
+/// Shows the dashboard in `tui`, in the language mccboard uses now, until the user quits it
+/// or opens the setup: what shows next.
+pub fn show<B>(core: &Core, tui: &mut Tui<B>, events: &mut dyn Events) -> Result<Show>
+where
+    B: Backend,
+    B::Error: Send + Sync + 'static,
+{
+    let dashboard = Dashboard::new(core.clone(), TimeZone::system(), super::language(core));
+    let mut screen = Runner::start(dashboard, REFRESH_EVERY)?;
+    app::run(tui, events, &mut screen)?;
+    Ok(screen.next)
 }
 
 /// The dashboard as a screen of the TUI: its state, and the threads that do what it asks.
@@ -55,6 +75,8 @@ pub struct Runner {
     redraw_at: Instant,
     /// The dashboard's count of computed views when `redraw_at` was set.
     views: u64,
+    /// What shows once the dashboard quits.
+    pub next: Show,
 }
 
 impl Runner {
@@ -71,6 +93,7 @@ impl Runner {
             sender,
             refresher,
             repairs: Vec::new(),
+            next: Show::Quit,
         })
     }
 
@@ -110,6 +133,10 @@ impl<B: Backend> Screen<B> for Runner {
     fn key(&mut self, key: KeyEvent, _tui: &mut Tui<B>) -> Result<Flow> {
         match self.dashboard.key(key) {
             Some(Request::Quit) => return Ok(Flow::Quit),
+            Some(Request::Setup) => {
+                self.next = Show::Setup;
+                return Ok(Flow::Quit);
+            }
             Some(Request::Refresh) => self.refresher.request(),
             Some(Request::Repair(config_dir)) => self.repair(config_dir)?,
             None => {}

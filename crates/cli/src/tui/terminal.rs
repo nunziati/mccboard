@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
 use anyhow::{Result, bail};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute, terminal};
-use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use ratatui::{Frame, Terminal};
 
 /// Switching a terminal into the TUI's modes and back.
@@ -170,18 +170,15 @@ where
     /// Hands the terminal to an interactive program, which `program` runs to its end (the
     /// login of Claude Code), then takes it back and draws the next frame whole. mccboard
     /// reads nothing the program prints (ADR 0002).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the setup (#65) runs the login of Claude Code through it"
-        )
-    )]
     pub fn release<R>(&mut self, program: impl FnOnce() -> R) -> Result<R> {
         self.guard.suspend()?;
         let result = program();
         self.guard.resume()?;
-        self.terminal.clear()?;
+        // What `Terminal::clear` does on a full screen, without first asking the terminal
+        // where its cursor is: a terminal that doesn't answer in time would end the TUI. Both
+        // buffers start empty, and the next frame is drawn whole on a blank screen.
+        self.terminal.backend_mut().clear_region(ClearType::All)?;
+        self.terminal.swap_buffers();
         Ok(result)
     }
 

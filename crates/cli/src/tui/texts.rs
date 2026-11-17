@@ -34,7 +34,12 @@ impl Texts {
         Self { language }
     }
 
-    fn pick(self, en: &'static str, it: &'static str) -> &'static str {
+    pub fn language(self) -> Language {
+        self.language
+    }
+
+    /// The text of the language in use, out of its English and Italian versions.
+    pub(crate) fn pick(self, en: &'static str, it: &'static str) -> &'static str {
         match self.language {
             Language::English => en,
             Language::Italian => it,
@@ -82,6 +87,12 @@ impl Texts {
                     "config.toml non è valido, quindi mccboard non lo modifica. Correggilo a mano.",
                 )
                 .to_owned(),
+            "claude_not_installed" => self
+                .pick(
+                    "Claude Code isn't installed: install it in the first step, then try again.",
+                    "Claude Code non è installato: installalo nel primo passo, poi riprova.",
+                )
+                .to_owned(),
             _ => failure.message.clone(),
         }
     }
@@ -122,10 +133,11 @@ impl Texts {
     }
 
     /// The key hints at the bottom of the dashboard, key and action.
-    pub fn dashboard_keys(self) -> [(&'static str, &'static str); 5] {
+    pub fn dashboard_keys(self) -> [(&'static str, &'static str); 6] {
         [
             ("r", self.pick("refresh", "aggiorna")),
             ("p", self.pick("repair", "ripara")),
+            ("s", self.pick("setup", "configura")),
             ("l", self.pick("language", "lingua")),
             ("q", self.pick("quit", "esci")),
             ("↑↓", self.pick("select", "seleziona")),
