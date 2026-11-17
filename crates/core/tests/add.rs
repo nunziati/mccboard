@@ -1133,6 +1133,68 @@ fn a_primary_folder_that_is_a_file_is_refused_before_the_login() {
     assert!(env.login_invocations().is_empty());
 }
 
+#[test]
+fn login_reaches_the_first_login_of_the_primary_instance_when_it_is_not_registered() {
+    for spelling in ["~/.claude", "absolute"] {
+        let (home, core, env) = bare();
+        let primary = home.path().join(".claude");
+        let path = match spelling {
+            "~/.claude" => PathBuf::from("~/.claude"),
+            _ => primary.clone(),
+        };
+        env.login_as(UUID_A, "a@example.com");
+
+        let report = login_with(&core, &path).unwrap();
+
+        assert_eq!(report.config_dir, primary, "{spelling}");
+        assert_eq!(report.account.as_ref().unwrap().label, "A", "{spelling}");
+        assert_eq!(env.login_invocations()[0].kind, InstanceKind::Primary);
+        assert_eq!(core.registry().unwrap().instances[0].config_dir, primary);
+    }
+}
+
+#[test]
+fn login_of_the_missing_primary_instance_that_logs_nothing_in_reports_no_account() {
+    let (home, core, env) = bare();
+
+    let report = login_with(&core, &home.path().join(".claude")).unwrap();
+
+    assert_eq!(env.login_invocations().len(), 1);
+    assert_eq!(report.account, None);
+    assert!(!home.path().join(".claude").exists());
+    assert!(core.registry().unwrap().instances.is_empty());
+}
+
+#[test]
+fn a_linked_instance_whose_folder_goes_away_during_its_login_is_still_an_error() {
+    let f = fixture();
+    let linked = f.home.linked(".claude-b");
+    f.core.register(&linked.dir).unwrap();
+    f.env.on_login(|login| {
+        fs::remove_dir_all(&login.config_dir)?;
+        Ok(LoginExit { exit_code: Some(0) })
+    });
+
+    let error = login(&f, &linked.dir).unwrap_err();
+
+    assert!(matches!(error, Error::NotADirectory { .. }), "{error}");
+}
+
+#[test]
+fn the_os_the_core_works_on_is_the_environments() {
+    let (_home, core, env) = bare();
+    assert_eq!(core.os(), OsKind::Linux);
+
+    env.set_os(OsKind::Windows);
+
+    assert_eq!(core.os(), OsKind::Windows);
+}
+
+/// A login from the CLI, in a core with no fixture.
+fn login_with(core: &Core, dir: &Path) -> Result<mccboard_core::LoginReport, Error> {
+    core.login(dir, LoginTerminal::CurrentTerminal)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Token rules
 

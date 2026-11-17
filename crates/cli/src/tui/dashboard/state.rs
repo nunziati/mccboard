@@ -11,11 +11,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use mccboard_core::{
-    Core, Doctor, Error, InstanceStatus, Language, LauncherStatus, Registry, RepairOutcome,
-    RepairReport, TaskbarWidget, TrayView, UsageReport, UsageWarning,
+    Core, Doctor, Error, InstanceStatus, Language, LauncherStatus, Registry, RepairReport,
+    TaskbarWidget, TrayView, UsageReport, UsageWarning,
 };
 
-use crate::tui::texts::{self, Failure, Texts};
+use crate::tui::app::{is_no, is_yes};
+use crate::tui::texts::{Failure, RepairOutcome, Texts};
 
 /// What the dashboard asks its runner to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,18 +64,13 @@ pub enum Notice {
     Repairing(PathBuf),
     RepairCancelled,
     NothingToRepair(PathBuf),
-    Repaired {
-        config_dir: PathBuf,
-        done: usize,
-        failed: usize,
-        first_failure: Option<String>,
-        left: usize,
-        logged_out: bool,
-    },
+    Repaired(RepairReport),
     RepairFailed {
         config_dir: PathBuf,
         failure: Failure,
     },
+    /// The user asked to quit while the repair of this instance runs: the dashboard waits.
+    Leaving(PathBuf),
     LanguageSet,
     LanguageNotSaved(Failure),
 }
@@ -88,7 +84,7 @@ impl Notice {
                 | Notice::UsageWarning(_)
                 | Notice::RepairFailed { .. }
                 | Notice::LanguageNotSaved(_)
-        ) || matches!(self, Notice::Repaired { failed, .. } if *failed > 0)
+        ) || matches!(self, Notice::Repaired(report) if report.failed() > 0)
     }
 }
 
@@ -118,6 +114,9 @@ pub struct Dashboard {
     /// The refresh under way started after the user asked for one: its outcome is told.
     telling: bool,
     pub(super) repairing: Option<PathBuf>,
+    /// The user asked to quit while a repair runs: the dashboard quits once it ends, and the
+    /// keys wait too.
+    pub(super) leaving: bool,
     pub(super) notice: Option<Notice>,
 }
 
@@ -147,6 +146,7 @@ impl Dashboard {
             asked_refresh: false,
             telling: false,
             repairing: None,
+            leaving: false,
             notice: None,
         };
         dashboard.reload_instances();
@@ -182,6 +182,9 @@ impl Dashboard {
 
     /// Handles a key, and returns what the runner must do, if anything.
     pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
+        if self.leaving {
+            return None;
+        }
         if self.confirm.is_some() {
             return self.answer(key.code);
         }
@@ -236,20 +239,25 @@ impl Dashboard {
 
     /// Answers the repair question.
     fn answer(&mut self, code: KeyCode) -> Option<Request> {
-        match code {
-            KeyCode::Char('y' | 'Y' | 's' | 'S') | KeyCode::Enter => {
-                let confirm = self.confirm.take()?;
-                self.repairing = Some(confirm.config_dir.clone());
-                self.notice = Some(Notice::Repairing(confirm.config_dir.clone()));
-                Some(Request::Repair(confirm.config_dir))
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-                self.confirm = None;
-                self.notice = Some(Notice::RepairCancelled);
-                None
-            }
-            _ => None,
+        if is_yes(code) {
+            let confirm = self.confirm.take()?;
+            self.repairing = Some(confirm.config_dir.clone());
+            self.notice = Some(Notice::Repairing(confirm.config_dir.clone()));
+            return Some(Request::Repair(confirm.config_dir));
         }
+        if is_no(code) {
+            self.confirm = None;
+            self.notice = Some(Notice::RepairCancelled);
+        }
+        None
+    }
+
+    /// The user asked to quit while the repair of `config_dir` runs: the dashboard says it
+    /// waits, and quits once the repair ends.
+    pub fn leave_after_repair(&mut self, config_dir: PathBuf) {
+        self.leaving = true;
+        self.confirm = None;
+        self.notice = Some(Notice::Leaving(config_dir));
     }
 
     /// Asks to repair the selected instance, when it has drift and no repair is running.
@@ -325,24 +333,7 @@ impl Dashboard {
                 failure: Failure::from(&error),
             },
             Ok(report) if report.items.is_empty() => Notice::NothingToRepair(config_dir),
-            Ok(report) => {
-                let failures: Vec<&str> = report
-                    .items
-                    .iter()
-                    .filter_map(|item| match &item.outcome {
-                        RepairOutcome::Failed { reason } => Some(reason.as_str()),
-                        RepairOutcome::Done { .. } => None,
-                    })
-                    .collect();
-                Notice::Repaired {
-                    config_dir,
-                    done: report.items.len() - failures.len(),
-                    failed: failures.len(),
-                    first_failure: failures.first().map(|reason| (*reason).to_owned()),
-                    left: report.drift.drift_count,
-                    logged_out: report.items.iter().any(|item| item.logged_out),
-                }
-            }
+            Ok(report) => Notice::Repaired(report),
         });
         self.reload_instances();
     }
@@ -380,25 +371,14 @@ impl Dashboard {
             Notice::Repairing(dir) => texts.repairing(&path(dir)),
             Notice::RepairCancelled => texts.repair_cancelled().to_owned(),
             Notice::NothingToRepair(dir) => texts.nothing_to_repair(&path(dir)),
-            Notice::Repaired {
-                config_dir,
-                done,
-                failed,
-                first_failure,
-                left,
-                logged_out,
-            } => texts.repaired(&texts::RepairOutcome {
-                path: path(config_dir),
-                done: *done,
-                failed: *failed,
-                first_failure: first_failure.clone(),
-                left: *left,
-                logged_out: *logged_out,
-            }),
+            Notice::Repaired(report) => {
+                texts.repaired(&RepairOutcome::of(path(&report.config_dir), report))
+            }
             Notice::RepairFailed {
                 config_dir,
                 failure,
             } => texts.repair_failed(&path(config_dir), failure),
+            Notice::Leaving(dir) => texts.leaving_after_repair(&path(dir)),
             Notice::LanguageSet => texts.language_set(),
             Notice::LanguageNotSaved(failure) => texts.language_not_saved(failure),
         })

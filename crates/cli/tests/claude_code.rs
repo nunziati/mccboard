@@ -131,10 +131,16 @@ fn status_finds_claude_in_local_bin_off_the_path() {
     assert_eq!(json["on_path"], false);
 
     let out = mccboard(home.path(), &bin, &["claude-code", "status"]);
+    let report = stdout(&out);
+    assert!(report.contains("isn't on this terminal's PATH"), "{report}");
+    // The login finds it in ~/.local/bin: only the launchers and the shell need the PATH.
     assert!(
-        stdout(&out).contains("isn't on this terminal's PATH"),
-        "{}",
-        stdout(&out)
+        report.contains("mccboard's login and background runs find claude there"),
+        "{report}"
+    );
+    assert!(
+        report.contains("the launchers and your shell look for it on the PATH"),
+        "{report}"
     );
 }
 

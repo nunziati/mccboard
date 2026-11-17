@@ -4,13 +4,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
-use mccboard_core::{Core, EndpointReply, Environment, Language};
+use mccboard_core::{ClaudeRun, Core, EndpointReply, Environment, Language};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
@@ -633,6 +635,87 @@ fn tui(modes: &Recorded) -> Tui<TestBackend> {
 
 fn pause() -> Step {
     Step::Do(Box::new(|| std::thread::sleep(Duration::from_millis(150))))
+}
+
+/// Gives the primary instance a plugin marketplace that B lacks, and makes Claude Code's
+/// `plugin marketplace add` wait until the returned sender lets it go: a repair of B that
+/// lasts as long as the test wants. The flag tells when Claude Code ended.
+fn held_repair(home: &Home) -> (mpsc::Sender<()>, Arc<AtomicBool>) {
+    let plugins = home.path().join(".claude").join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    let marketplaces = json!({"tools": {
+        "source": {"source": "github", "repo": "owner/tools"},
+        "installLocation": plugins.join("marketplaces").join("tools"),
+    }});
+    fs::write(
+        plugins.join("known_marketplaces.json"),
+        marketplaces.to_string(),
+    )
+    .unwrap();
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let ended = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ended);
+    home.env.on_claude(move |_| {
+        let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        flag.store(true, Ordering::SeqCst);
+        Ok(ClaudeRun::exit(1, "", "fake: no network"))
+    });
+    (release, ended)
+}
+
+#[test]
+fn quitting_while_a_repair_runs_waits_for_it_to_end() {
+    let _serial = serial();
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    for quit in [Step::Key(KeyCode::Char('q')), Step::Press(interrupt)] {
+        let home = Home::new();
+        let (release, ended) = held_repair(&home);
+        let modes = Recorded::default();
+        let mut screen =
+            Runner::start(home.dashboard(Language::English), super::REFRESH_EVERY).unwrap();
+        let mut events = Script::new(vec![
+            Step::Key(KeyCode::Down),
+            Step::Key(KeyCode::Char('p')),
+            Step::Key(KeyCode::Char('y')),
+            quit,
+            // Only a dashboard still running gets here and lets the repair end.
+            Step::Do(Box::new(move || release.send(()).unwrap())),
+            // No more keys: the dashboard quits on its own once the repair ends.
+            Step::Until("the dashboard to quit", Box::new(|| false)),
+        ]);
+
+        let mut tui = tui(&modes);
+        app::run(&mut tui, &mut events, &mut screen).unwrap();
+
+        // It quit once Claude Code, run by the repair, had ended, and the repair with it.
+        assert!(ended.load(Ordering::SeqCst));
+        assert!(home.b().join("agents").exists());
+        drop(tui);
+        assert_eq!(modes.log(), ["enter", "leave"]);
+    }
+}
+
+#[test]
+fn quitting_during_a_repair_says_the_dashboard_waits_and_every_key_waits_too() {
+    let home = Home::new();
+    let mut dashboard = home.dashboard(Language::English);
+    press(&mut dashboard, KeyCode::Down);
+    press(&mut dashboard, KeyCode::Char('p'));
+    press(&mut dashboard, KeyCode::Char('y'));
+
+    dashboard.leave_after_repair(home.b());
+
+    assert!(
+        screen(&dashboard).contains(&os("Leaving once the repair of ~/.claude-b ends…")),
+        "{}",
+        screen(&dashboard)
+    );
+    for code in [KeyCode::Char('q'), KeyCode::Char('r'), KeyCode::Char('s')] {
+        assert_eq!(press(&mut dashboard, code), None);
+    }
+    press(&mut dashboard, KeyCode::Char('l'));
+    assert_eq!(dashboard.language, Language::English);
 }
 
 #[test]

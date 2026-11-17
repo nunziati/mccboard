@@ -1,9 +1,9 @@
 //! Step 8: the summary.
 
 use crossterm::event::KeyCode;
-use mccboard_core::{Core, Doctor, LauncherStatus, Registry};
+use mccboard_core::{Doctor, LauncherStatus, Registry};
 
-use super::{Action, Read, read};
+use super::{Action, Read, Snapshot};
 use crate::tui::setup::state::Request;
 
 /// The accounts and instances as they now are, each instance with its login, drift and
@@ -17,16 +17,17 @@ pub struct SummaryStep {
 }
 
 impl SummaryStep {
-    pub fn load(core: &Core) -> Self {
+    pub fn new(snapshot: &Snapshot) -> Self {
         Self {
-            registry: read(core.registry()),
-            doctor: core.doctor().ok(),
-            launchers: core.launchers().ok(),
+            registry: snapshot.registry.clone(),
+            doctor: snapshot.doctor.as_ref().ok().cloned(),
+            launchers: snapshot.launchers.as_ref().ok().cloned(),
         }
     }
 
-    pub fn reload(&mut self, core: &Core) {
-        *self = Self::load(core);
+    /// Takes the instances as read now.
+    pub fn refresh(&mut self, snapshot: &Snapshot) {
+        *self = Self::new(snapshot);
     }
 
     pub fn key(&mut self, code: KeyCode) -> Action {

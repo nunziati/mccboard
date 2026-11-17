@@ -5,7 +5,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use anyhow::{Result, bail};
 use clap::Subcommand;
 use mccboard_core::{
-    CLAUDE_CODE_INSTALL_COMMAND, CLAUDE_CODE_WINDOWS_INSTALL_COMMAND, ClaudeCode, Core,
+    CLAUDE_CODE_INSTALL_COMMAND, CLAUDE_CODE_WINDOWS_INSTALL_COMMAND, ClaudeCode, Core, OsKind,
 };
 
 #[derive(Subcommand)]
@@ -34,7 +34,7 @@ pub fn run(core: &Core, command: ClaudeCodeCommand) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&claude_code)?);
             } else {
-                print_status(&claude_code);
+                print_status(&claude_code, core.os());
             }
             Ok(())
         }
@@ -45,7 +45,7 @@ pub fn run(core: &Core, command: ClaudeCodeCommand) -> Result<()> {
 fn install(core: &Core, yes: bool) -> Result<()> {
     // On Windows the core refuses before running anything and names the PowerShell command:
     // there is nothing to ask.
-    if !cfg!(windows) && !yes && !confirmed(&core.claude_code())? {
+    if core.os() != OsKind::Windows && !yes && !confirmed(&core.claude_code())? {
         println!("Nothing was run.");
         return Ok(());
     }
@@ -56,7 +56,7 @@ fn install(core: &Core, yes: bool) -> Result<()> {
             core.home().join(".local").join("bin").display()
         );
     }
-    print_status(&claude_code);
+    print_status(&claude_code, core.os());
     Ok(())
 }
 
@@ -85,7 +85,7 @@ fn confirmed(claude_code: &ClaudeCode) -> Result<bool> {
     Ok(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
-fn print_status(claude_code: &ClaudeCode) {
+fn print_status(claude_code: &ClaudeCode, os: OsKind) {
     match claude_code {
         ClaudeCode::Found {
             program,
@@ -104,14 +104,15 @@ fn print_status(claude_code: &ClaudeCode) {
             }
             if !on_path && let Some(dir) = program.parent() {
                 println!(
-                    "{} isn't on this terminal's PATH, where the login and the launchers look \
-                     for claude: open a new terminal, or add the folder to your PATH as the \
+                    "{} isn't on this terminal's PATH. mccboard's login and background runs find \
+                     claude there all the same, but the launchers and your shell look for it on \
+                     the PATH: open a new terminal, or add the folder to your PATH as the \
                      installer said.",
                     dir.display()
                 );
             }
         }
-        ClaudeCode::Missing if cfg!(windows) => println!(
+        ClaudeCode::Missing if os == OsKind::Windows => println!(
             "Claude Code isn't installed. Install it in PowerShell with \
              `{CLAUDE_CODE_WINDOWS_INSTALL_COMMAND}`, then open a new terminal."
         ),

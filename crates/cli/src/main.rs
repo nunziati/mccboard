@@ -70,7 +70,9 @@ enum Command {
     /// missing.
     Add(add::AddArgs),
     /// Open Claude Code's login in a registered instance, in this terminal, then record the
-    /// account it logged in with. mccboard never sees the credentials.
+    /// account it logged in with. mccboard never sees the credentials. The primary instance
+    /// (~/.claude) needs no registration: on a machine where Claude Code never ran, its first
+    /// login makes the folder, and mccboard registers it once an account is logged in.
     Login(add::LoginArgs),
     /// Forget registered instances. Their folders stay as they are.
     Unregister {

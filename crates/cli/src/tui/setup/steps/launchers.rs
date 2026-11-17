@@ -3,7 +3,7 @@
 use crossterm::event::KeyCode;
 use mccboard_core::{Core, LauncherStatus};
 
-use super::{Action, Read, read};
+use super::{Action, Read};
 use crate::tui::setup::state::Notice;
 use crate::tui::texts::Failure;
 
@@ -16,14 +16,15 @@ pub struct LaunchersStep {
 }
 
 impl LaunchersStep {
-    pub fn load(core: &Core) -> Self {
+    pub fn new(status: &Read<LauncherStatus>) -> Self {
         Self {
-            status: read(core.launchers()),
+            status: status.clone(),
         }
     }
 
-    pub fn reload(&mut self, core: &Core) {
-        self.status = read(core.launchers());
+    /// Takes the launchers as read now.
+    pub fn refresh(&mut self, status: &Read<LauncherStatus>) {
+        self.status = status.clone();
     }
 
     /// Done once nothing is left for a sync to fix.

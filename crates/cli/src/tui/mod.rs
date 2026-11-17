@@ -8,6 +8,7 @@
 //! - [`app`]: the loop a screen runs in.
 //! - [`texts`]: the labels, in English and Italian.
 //! - [`widgets`]: pieces of drawing the screens share.
+//! - [`repairs`]: repairs on threads of their own, waited for before a screen quits.
 //! - [`dashboard`]: `mccboard dashboard`.
 //! - [`setup`]: `mccboard setup`.
 //!
@@ -16,6 +17,7 @@
 
 pub mod app;
 mod dashboard;
+mod repairs;
 mod setup;
 pub mod terminal;
 pub mod texts;

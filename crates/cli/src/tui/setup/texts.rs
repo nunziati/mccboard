@@ -52,7 +52,8 @@ impl Texts {
         let commands = match self.language() {
             Language::English => [
                 "mccboard claude-code install --yes",
-                "mccboard scan, then mccboard register <path>",
+                "mccboard scan, then mccboard register <path>, or mccboard login ~/.claude where \
+                 ~/.claude is missing (its first login makes it and registers it)",
                 "mccboard add <label>, and mccboard login <path> for an instance not logged in",
                 "mccboard doctor, then mccboard share <item> link|private",
                 "mccboard repair",
@@ -62,7 +63,8 @@ impl Texts {
             ],
             Language::Italian => [
                 "mccboard claude-code install --yes",
-                "mccboard scan, poi mccboard register <percorso>",
+                "mccboard scan, poi mccboard register <percorso>, o mccboard login ~/.claude dove \
+                 ~/.claude manca (il suo primo login la crea e la registra)",
                 "mccboard add <etichetta>, e mccboard login <percorso> per un'istanza senza login",
                 "mccboard doctor, poi mccboard share <elemento> link|private",
                 "mccboard repair",
@@ -190,6 +192,10 @@ impl Texts {
     }
 
     // --- 1. Claude Code ------------------------------------------------------------------
+
+    pub fn looking_for_claude_code(self) -> &'static str {
+        self.pick("Looking for Claude Code…", "Ricerca di Claude Code…")
+    }
 
     pub fn claude_found(self, program: &str, version: Option<&str>) -> String {
         match (version, self.language()) {

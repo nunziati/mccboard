@@ -8,7 +8,7 @@ use mccboard_core::{
     LoginWarning, Registry, Warning,
 };
 
-use super::{Action, Read, moved, read};
+use super::{Action, Read, moved};
 use crate::tui::setup::state::{Notice, Request};
 use crate::tui::texts::Failure;
 
@@ -47,23 +47,20 @@ impl AddForm {
 }
 
 impl AccountsStep {
-    pub fn load(core: &Core) -> Self {
+    pub fn new(registry: &Read<Registry>) -> Self {
         let mut step = Self {
-            registry: Ok(Registry {
-                accounts: Vec::new(),
-                instances: Vec::new(),
-            }),
+            registry: registry.clone(),
             selected: 0,
             form: None,
         };
-        step.reload(core);
+        step.refresh(registry);
         step
     }
 
-    /// Reads the registry again. When the selected instance doesn't wait for its login, the
-    /// first one that does is selected: after a login, the next one to log in.
-    pub fn reload(&mut self, core: &Core) {
-        self.registry = read(core.registry());
+    /// Takes the registry as read now. When the selected instance doesn't wait for its login,
+    /// the first one that does is selected: after a login, the next one to log in.
+    pub fn refresh(&mut self, registry: &Read<Registry>) {
+        self.registry = registry.clone();
         if !self.selected_instance().is_some_and(needs_login)
             && let Some(at) = self.instances().iter().position(needs_login)
         {

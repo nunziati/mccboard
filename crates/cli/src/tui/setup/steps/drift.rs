@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
-use mccboard_core::{Core, Doctor, Error, InstanceDrift, RepairReport};
+use mccboard_core::{Doctor, Error, InstanceDrift, RepairReport};
 
-use super::{Action, Read, is_no, is_yes, moved, read};
+use super::{Action, Read, moved};
+use crate::tui::app::{is_no, is_yes};
 use crate::tui::setup::state::{Notice, Request};
 use crate::tui::texts::Failure;
 
@@ -23,9 +24,9 @@ pub struct DriftStep {
 }
 
 impl DriftStep {
-    pub fn load(core: &Core) -> Self {
+    pub fn new(doctor: &Read<Doctor>) -> Self {
         let mut step = Self {
-            doctor: read(core.doctor()),
+            doctor: doctor.clone(),
             selected: 0,
             confirm: false,
             repairing: None,
@@ -34,8 +35,9 @@ impl DriftStep {
         step
     }
 
-    pub fn reload(&mut self, core: &Core) {
-        self.doctor = read(core.doctor());
+    /// Takes the doctor's report as read now.
+    pub fn refresh(&mut self, doctor: &Read<Doctor>) {
+        self.doctor = doctor.clone();
         self.follow_drift();
     }
 

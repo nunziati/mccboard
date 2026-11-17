@@ -216,7 +216,10 @@ fn rows(rows: Vec<Vec<(String, Style)>>, selected: Option<usize>) -> Vec<Line<'s
 
 fn claude_code_lines(setup: &Setup, texts: Texts) -> Vec<Line<'static>> {
     let step = &setup.claude_code;
-    match &step.claude_code {
+    let Some(claude_code) = &step.claude_code else {
+        return vec![Line::from(texts.looking_for_claude_code()).dim()];
+    };
+    match claude_code {
         ClaudeCode::Found {
             program,
             on_path,
@@ -616,14 +619,23 @@ fn draw_summary(setup: &Setup, texts: Texts, frame: &mut Frame, area: Rect) {
 
 /// The keys the setup answers now, with what they do.
 fn hints(setup: &Setup, texts: Texts) -> Vec<(&'static str, &'static str)> {
-    if setup.busy() || setup.claude_code.confirm || setup.drift.confirm {
+    if setup.leaving.is_some() || setup.claude_code.confirm || setup.drift.confirm {
         return Vec::new();
     }
+    let quit = match setup.back {
+        Show::Dashboard => Hint::ToDashboard,
+        Show::Setup | Show::Quit => Hint::Quit,
+    };
+    // While a repair runs only `q` answers, and it waits for the repair to end.
+    if setup.busy() {
+        return vec![texts.hint(quit)];
+    }
     let mut hints = match setup.step() {
-        StepId::ClaudeCode if !setup.claude_code.done() && setup.claude_code.can_install() => {
-            vec![Hint::Install]
-        }
-        StepId::ClaudeCode => vec![Hint::Continue],
+        StepId::ClaudeCode => match &setup.claude_code.claude_code {
+            None => Vec::new(),
+            Some(ClaudeCode::Missing) if setup.claude_code.can_install() => vec![Hint::Install],
+            Some(_) => vec![Hint::Continue],
+        },
         StepId::Instances if !setup.instances.checked.is_empty() => {
             vec![Hint::Select, Hint::Check, Hint::Register]
         }
@@ -669,10 +681,6 @@ fn hints(setup: &Setup, texts: Texts) -> Vec<(&'static str, &'static str)> {
         StepId::Launchers => vec![Hint::Fix],
         StepId::Preferences => vec![Hint::Select, Hint::Change, Hint::Continue],
         StepId::Summary => vec![Hint::Dashboard],
-    };
-    let quit = match setup.back {
-        Show::Dashboard => Hint::ToDashboard,
-        Show::Setup | Show::Quit => Hint::Quit,
     };
     hints.extend([Hint::Steps, quit]);
     hints.into_iter().map(|hint| texts.hint(hint)).collect()

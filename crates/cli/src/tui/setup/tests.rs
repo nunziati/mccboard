@@ -7,14 +7,16 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
-    AddRequest, ClaudeProcess, Core, InstallerExit, Language, LoginExit, LoginTerminal, OsKind,
-    ProcessConfigDir, SharingAnswer,
+    AddRequest, ClaudeProcess, ClaudeRun, Core, InstallerExit, Language, LoginExit, LoginTerminal,
+    OsKind, ProcessConfigDir, SharingAnswer,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -132,8 +134,11 @@ impl Home {
         fs::read_to_string(self.path().join(".bashrc")).unwrap_or_default()
     }
 
+    /// The setup of this home, with Claude Code as the runner's lookup would hand it over.
     fn setup(&self, language: Language) -> Setup {
-        Setup::new(self.core.clone(), language, OsKind::Linux)
+        let mut setup = Setup::new(self.core.clone(), language);
+        setup.message(Message::ClaudeCodeFound(self.core.claude_code()));
+        setup
     }
 
     /// Makes the official installer put an executable `claude` in `~/.local/bin`, as the real
@@ -418,8 +423,11 @@ fn a_fresh_home_is_set_up_step_by_step_and_a_second_run_changes_nothing() {
     );
     assert!(setup.busy());
     assert_shows(&screen(&setup), &[&os("Repairing ~/.claude-b…")]);
-    // Nothing else happens while the repair runs.
-    assert_eq!(press(&mut setup, KeyCode::Char('q')), None);
+    // The other keys wait while the repair runs. `q` goes to the runner, and the runner waits
+    // for the repair to end before leaving.
+    assert_eq!(press(&mut setup, KeyCode::Char('2')), None);
+    assert_eq!(setup.step(), StepId::Drift);
+    assert_eq!(press(&mut setup, KeyCode::Char('q')), Some(Request::Quit));
     let result = home.core.repair(&home.b(), None);
     setup.message(Message::Repaired {
         config_dir: home.b(),
@@ -935,7 +943,9 @@ fn an_installer_that_cannot_run_without_curl_says_so() {
 #[test]
 fn on_windows_the_step_shows_the_powershell_command_and_runs_nothing() {
     let home = Home::fresh();
-    let mut setup = Setup::new(home.core.clone(), Language::English, OsKind::Windows);
+    // The core says which OS it works on: here a fake Windows, whatever the tests run on.
+    home.env.set_os(OsKind::Windows);
+    let mut setup = home.setup(Language::English);
 
     assert_shows(
         &screen(&setup),
@@ -1080,7 +1090,7 @@ fn tui(modes: &Recorded) -> Tui<TestBackend> {
 /// frame showed.
 fn run_setup(home: &Home, modes: &Recorded, steps: Vec<Step>) -> String {
     let mut console = RecordedConsole(modes.clone());
-    let mut runner = Runner::new(home.setup(Language::English), &mut console);
+    let mut runner = Runner::new(home.setup(Language::English), &mut console).unwrap();
     let mut events = Script::new(steps);
     let mut tui = tui(modes);
     app::run(&mut tui, &mut events, &mut runner).unwrap();
@@ -1263,6 +1273,217 @@ fn a_repair_runs_on_its_thread_and_the_setup_waits_for_it() {
     );
     assert!(shown.contains(" ✓ 5 Drift"), "{shown}");
     assert_eq!(modes.log(), ["enter", "leave"]);
+}
+
+/// Gives the primary instance a plugin marketplace that B lacks, and makes Claude Code's
+/// `plugin marketplace add` wait until the returned sender lets it go: a repair of B that
+/// lasts as long as the test wants. The flag tells when Claude Code ended.
+fn held_repair(home: &Home) -> (mpsc::Sender<()>, Arc<AtomicBool>) {
+    let plugins = home.primary().join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    let marketplaces = json!({"tools": {
+        "source": {"source": "github", "repo": "owner/tools"},
+        "installLocation": plugins.join("marketplaces").join("tools"),
+    }});
+    fs::write(
+        plugins.join("known_marketplaces.json"),
+        marketplaces.to_string(),
+    )
+    .unwrap();
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let ended = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ended);
+    home.env.on_claude(move |_| {
+        let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        flag.store(true, Ordering::SeqCst);
+        Ok(ClaudeRun::exit(1, "", "fake: no network"))
+    });
+    (release, ended)
+}
+
+#[test]
+fn leaving_while_a_repair_runs_waits_for_it_to_end() {
+    let _serial = serial();
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    // `q` leads where the setup goes back to, Ctrl+C out of mccboard.
+    for (quit, back, next) in [
+        (Step::Key(KeyCode::Char('q')), Show::Quit, Show::Quit),
+        (
+            Step::Key(KeyCode::Char('q')),
+            Show::Dashboard,
+            Show::Dashboard,
+        ),
+        (Step::Press(interrupt), Show::Dashboard, Show::Quit),
+    ] {
+        let home = Home::with_drift();
+        let (release, ended) = held_repair(&home);
+        let modes = Recorded::default();
+        let mut console = RecordedConsole(modes.clone());
+        let setup = home.setup(Language::English).returning_to(back);
+        let mut runner = Runner::new(setup, &mut console).unwrap();
+        let mut events = Script::new(vec![
+            Step::Key(KeyCode::Char('5')),
+            Step::Key(KeyCode::Enter),
+            Step::Key(KeyCode::Char('y')),
+            quit,
+            // Only a setup still running gets here and lets the repair end.
+            Step::Do(Box::new(move || release.send(()).unwrap())),
+            // No more keys: the setup leaves on its own once the repair ends.
+            Step::Until("the setup to leave", Box::new(|| false)),
+        ]);
+
+        let mut tui = tui(&modes);
+        app::run(&mut tui, &mut events, &mut runner).unwrap();
+
+        // It left once Claude Code, run by the repair, had ended, and the repair with it.
+        assert!(ended.load(Ordering::SeqCst), "{back:?} {next:?}");
+        assert_eq!(runner.next, next);
+        drop(tui);
+        assert_eq!(modes.log(), ["enter", "leave"]);
+    }
+}
+
+#[test]
+fn leaving_during_a_repair_says_the_setup_waits_and_every_key_waits_too() {
+    let home = Home::with_drift();
+    let mut setup = home.setup(Language::English);
+    press(&mut setup, KeyCode::Char('5'));
+    press(&mut setup, KeyCode::Enter);
+    assert_eq!(
+        press(&mut setup, KeyCode::Char('y')),
+        Some(Request::Repair(home.b()))
+    );
+    assert_shows(&screen(&setup), &["q quit"]);
+
+    setup.leave_after_repair(Show::Quit, home.b());
+
+    let text = screen(&setup);
+    assert_shows(
+        &text,
+        &[&os("Leaving once the repair of ~/.claude-b ends…")],
+    );
+    assert!(!text.contains("q quit"), "{text}");
+    assert_eq!(press(&mut setup, KeyCode::Char('q')), None);
+    setup.language = Language::Italian;
+    assert_shows(
+        &screen(&setup),
+        &[&os("Esco appena finisce la riparazione di ~/.claude-b…")],
+    );
+}
+
+#[test]
+fn a_login_that_fails_after_claude_code_ran_waits_for_enter_first() {
+    let _serial = serial();
+    let home = Home::fresh();
+    let c = home.path().join(".claude-c");
+    fs::create_dir_all(&c).unwrap();
+    home.core.register(&home.primary()).unwrap();
+    home.core.register(&c).unwrap();
+    let modes = Recorded::default();
+    let log = modes.clone();
+    let config = home.path().join(".mccboard").join("config.toml");
+    home.env.on_login(move |_| {
+        log.push("login");
+        // Claude Code ran. mccboard then can't record its account.
+        fs::write(&config, "this is not toml [")?;
+        Ok(LoginExit { exit_code: Some(0) })
+    });
+
+    let shown = run_setup(
+        &home,
+        &modes,
+        vec![Step::Key(KeyCode::Char('3')), Step::Key(KeyCode::Enter)],
+    );
+
+    assert_eq!(
+        modes.log(),
+        ["enter", "leave", "say", "login", "wait", "enter", "leave"]
+    );
+    assert!(shown.contains("didn't open"), "{shown}");
+}
+
+#[test]
+fn an_installer_that_could_not_start_is_not_waited_for() {
+    let _serial = serial();
+    for missing_curl in [false, true] {
+        let home = Home::fresh();
+        let modes = Recorded::default();
+        let log = modes.clone();
+        home.env.on_claude_install(move |_| {
+            log.push("installer");
+            Err(io::Error::new(io::ErrorKind::NotFound, "fake: no bash"))
+        });
+        if missing_curl {
+            home.env.set_program("curl", None);
+        }
+
+        let shown = run_setup(
+            &home,
+            &modes,
+            vec![Step::Key(KeyCode::Enter), Step::Key(KeyCode::Char('y'))],
+        );
+
+        // Nothing started, or it couldn't: no output to read, no Enter to press.
+        let expected: &[&str] = if missing_curl {
+            &["enter", "leave", "say", "enter", "leave"]
+        } else {
+            &["enter", "leave", "say", "installer", "enter", "leave"]
+        };
+        assert_eq!(modes.log(), expected);
+        assert!(shown.contains("Claude Code isn't installed: "), "{shown}");
+    }
+}
+
+#[test]
+fn claude_code_is_looked_for_off_the_screens_thread_and_the_screen_answers_meanwhile() {
+    let _serial = serial();
+    let home = Home::set_up();
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let looked_from = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&looked_from);
+    // A `claude --version` that takes as long as the test wants.
+    home.env.on_claude_version(move |_| {
+        *seen.lock().unwrap() = Some(std::thread::current().id());
+        let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        Ok(ClaudeRun::ok("2.1.301 (Claude Code)\n"))
+    });
+
+    let mut setup = Setup::new(home.core.clone(), Language::English);
+    // Starting the setup doesn't look for Claude Code: the runner does, on its own thread.
+    assert!(home.env.claude_version_runs().is_empty());
+    assert_eq!(setup.done(StepId::ClaudeCode), Some(false));
+    assert_shows(&screen(&setup), &["Looking for Claude Code…"]);
+    assert_eq!(press(&mut setup, KeyCode::Enter), None);
+    assert_eq!(setup.step(), StepId::ClaudeCode);
+
+    let modes = Recorded::default();
+    let mut console = RecordedConsole(modes.clone());
+    let mut runner = Runner::new(setup, &mut console).unwrap();
+    let env = home.env.clone();
+    let mut events = Script::new(vec![
+        Step::Until(
+            "the lookup",
+            Box::new(move || env.claude_version_runs().len() == 1),
+        ),
+        // The screen answers while the lookup waits.
+        Step::Key(KeyCode::Right),
+        Step::Key(KeyCode::Left),
+        Step::Do(Box::new(move || release.send(()).unwrap())),
+        pause(),
+        Step::Key(KeyCode::Null),
+    ]);
+    let mut tui = tui(&modes);
+    app::run(&mut tui, &mut events, &mut runner).unwrap();
+
+    let shown = buffer_text(tui.terminal());
+    assert!(
+        shown.contains("Claude Code is installed: /usr/bin/claude, version 2.1.301"),
+        "{shown}"
+    );
+    let looked_from = looked_from.lock().unwrap().unwrap();
+    assert_ne!(looked_from, std::thread::current().id());
 }
 
 #[test]

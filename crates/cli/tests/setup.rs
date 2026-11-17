@@ -32,6 +32,7 @@ fn home_speaking(language: &str) -> tempfile::TempDir {
 const COMMANDS: &[&str] = &[
     "1. mccboard claude-code install --yes",
     "2. mccboard scan",
+    "mccboard login ~/.claude",
     "mccboard register",
     "3. mccboard add",
     "mccboard login",

@@ -52,6 +52,12 @@ pub trait Screen<B: Backend> {
     /// is due.
     fn update(&mut self) -> Result<Flow>;
 
+    /// The user pressed Ctrl+C: the loop ends, unless the screen has work under way that
+    /// must end first (a repair). It then quits from [`Screen::update`] once the work ends.
+    fn interrupt(&mut self) -> Result<Flow> {
+        Ok(Flow::Quit)
+    }
+
     /// How long the loop may wait for a key before [`Screen::update`] is due.
     fn wait(&self) -> Duration;
 }
@@ -60,7 +66,7 @@ pub trait Screen<B: Backend> {
 const LONGEST_WAIT: Duration = Duration::from_millis(200);
 
 /// Runs `screen` until it quits, or until the user presses Ctrl+C (in raw mode a key like any
-/// other). An error ends the loop and returns.
+/// other) and the screen lets the loop end. An error ends the loop and returns.
 pub fn run<B>(tui: &mut Tui<B>, events: &mut dyn Events, screen: &mut dyn Screen<B>) -> Result<()>
 where
     B: Backend,
@@ -72,9 +78,15 @@ where
         // Windows reports releases too: a key acts once, when pressed (or held).
         if let Some(Event::Key(key)) = events.next(wait)?
             && key.kind != KeyEventKind::Release
-            && (is_interrupt(&key) || screen.key(key, tui)? == Flow::Quit)
         {
-            return Ok(());
+            let flow = if is_interrupt(&key) {
+                screen.interrupt()?
+            } else {
+                screen.key(key, tui)?
+            };
+            if flow == Flow::Quit {
+                return Ok(());
+            }
         }
         if screen.update()? == Flow::Quit {
             return Ok(());
@@ -84,6 +96,16 @@ where
 
 fn is_interrupt(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+}
+
+/// Whether `code` answers yes to a question: y, s (sì) or Enter.
+pub fn is_yes(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('y' | 'Y' | 's' | 'S') | KeyCode::Enter)
+}
+
+/// Whether `code` answers no to a question: n or Esc.
+pub fn is_no(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('n' | 'N') | KeyCode::Esc)
 }
 
 #[cfg(test)]

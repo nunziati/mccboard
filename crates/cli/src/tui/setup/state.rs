@@ -10,16 +10,16 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use mccboard_core::{
-    AddReport, AddRequest, ClaudeCode, Core, Error, Language, LauncherSync, LoginReport, OsKind,
-    RepairOutcome, RepairReport, SharingAnswer,
+    AddReport, AddRequest, ClaudeCode, Core, Error, Language, LauncherSync, LoginReport,
+    RepairReport, SharingAnswer,
 };
 
 use super::steps::{
     AccountsStep, Action, ClaudeCodeStep, DriftStep, InstancesStep, LaunchersStep, PreferencesStep,
-    SharingStep, SummaryStep,
+    SharingStep, Snapshot, SummaryStep,
 };
 use crate::tui::Show;
-use crate::tui::texts::{self, Failure, Texts};
+use crate::tui::texts::{Failure, RepairOutcome, Texts};
 
 /// A step of the setup, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,8 @@ pub enum Request {
 /// What the runner tells the setup once a request is done.
 #[derive(Debug)]
 pub enum Message {
+    /// Claude Code as the core found it, looked for off the screen's thread.
+    ClaudeCodeFound(ClaudeCode),
     Installed(Result<ClaudeCode, Error>),
     LoggedIn {
         config_dir: PathBuf,
@@ -142,6 +144,8 @@ pub enum Notice {
         path: PathBuf,
         failure: Failure,
     },
+    /// The user asked to leave while the repair of this instance runs: the setup waits.
+    Leaving(PathBuf),
     LaunchersSynced(LauncherSync),
     LaunchersFailed(Failure),
     LanguageSet,
@@ -187,26 +191,32 @@ pub struct Setup {
     pub(super) notice: Option<Notice>,
     /// Where `q` leads: out of mccboard, or back to the dashboard that opened the setup.
     pub(super) back: Show,
+    /// The user asked to leave while a repair runs: where to go once it ends. Meanwhile the
+    /// keys wait.
+    pub(super) leaving: Option<Show>,
 }
 
 impl Setup {
-    /// The setup of `core`'s home in `language`, on a machine running `os`, at its first
-    /// step. Every step reads what is already done. `q` quits mccboard.
-    pub fn new(core: Core, language: Language, os: OsKind) -> Setup {
+    /// The setup of `core`'s home in `language`, at its first step. Every step reads what is
+    /// already done, but Claude Code's: the runner looks for it off the screen's thread and
+    /// hands it over ([`Message::ClaudeCodeFound`]). `q` quits mccboard.
+    pub fn new(core: Core, language: Language) -> Setup {
+        let snapshot = Snapshot::read(&core);
         Setup {
-            claude_code: ClaudeCodeStep::load(&core, os),
+            claude_code: ClaudeCodeStep::new(core.os()),
             instances: InstancesStep::load(&core),
-            accounts: AccountsStep::load(&core),
-            sharing: SharingStep::load(&core),
-            drift: DriftStep::load(&core),
-            launchers: LaunchersStep::load(&core),
+            accounts: AccountsStep::new(&snapshot.registry),
+            sharing: SharingStep::new(&snapshot.doctor),
+            drift: DriftStep::new(&snapshot.doctor),
+            launchers: LaunchersStep::new(&snapshot.launchers),
             preferences: PreferencesStep::load(&core),
-            summary: SummaryStep::load(&core),
+            summary: SummaryStep::new(&snapshot),
             core,
             language,
             step: StepId::ClaudeCode,
             notice: None,
             back: Show::Quit,
+            leaving: None,
         }
     }
 
@@ -249,15 +259,28 @@ impl Setup {
         }
     }
 
-    /// Whether a repair runs: the setup waits for it, and every key but Ctrl+C waits too.
+    /// Whether a repair runs. Every key waits for it then but `q`, and `q` waits for it to end.
     pub fn busy(&self) -> bool {
         self.drift.repairing.is_some()
     }
 
+    /// The user asked to leave for `to` while the repair of `config_dir` runs: the setup says
+    /// it waits, and the runner leaves once the repair ends. Quitting wins over going back to
+    /// the dashboard.
+    pub fn leave_after_repair(&mut self, to: Show, config_dir: PathBuf) {
+        if self.leaving != Some(Show::Quit) {
+            self.leaving = Some(to);
+        }
+        self.notice = Some(Notice::Leaving(config_dir));
+    }
+
     /// Handles a key, and returns what the runner must do, if anything.
     pub fn key(&mut self, key: KeyEvent) -> Option<Request> {
-        if self.busy() {
+        if self.leaving.is_some() {
             return None;
+        }
+        if self.busy() {
+            return (key.code == KeyCode::Char('q')).then_some(Request::Quit);
         }
         if !self.holds_keys() {
             let to = match key.code {
@@ -290,6 +313,10 @@ impl Setup {
     /// Handles what the runner did.
     pub fn message(&mut self, message: Message) {
         let notice = match message {
+            Message::ClaudeCodeFound(found) => {
+                self.claude_code.found(found);
+                return;
+            }
             Message::Installed(result) => self.claude_code.installed(result),
             Message::LoggedIn { config_dir, result } => self.accounts.logged_in(config_dir, result),
             Message::Added(result) => self.accounts.added(result),
@@ -334,23 +361,21 @@ impl Setup {
     fn go(&mut self, step: StepId) {
         self.step = step;
         self.notice = None;
-        match step {
-            // Looking for Claude Code runs `claude --version`: only when its step shows.
-            StepId::ClaudeCode => self.claude_code.reload(&self.core),
-            _ => self.reload(),
-        }
+        self.reload();
     }
 
-    /// Reads every step again, but Claude Code's.
+    /// Reads every step again, each source once, but Claude Code's: looking for it runs
+    /// `claude --version`, and only the installer changes it.
     fn reload(&mut self) {
         let core = &self.core;
+        let snapshot = Snapshot::read(core);
         self.instances.reload(core);
-        self.accounts.reload(core);
-        self.sharing.reload(core);
-        self.drift.reload(core);
-        self.launchers.reload(core);
+        self.accounts.refresh(&snapshot.registry);
+        self.sharing.refresh(&snapshot.doctor);
+        self.drift.refresh(&snapshot.doctor);
+        self.launchers.refresh(&snapshot.launchers);
         self.preferences.reload(core);
-        self.summary.reload(core);
+        self.summary.refresh(&snapshot);
     }
 
     /// `path` as shown: under the home, starting with `~`.
@@ -407,34 +432,15 @@ impl Setup {
                 texts.nothing_to_repair(&path(&report.config_dir))
             }
             Notice::Repaired(report) => {
-                texts.repaired(&repair_outcome(&path(&report.config_dir), report))
+                texts.repaired(&RepairOutcome::of(path(&report.config_dir), report))
             }
             Notice::RepairFailed { path: dir, failure } => texts.repair_failed(&path(dir), failure),
+            Notice::Leaving(dir) => texts.leaving_after_repair(&path(dir)),
             Notice::LaunchersSynced(sync) => texts.launchers_synced(sync),
             Notice::LaunchersFailed(failure) => texts.launchers_failed(failure),
             Notice::LanguageSet => texts.language_set(),
             Notice::Renewal(on) => texts.renewal_set(*on).to_owned(),
             Notice::PreferenceNotSaved(failure) => texts.preference_not_saved(failure),
         }
-    }
-}
-
-/// What a repair did, as the dashboard tells it too.
-fn repair_outcome(path: &str, report: &RepairReport) -> texts::RepairOutcome {
-    let failures: Vec<&str> = report
-        .items
-        .iter()
-        .filter_map(|item| match &item.outcome {
-            RepairOutcome::Failed { reason } => Some(reason.as_str()),
-            RepairOutcome::Done { .. } => None,
-        })
-        .collect();
-    texts::RepairOutcome {
-        path: path.to_owned(),
-        done: report.items.len() - failures.len(),
-        failed: failures.len(),
-        first_failure: failures.first().map(|reason| (*reason).to_owned()),
-        left: report.drift.drift_count,
-        logged_out: report.items.iter().any(|item| item.logged_out),
     }
 }

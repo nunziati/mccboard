@@ -1,9 +1,9 @@
 //! Step 4: the unknown items of the primary instance.
 
 use crossterm::event::KeyCode;
-use mccboard_core::{Core, SharingAnswer, SharingQuestion};
+use mccboard_core::{Core, Doctor, SharingAnswer, SharingQuestion};
 
-use super::{Action, Read, read};
+use super::{Action, Read};
 use crate::tui::setup::state::Notice;
 use crate::tui::texts::Failure;
 
@@ -18,15 +18,21 @@ pub struct SharingStep {
 }
 
 impl SharingStep {
-    pub fn load(core: &Core) -> Self {
-        Self {
-            questions: read(core.sharing_questions()),
+    pub fn new(doctor: &Read<Doctor>) -> Self {
+        let mut step = Self {
+            questions: Ok(Vec::new()),
             skipped: Vec::new(),
-        }
+        };
+        step.refresh(doctor);
+        step
     }
 
-    pub fn reload(&mut self, core: &Core) {
-        self.questions = read(core.sharing_questions());
+    /// Takes the questions of the doctor's report as read now.
+    pub fn refresh(&mut self, doctor: &Read<Doctor>) {
+        self.questions = doctor
+            .as_ref()
+            .map(|doctor| doctor.questions.clone())
+            .map_err(Clone::clone);
     }
 
     /// The questions waiting for an answer, none when they can't be read.

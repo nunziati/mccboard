@@ -161,6 +161,12 @@ impl Core {
         Paths::new(&self.home)
     }
 
+    /// The operating system this core works on, as its environment reports it. Front ends ask
+    /// it rather than deciding on their own: a fake environment can play Windows on Linux.
+    pub fn os(&self) -> OsKind {
+        self.env.os()
+    }
+
     /// Finds instance candidates in the home: `~/.claude` (the primary instance) and every
     /// `~/.claude-*` directory (linked instances), primary first. Scanning only proposes
     /// instances: it registers nothing and writes nothing. Each candidate says whether it is

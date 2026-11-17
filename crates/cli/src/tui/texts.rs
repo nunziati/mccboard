@@ -4,7 +4,7 @@
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use mccboard_core::{Language, UsageWarning};
+use mccboard_core::{Language, RepairReport, UsageWarning};
 
 /// Texts in one language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,6 +279,14 @@ impl Texts {
         self.pick("Repair cancelled.", "Riparazione annullata.")
     }
 
+    /// The user asked to leave while a repair runs: the screen waits for it.
+    pub fn leaving_after_repair(self, path: &str) -> String {
+        match self.language {
+            Language::English => format!("Leaving once the repair of {path} ends…"),
+            Language::Italian => format!("Esco appena finisce la riparazione di {path}…"),
+        }
+    }
+
     pub fn nothing_to_repair(self, path: &str) -> String {
         match self.language {
             Language::English => format!("Nothing to repair in {path}."),
@@ -407,6 +415,28 @@ pub struct RepairOutcome {
     pub left: usize,
     /// The repair left the instance logged out.
     pub logged_out: bool,
+}
+
+impl RepairOutcome {
+    /// What `report` did, in the instance shown as `path`.
+    pub fn of(path: String, report: &RepairReport) -> RepairOutcome {
+        let failures: Vec<&str> = report
+            .items
+            .iter()
+            .filter_map(|item| match &item.outcome {
+                mccboard_core::RepairOutcome::Failed { reason } => Some(reason.as_str()),
+                mccboard_core::RepairOutcome::Done { .. } => None,
+            })
+            .collect();
+        RepairOutcome {
+            path,
+            done: report.items.len() - failures.len(),
+            failed: failures.len(),
+            first_failure: failures.first().map(|reason| (*reason).to_owned()),
+            left: report.drift.drift_count,
+            logged_out: report.items.iter().any(|item| item.logged_out),
+        }
+    }
 }
 
 #[cfg(test)]

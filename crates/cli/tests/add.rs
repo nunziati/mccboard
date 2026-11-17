@@ -38,6 +38,25 @@ fn fixture_home() -> tempfile::TempDir {
     home
 }
 
+/// On a server where Claude Code never ran, `mccboard login ~/.claude` is the first login of
+/// the primary instance: it needs no registration and no folder, and mccboard makes none.
+#[test]
+fn login_of_the_missing_primary_instance_opens_its_first_login() {
+    let home = tempfile::tempdir().unwrap();
+
+    let out = mccboard(home.path(), &["login", "~/.claude"]);
+
+    // Without a terminal the login stops there, past the registration it doesn't need.
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(text(&out).contains("needs a terminal"), "{}", text(&out));
+    assert!(
+        !text(&out).contains("not a registered instance"),
+        "{}",
+        text(&out)
+    );
+    assert!(!home.path().join(".claude").exists());
+}
+
 #[test]
 fn add_without_login_sets_up_and_registers_the_instance() {
     let home = fixture_home();

@@ -13,7 +13,6 @@ mod view;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
@@ -24,6 +23,7 @@ use ratatui::Frame;
 use ratatui::backend::Backend;
 
 use super::app::{self, Events, Flow, Screen, TerminalEvents};
+use super::repairs::Repairs;
 use super::setup::TerminalConsole;
 use super::terminal::Tui;
 use super::{Show, Texts};
@@ -70,7 +70,7 @@ pub struct Runner {
     messages: Receiver<Message>,
     sender: Sender<Message>,
     refresher: refresh::Refresher,
-    repairs: Vec<(PathBuf, JoinHandle<()>)>,
+    repairs: Repairs,
     /// When the times to reset read differently.
     redraw_at: Instant,
     /// The dashboard's count of computed views when `redraw_at` was set.
@@ -92,28 +92,35 @@ impl Runner {
             messages,
             sender,
             refresher,
-            repairs: Vec::new(),
+            repairs: Repairs::default(),
             next: Show::Quit,
         })
     }
 
-    /// Repairs the instance in `config_dir` on a thread of its own: installing a plugin runs
-    /// Claude Code, which takes a while.
+    /// Repairs the instance in `config_dir` on a thread of its own.
     fn repair(&mut self, config_dir: PathBuf) -> Result<()> {
-        let core = self.dashboard.core.clone();
         let sender = self.sender.clone();
-        let dir = config_dir.clone();
-        let thread = std::thread::Builder::new()
-            .name("mccboard-dashboard-repair".into())
-            .spawn(move || {
-                let result = core.repair(&dir, None);
-                let _ = sender.send(Message::Repaired {
-                    config_dir: dir,
-                    result,
-                });
-            })?;
-        self.repairs.push((config_dir, thread));
+        self.repairs.start(
+            self.dashboard.core.clone(),
+            config_dir,
+            move |config_dir, result| {
+                let _ = sender.send(Message::Repaired { config_dir, result });
+            },
+        )?;
         Ok(())
+    }
+
+    /// Quits, or, while a repair runs, waits for it to end and quits from
+    /// [`Screen::update`].
+    fn leave(&mut self) -> Flow {
+        match self.repairs.running() {
+            Some(dir) => {
+                let dir = dir.to_path_buf();
+                self.dashboard.leave_after_repair(dir);
+                Flow::Continue
+            }
+            None => Flow::Quit,
+        }
     }
 
     /// Times the next redraw from views computed since the last look.
@@ -132,7 +139,7 @@ impl<B: Backend> Screen<B> for Runner {
 
     fn key(&mut self, key: KeyEvent, _tui: &mut Tui<B>) -> Result<Flow> {
         match self.dashboard.key(key) {
-            Some(Request::Quit) => return Ok(Flow::Quit),
+            Some(Request::Quit) => return Ok(self.leave()),
             Some(Request::Setup) => {
                 self.next = Show::Setup;
                 return Ok(Flow::Quit);
@@ -154,20 +161,19 @@ impl<B: Backend> Screen<B> for Runner {
         if self.refresher.stopped() {
             bail!("the usage refresh stopped unexpectedly");
         }
-        let ended: Vec<_> = self
-            .repairs
-            .extract_if(.., |(_, thread)| thread.is_finished())
-            .collect();
-        for (dir, thread) in ended {
-            if thread.join().is_err() {
-                bail!("the repair of {} stopped unexpectedly", dir.display());
-            }
+        self.repairs.join_ended()?;
+        if self.dashboard.leaving && self.repairs.running().is_none() {
+            return Ok(Flow::Quit);
         }
         if Instant::now() >= self.redraw_at {
             self.dashboard.tick();
         }
         self.follow_views();
         Ok(Flow::Continue)
+    }
+
+    fn interrupt(&mut self) -> Result<Flow> {
+        Ok(self.leave())
     }
 
     fn wait(&self) -> Duration {

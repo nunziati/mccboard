@@ -30,7 +30,7 @@ pub struct AddArgs {
 
 #[derive(Args)]
 pub struct LoginArgs {
-    /// The registered instance's config directory.
+    /// The config directory of a registered instance, or ~/.claude, registered or not.
     #[arg(value_name = "PATH")]
     path: PathBuf,
     /// Print machine-readable JSON on stdout. The login runs in this terminal all the same;
@@ -170,7 +170,7 @@ fn print_login(report: &LoginReport) {
             );
         }
         None if report.run != LoginRun::NotRequested => {
-            println!("No account is logged in to {dir}: it stays registered, not logged in.")
+            println!("No account is logged in to {dir}.")
         }
         None => {}
     }
