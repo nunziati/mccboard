@@ -256,14 +256,13 @@ pub fn run() {
     }
     let core = Core::new(home, SystemEnvironment);
 
-    let builder = tauri::Builder::default();
-    // First: a second copy of the app (a profile's shortcut or pin) hands its arguments to
-    // this one and exits before anything else starts.
-    #[cfg(windows)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        taskbar::on_second_copy(app, &argv);
-    }));
-    builder
+    // First: a second copy of the app (a profile's shortcut or pin, a start from the app menu)
+    // hands its arguments to this one and exits before anything else starts. Without it, on a
+    // Linux desktop with no tray, a closed window could never come back.
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            taskbar::on_second_copy(app, &argv);
+        }))
         .manage(core.clone())
         .invoke_handler(tauri::generate_handler![
             scan,
@@ -284,6 +283,7 @@ pub fn run() {
             login_instance,
             open_desktop_profile,
             desktop::desktop_profiles,
+            desktop::desktop_profiles_supported,
             desktop::desktop_profile_candidates,
             desktop::desktop_profile_folder,
             desktop::add_desktop_profile,

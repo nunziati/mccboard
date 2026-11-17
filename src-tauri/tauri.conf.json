@@ -26,7 +26,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Control center for several Claude Code accounts",
+    "longDescription": "A control center for running several Claude Code accounts side by side: it sets them up, keeps them consistent, and shows how much of each account's usage is left.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

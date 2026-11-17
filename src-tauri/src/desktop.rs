@@ -123,6 +123,13 @@ pub(crate) async fn desktop_profiles(
         .map_err(CommandError::from)
 }
 
+/// Whether desktop profiles can open on this platform (Windows only). Elsewhere the window
+/// shows no profile to open.
+#[tauri::command]
+pub(crate) fn desktop_profiles_supported(core: tauri::State<'_, Core>) -> bool {
+    core.desktop_profiles_supported()
+}
+
 /// The accounts that can get a desktop profile.
 #[tauri::command]
 pub(crate) fn desktop_profile_candidates(

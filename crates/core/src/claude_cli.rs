@@ -144,10 +144,11 @@ impl Lookup {
     }
 
     /// The terminal emulator for a new window on Linux: `$TERMINAL` (a name on the PATH or a
-    /// path), else `x-terminal-emulator` (Debian's choice of the user's terminal), else
-    /// `xterm`. Each takes the program to run after `-e`.
+    /// path), else `x-terminal-emulator` (Debian's choice of the user's terminal), else the
+    /// first of [`TERMINALS`] on the PATH. A desktop started from its own menu often has
+    /// neither of the first two.
     #[cfg_attr(windows, allow(dead_code))]
-    fn terminal(&self) -> Option<PathBuf> {
+    fn terminal(&self) -> Option<Terminal> {
         let chosen = self
             .terminal
             .as_deref()
@@ -160,9 +161,55 @@ impl Lookup {
                     self.find(&terminal.to_string_lossy())
                 }
             });
-        chosen
+        let program = chosen
             .or_else(|| self.find("x-terminal-emulator"))
-            .or_else(|| self.find("xterm"))
+            .or_else(|| TERMINALS.iter().find_map(|(name, _)| self.find(name)))?;
+        Some(Terminal::new(program))
+    }
+}
+
+/// The terminal emulators mccboard knows, in the order it tries them, each with what it takes
+/// before the program to run. Each runs the program in a process of its own that ends when
+/// its window closes, so the login can be waited for.
+#[cfg_attr(windows, allow(dead_code))]
+const TERMINALS: &[(&str, &[&str])] = &[
+    ("kitty", &[]),
+    ("alacritty", &["-e"]),
+    ("foot", &[]),
+    ("wezterm", &["start", "--always-new-process", "--"]),
+    ("konsole", &["-e"]),
+    ("gnome-terminal", &["--wait", "--"]),
+    ("xfce4-terminal", &["--disable-server", "-x"]),
+    ("xterm", &["-e"]),
+];
+
+/// What any other terminal takes before the program: `-e`, which Debian requires of every
+/// `x-terminal-emulator`.
+#[cfg_attr(windows, allow(dead_code))]
+const DASH_E: &[&str] = &["-e"];
+
+/// A terminal emulator for a new window on Linux.
+#[cfg_attr(windows, allow(dead_code))]
+#[derive(Debug)]
+struct Terminal {
+    program: PathBuf,
+    /// The arguments before the program to run: the known terminal's own, else `-e`.
+    before_program: &'static [&'static str],
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+impl Terminal {
+    /// `program` with the arguments its file name calls for.
+    fn new(program: PathBuf) -> Self {
+        let name = program.file_name().and_then(|name| name.to_str());
+        let before_program = TERMINALS
+            .iter()
+            .find(|(known, _)| Some(*known) == name)
+            .map_or(DASH_E, |(_, args)| *args);
+        Self {
+            program,
+            before_program,
+        }
     }
 }
 
@@ -323,24 +370,29 @@ fn window(_lookup: &Lookup) -> io::Result<Console> {
 
 /// What opens a new window on Linux: a terminal emulator, `Unsupported` when there is none.
 #[cfg(not(windows))]
-fn window(lookup: &Lookup) -> io::Result<PathBuf> {
+fn window(lookup: &Lookup) -> io::Result<Terminal> {
     lookup.terminal().ok_or_else(|| {
+        let known: Vec<&str> = TERMINALS.iter().map(|(name, _)| *name).collect();
         io::Error::new(
             io::ErrorKind::Unsupported,
-            "no terminal emulator found ($TERMINAL, x-terminal-emulator, xterm)",
+            format!(
+                "no terminal emulator found ($TERMINAL, x-terminal-emulator, {})",
+                known.join(", ")
+            ),
         )
     })
 }
 
-/// Claude Code in a terminal emulator's new window: `<terminal> -e <claude> auth login …`,
-/// waited for until the window closes. A terminal that hands its windows to a server and
-/// returns at once (some `gnome-terminal` setups) ends the wait early: the instance then reads
-/// as not logged in until "Log in" is run again or the instance is registered again.
+/// Claude Code in a terminal emulator's new window, `<terminal> -e <claude> auth login …` or
+/// what that terminal takes instead of `-e`, waited for until the window closes. A terminal
+/// that hands its windows to a server and returns at once ends the wait early: the instance
+/// then reads as not logged in until "Log in" is run again or the instance is registered
+/// again. The known ones are started so that they don't.
 #[cfg(not(windows))]
-fn new_window(claude: &Path, terminal: PathBuf) -> Command {
-    let mut command = Command::new(terminal);
+fn new_window(claude: &Path, terminal: Terminal) -> Command {
+    let mut command = Command::new(terminal.program);
     command
-        .arg("-e")
+        .args(terminal.before_program)
         .arg(claude)
         .args(LOGIN_ARGS)
         .stdin(Stdio::null())
@@ -674,7 +726,7 @@ mod tests {
         write_program(
             &bin.join("my-term"),
             &format!(
-                "#!/bin/sh\necho \"$@\" > '{}/term'\nshift\nexec \"$@\"\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/term'\nshift\nexec \"$@\"\n",
                 out.display()
             ),
         );
@@ -708,6 +760,88 @@ mod tests {
                 dir.display(),
                 dir.display()
             )
+        );
+    }
+
+    /// A desktop launched from its own menu often has no `$TERMINAL` and no
+    /// `x-terminal-emulator` (Arch, Fedora): the first terminal mccboard knows is used, with
+    /// the arguments it takes before the program.
+    #[cfg(unix)]
+    #[test]
+    fn on_linux_the_first_known_terminal_on_the_path_is_used_with_its_own_arguments() {
+        let bin = tempfile::tempdir().unwrap();
+        for name in ["xterm", "gnome-terminal", "kitty"] {
+            write_program(&bin.path().join(name), "#!/bin/sh\nexit 0\n");
+        }
+
+        let terminal = lookup(bin.path(), None).terminal().unwrap();
+        assert_eq!(terminal.program, bin.path().join("kitty"));
+        assert!(terminal.before_program.is_empty());
+
+        fs::remove_file(bin.path().join("kitty")).unwrap();
+        let terminal = lookup(bin.path(), None).terminal().unwrap();
+        assert_eq!(terminal.program, bin.path().join("gnome-terminal"));
+        assert_eq!(terminal.before_program, ["--wait", "--"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_linux_terminal_and_x_terminal_emulator_come_before_the_known_terminals() {
+        let bin = tempfile::tempdir().unwrap();
+        for name in ["kitty", "x-terminal-emulator", "gnome-terminal", "my-term"] {
+            write_program(&bin.path().join(name), "#!/bin/sh\nexit 0\n");
+        }
+
+        // `$TERMINAL` first, with its own arguments when mccboard knows it.
+        let terminal = lookup(bin.path(), Some("gnome-terminal"))
+            .terminal()
+            .unwrap();
+        assert_eq!(terminal.program, bin.path().join("gnome-terminal"));
+        assert_eq!(terminal.before_program, ["--wait", "--"]);
+
+        // One it doesn't know, as a path, takes `-e`.
+        let my_term = bin.path().join("my-term");
+        let terminal = lookup(bin.path(), my_term.to_str()).terminal().unwrap();
+        assert_eq!(terminal.program, my_term);
+        assert_eq!(terminal.before_program, ["-e"]);
+
+        // Then Debian's choice, which takes `-e` whatever terminal it is.
+        let terminal = lookup(bin.path(), None).terminal().unwrap();
+        assert_eq!(terminal.program, bin.path().join("x-terminal-emulator"));
+        assert_eq!(terminal.before_program, ["-e"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_linux_a_terminal_without_dash_e_gets_the_program_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        let out = home.path().join("out");
+        for path in [&bin, &dir, &out] {
+            fs::create_dir_all(path).unwrap();
+        }
+        // kitty runs the program it is given, with no `-e` before it.
+        write_program(
+            &bin.join("kitty"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/term'\nexec \"$@\"\n",
+                out.display()
+            ),
+        );
+        write_program(&bin.join("claude"), "#!/bin/sh\nexit 4\n");
+
+        let exit = login_with(
+            &invocation(&dir, LoginTerminal::NewWindow),
+            &lookup(&bin, None),
+        )
+        .unwrap();
+
+        assert_eq!(exit.exit_code, Some(4));
+        let term = fs::read_to_string(out.join("term")).unwrap();
+        assert_eq!(
+            term.trim(),
+            format!("{} auth login --claudeai", bin.join("claude").display())
         );
     }
 

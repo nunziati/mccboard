@@ -287,6 +287,19 @@ fn assert_nothing_done(home: &TempHome, env: &FakeEnvironment) {
     assert!(!folder_b(home).exists());
 }
 
+/// Front ends ask before offering profiles at all: the answer is the same rule every opening
+/// follows.
+#[test]
+fn desktop_profiles_are_supported_on_windows_only() {
+    let home = TempHome::new();
+    let (core, env) = home.core();
+
+    env.set_os(OsKind::Linux);
+    assert!(!core.desktop_profiles_supported());
+    env.set_os(OsKind::Windows);
+    assert!(core.desktop_profiles_supported());
+}
+
 #[test]
 fn off_windows_nothing_opens() {
     let (home, core, env) = setup();

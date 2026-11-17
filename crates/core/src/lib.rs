@@ -269,6 +269,13 @@ impl Core {
         desktop_profile::list(&self.home, &self.paths().config_file(), self.env.as_ref())
     }
 
+    /// Whether desktop profiles can open here: on Windows only, where mccboard finds and
+    /// starts the Claude desktop app. Elsewhere every opening fails with
+    /// [`Error::DesktopAppNeedsWindows`], and front ends show no profile to open.
+    pub fn desktop_profiles_supported(&self) -> bool {
+        self.env.os() == OsKind::Windows
+    }
+
     /// The registered accounts that can get a desktop profile, in label order: those with a
     /// local instance and no profile yet, but the default desktop profile's. For front ends
     /// to offer when adding one.

@@ -230,6 +230,7 @@
   "error.desktop_app_not_opened": "Non è stato possibile aprire l'app desktop di Claude.",
   "desktop.title": "Profili desktop",
   "desktop.hint": "L'app desktop di Claude affiancata, una copia per account, ognuna con la sua cartella dati e il suo accesso. La scheda Code di un profilo usa l'istanza locale del suo account.",
+  "desktop.unsupported": "I profili desktop si aprono solo su Windows, dove mccboard avvia una copia dell'app desktop di Claude per ogni account.",
   "desktop.column.profile": "Profilo",
   "desktop.column.folder": "Cartella dati",
   "desktop.column.state": "Stato",
