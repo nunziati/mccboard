@@ -368,12 +368,12 @@ fn in_instance(command: &mut Command, config_dir: &Path, kind: InstanceKind) {
 
 fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit> {
     // Checked first, so `NotFound` below always means Claude Code itself.
-    if !login.config_dir.is_dir() {
-        return Err(io::Error::new(
+    let working_dir = login_dir(login).ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::NotADirectory,
             format!("{} is not a folder", login.config_dir.display()),
-        ));
-    }
+        )
+    })?;
     // The terminal next: without one, nothing else matters.
     let window = match login.terminal {
         LoginTerminal::CurrentTerminal if !io::stdin().is_terminal() => {
@@ -397,10 +397,25 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         Some(window) => new_window(&claude, window),
     };
     in_instance(&mut command, &login.config_dir, login.kind);
-    let status = command.current_dir(&login.config_dir).status()?;
+    let status = command.current_dir(working_dir).status()?;
     Ok(LoginExit {
         exit_code: status.code(),
     })
+}
+
+/// Where the login runs: the instance's folder, or the home for the primary instance whose
+/// folder isn't there yet, since Claude Code makes it on its first login. `None` when neither
+/// exists: a linked instance's folder is never missing at a login.
+fn login_dir(login: &LoginInvocation) -> Option<&Path> {
+    if login.config_dir.is_dir() {
+        return Some(&login.config_dir);
+    }
+    match login.kind {
+        InstanceKind::Primary if !login.config_dir.exists() => {
+            login.config_dir.parent().filter(|home| home.is_dir())
+        }
+        _ => None,
+    }
 }
 
 /// The variable holding the home directory Claude Code uses (Node's `os.homedir()`).
@@ -665,6 +680,54 @@ mod tests {
         .unwrap_err();
 
         assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn a_primary_instance_without_a_home_is_refused_too() {
+        let home = tempfile::tempdir().unwrap();
+        let primary = home.path().join("gone").join(".claude");
+        let login = LoginInvocation {
+            kind: InstanceKind::Primary,
+            ..invocation(&primary, LoginTerminal::NewWindow)
+        };
+
+        let error = login_with(&login, &lookup(home.path(), None)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_first_login_of_the_primary_instance_runs_in_the_home_where_claude_code_makes_its_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let out = home.path().join("out");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let primary = home.path().join(".claude");
+        write_program(&bin.join("my-term"), "#!/bin/sh\nshift\nexec \"$@\"\n");
+        // Claude Code makes its folder on its first login.
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$PWD\" \"$HOME\" \
+                 \"${{CLAUDE_CONFIG_DIR-unset}}\" > '{}/claude'\nmkdir \"$HOME/.claude\"\n",
+                out.display()
+            ),
+        );
+        let login = LoginInvocation {
+            kind: InstanceKind::Primary,
+            ..invocation(&primary, LoginTerminal::NewWindow)
+        };
+
+        let exit = login_with(&login, &lookup(&bin, Some("my-term"))).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        let home = home.path().display();
+        assert_eq!(seen.trim(), format!("{home}|{home}|unset"));
+        assert!(primary.is_dir());
     }
 
     fn claude_invocation(config_dir: &Path) -> ClaudeInvocation {

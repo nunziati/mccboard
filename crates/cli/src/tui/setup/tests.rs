@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use jiff::{SignedDuration, Timestamp};
 use mccboard_core::testing::FakeEnvironment;
 use mccboard_core::{
@@ -69,6 +69,17 @@ impl Home {
         // The setup's language, whatever the system's.
         home.core.set_language(Language::English).unwrap();
         home
+    }
+
+    /// A server where Claude Code was just installed and never ran: `claude` is on the PATH,
+    /// and there is neither `~/.claude` nor `~/.claude.json`.
+    fn bare() -> Home {
+        let dir = tempfile::tempdir().unwrap();
+        let env = FakeEnvironment::new(now());
+        let core = Core::new(dir.path(), env.clone());
+        env.set_program("claude", Some(Path::new("/usr/bin/claude")));
+        core.set_language(Language::English).unwrap();
+        Home { dir, core, env }
     }
 
     /// The fresh home with its primary instance registered and B added in `~/.claude-b`
@@ -709,18 +720,103 @@ fn space_checks_the_instances_to_register_and_only_those_are_registered() {
 }
 
 #[test]
-fn without_the_primary_folder_the_instances_step_says_how_to_get_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = Core::new(dir.path(), FakeEnvironment::new(now()));
-    let mut setup = Setup::new(core, Language::English, OsKind::Linux);
-
-    press(&mut setup, KeyCode::Right);
-
+fn without_the_primary_folder_enter_opens_its_first_login_and_registers_it() {
+    let home = Home::bare();
+    let mut setup = home.setup(Language::English);
+    press(&mut setup, KeyCode::Char('2'));
     assert_shows(
         &screen(&setup),
-        &["the folder of Claude Code itself, isn't there yet"],
+        &[
+            "the folder of Claude Code itself, isn't there yet",
+            "Enter log in",
+        ],
     );
     assert_eq!(setup.done(StepId::Instances), Some(false));
+
+    assert_eq!(
+        press(&mut setup, KeyCode::Enter),
+        Some(Request::LoginPrimary)
+    );
+    // The login the runner hands the terminal to makes ~/.claude and logs in as A.
+    home.env.login_as(UUID_A, "a@example.com");
+    let result = home.core.login_primary(LoginTerminal::CurrentTerminal);
+    setup.message(Message::LoggedIn {
+        config_dir: home.primary(),
+        result,
+    });
+
+    let text = screen(&setup);
+    assert_shows(
+        &text,
+        &[
+            &os("~/.claude is logged in, with account A."),
+            " ✓ 2 Instances",
+            " ✓ 3 Accounts",
+        ],
+    );
+    assert!(line_with(&text, &os("~/.claude ")).contains("logged in, registered"));
+    let registry = home.core.registry().unwrap();
+    assert_eq!(registry.instances[0].config_dir, home.primary());
+    assert_eq!(press(&mut setup, KeyCode::Enter), None);
+    assert_eq!(setup.step(), StepId::Accounts);
+}
+
+#[test]
+fn a_first_login_that_logs_nothing_in_says_so_and_offers_it_again() {
+    let home = Home::bare();
+    let mut setup = home.setup(Language::Italian);
+    press(&mut setup, KeyCode::Char('2'));
+    assert_eq!(
+        press(&mut setup, KeyCode::Enter),
+        Some(Request::LoginPrimary)
+    );
+
+    // The fake login is closed without logging in: Claude Code makes nothing.
+    let result = home.core.login_primary(LoginTerminal::CurrentTerminal);
+    setup.message(Message::LoggedIn {
+        config_dir: home.primary(),
+        result,
+    });
+
+    assert_eq!(setup.notice, Some(Notice::NotLoggedIn(home.primary())));
+    assert_shows(
+        &screen(&setup),
+        &[&os(
+            "~/.claude non ha ancora effettuato l'accesso: Invio su di essa riapre il login.",
+        )],
+    );
+    assert!(!home.primary().exists());
+    assert_eq!(
+        press(&mut setup, KeyCode::Enter),
+        Some(Request::LoginPrimary)
+    );
+}
+
+#[test]
+fn a_first_login_that_only_makes_the_folder_leaves_it_checked_for_registering() {
+    let home = Home::bare();
+    home.env.on_login(|login| {
+        fs::create_dir(&login.config_dir)?;
+        Ok(LoginExit { exit_code: Some(1) })
+    });
+    let mut setup = home.setup(Language::English);
+    press(&mut setup, KeyCode::Char('2'));
+    press(&mut setup, KeyCode::Enter);
+
+    let result = home.core.login_primary(LoginTerminal::CurrentTerminal);
+    setup.message(Message::LoggedIn {
+        config_dir: home.primary(),
+        result,
+    });
+
+    let text = screen(&setup);
+    assert!(
+        line_with(&text, &os("~/.claude ")).contains("[x]"),
+        "{text}"
+    );
+    assert_shows(&text, &["Enter register"]);
+    assert_eq!(press(&mut setup, KeyCode::Enter), None);
+    assert_eq!(setup.done(StepId::Instances), Some(true));
 }
 
 #[test]
@@ -1167,6 +1263,114 @@ fn a_repair_runs_on_its_thread_and_the_setup_waits_for_it() {
     );
     assert!(shown.contains(" ✓ 5 Drift"), "{shown}");
     assert_eq!(modes.log(), ["enter", "leave"]);
+}
+
+#[test]
+fn the_first_login_runs_in_the_terminal_as_the_other_logins_do() {
+    let _serial = serial();
+    let home = Home::bare();
+    let modes = Recorded::default();
+    let log = modes.clone();
+    home.env.on_login(move |login| {
+        log.push("login");
+        // Claude Code makes its folder on its first login.
+        fs::create_dir(&login.config_dir)?;
+        let global_config = login.config_dir.parent().unwrap().join(".claude.json");
+        log_in(&global_config, &login.config_dir, UUID_A, TOKEN_A);
+        Ok(LoginExit { exit_code: Some(0) })
+    });
+
+    let shown = run_setup(
+        &home,
+        &modes,
+        vec![Step::Key(KeyCode::Char('2')), Step::Key(KeyCode::Enter)],
+    );
+
+    assert_eq!(
+        modes.log(),
+        ["enter", "leave", "say", "login", "enter", "leave"]
+    );
+    assert!(
+        shown.contains(&os("~/.claude is logged in, with account A.")),
+        "{shown}"
+    );
+    assert!(shown.contains(" ✓ 2 Instances"), "{shown}");
+}
+
+#[test]
+fn a_setup_opened_from_the_dashboard_offers_q_to_go_back_to_it() {
+    let home = Home::set_up();
+
+    let english = home.setup(Language::English).returning_to(Show::Dashboard);
+    let italian = home.setup(Language::Italian).returning_to(Show::Dashboard);
+
+    assert_shows(&screen(&english), &["←→ step  q back to the dashboard"]);
+    assert_shows(&screen(&italian), &["←→ passo  q torna alla dashboard"]);
+    assert_shows(
+        &screen(&home.setup(Language::English)),
+        &["←→ step  q quit"],
+    );
+}
+
+#[test]
+fn q_in_a_setup_opened_from_the_dashboard_goes_back_to_the_dashboard() {
+    let _serial = serial();
+    let home = Home::set_up();
+    let modes = Recorded::default();
+    let mut console = RecordedConsole(modes.clone());
+    let mut events = Script::new(vec![
+        Step::Key(KeyCode::Char('s')),
+        // In the setup: Italian, then q.
+        Step::Key(KeyCode::Char('7')),
+        Step::Key(KeyCode::Char(' ')),
+        Step::Key(KeyCode::Char('q')),
+        // Back in the dashboard, until the script's own q quits it.
+        Step::Key(KeyCode::Null),
+    ]);
+
+    let mut tui = tui(&modes);
+    crate::tui::show(
+        &home.core,
+        &mut tui,
+        &mut events,
+        &mut console,
+        Show::Dashboard,
+    )
+    .unwrap();
+
+    let shown = buffer_text(tui.terminal());
+    assert!(shown.contains("r aggiorna"), "{shown}");
+    assert!(!shown.contains("configurazione di mccboard"), "{shown}");
+    drop(tui);
+    assert_eq!(modes.log(), ["enter", "leave"]);
+}
+
+#[test]
+fn q_in_a_setup_started_on_its_own_quits_and_ctrl_c_always_does() {
+    let _serial = serial();
+    let home = Home::set_up();
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    for (first, steps) in [
+        (Show::Setup, vec![Step::Key(KeyCode::Char('q'))]),
+        (
+            Show::Dashboard,
+            vec![Step::Key(KeyCode::Char('s')), Step::Press(interrupt)],
+        ),
+    ] {
+        let modes = Recorded::default();
+        let mut console = RecordedConsole(modes.clone());
+        let mut events = Script::new(steps);
+
+        let mut tui = tui(&modes);
+        crate::tui::show(&home.core, &mut tui, &mut events, &mut console, first).unwrap();
+
+        // It ended in the setup: no dashboard came after it.
+        let shown = buffer_text(tui.terminal());
+        assert!(shown.contains(" mccboard setup"), "{first:?}:\n{shown}");
+        assert!(!shown.contains("r refresh"), "{first:?}:\n{shown}");
+        drop(tui);
+        assert_eq!(modes.log(), ["enter", "leave"]);
+    }
 }
 
 #[test]

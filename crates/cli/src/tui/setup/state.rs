@@ -18,6 +18,7 @@ use super::steps::{
     AccountsStep, Action, ClaudeCodeStep, DriftStep, InstancesStep, LaunchersStep, PreferencesStep,
     SharingStep, SummaryStep,
 };
+use crate::tui::Show;
 use crate::tui::texts::{self, Failure, Texts};
 
 /// A step of the setup, in order.
@@ -66,6 +67,9 @@ pub enum Request {
     InstallClaudeCode,
     /// Open Claude Code's login of the registered instance in this folder, in the terminal.
     Login(PathBuf),
+    /// Open Claude Code's first login in the primary instance, whose folder Claude Code
+    /// hasn't made yet, in the terminal.
+    LoginPrimary,
     /// Add a linked instance, with its login in the terminal.
     Add(AddRequest),
     /// Repair every drift item of the instance in this folder: the user has confirmed.
@@ -181,11 +185,13 @@ pub struct Setup {
     pub(super) preferences: PreferencesStep,
     pub(super) summary: SummaryStep,
     pub(super) notice: Option<Notice>,
+    /// Where `q` leads: out of mccboard, or back to the dashboard that opened the setup.
+    pub(super) back: Show,
 }
 
 impl Setup {
     /// The setup of `core`'s home in `language`, on a machine running `os`, at its first
-    /// step. Every step reads what is already done.
+    /// step. Every step reads what is already done. `q` quits mccboard.
     pub fn new(core: Core, language: Language, os: OsKind) -> Setup {
         Setup {
             claude_code: ClaudeCodeStep::load(&core, os),
@@ -200,7 +206,13 @@ impl Setup {
             language,
             step: StepId::ClaudeCode,
             notice: None,
+            back: Show::Quit,
         }
+    }
+
+    /// The setup whose `q` leads to `back`: the dashboard, when the dashboard opened it.
+    pub fn returning_to(self, back: Show) -> Setup {
+        Setup { back, ..self }
     }
 
     pub fn texts(&self) -> Texts {

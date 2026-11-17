@@ -33,6 +33,8 @@ pub enum Hint {
     Close,
     Steps,
     Quit,
+    /// `q` in a setup the dashboard opened.
+    ToDashboard,
 }
 
 impl Texts {
@@ -128,6 +130,10 @@ impl Texts {
             Hint::Close => ("Esc", self.pick("close", "chiudi")),
             Hint::Steps => ("←→", self.pick("step", "passo")),
             Hint::Quit => ("q", self.pick("quit", "esci")),
+            Hint::ToDashboard => (
+                "q",
+                self.pick("back to the dashboard", "torna alla dashboard"),
+            ),
         }
     }
 
@@ -304,11 +310,12 @@ impl Texts {
 
     pub fn no_primary(self) -> &'static str {
         self.pick(
-            "~/.claude, the folder of Claude Code itself, isn't there yet: Claude Code creates it \
-             the first time it runs. Run `claude` once and log in, then come back to this step.",
-            "~/.claude, la cartella di Claude Code stesso, non c'è ancora: Claude Code la crea la \
-             prima volta che viene eseguito. Esegui `claude` una volta e accedi, poi torna a \
-             questo passo.",
+            "~/.claude, the folder of Claude Code itself, isn't there yet: Claude Code makes it on \
+             its first login. Enter opens that login here, in this terminal, and registers the \
+             primary instance once an account is logged in.",
+            "~/.claude, la cartella di Claude Code stesso, non c'è ancora: Claude Code la crea al \
+             suo primo login. Invio apre quel login qui, in questo terminale, e registra \
+             l'istanza principale appena un account ha effettuato l'accesso.",
         )
     }
 

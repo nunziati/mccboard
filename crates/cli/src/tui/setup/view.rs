@@ -35,6 +35,7 @@ use ratatui::widgets::{Block, Paragraph, Wrap};
 use super::state::{Setup, StepId};
 use super::steps::{AddForm, Preference, needs_login};
 use super::texts::Hint;
+use crate::tui::Show;
 use crate::tui::texts::Texts;
 use crate::tui::widgets::{self, Instances, dim, key_hints, login_cell, rgb};
 
@@ -623,10 +624,13 @@ fn hints(setup: &Setup, texts: Texts) -> Vec<(&'static str, &'static str)> {
             vec![Hint::Install]
         }
         StepId::ClaudeCode => vec![Hint::Continue],
-        StepId::Instances if setup.instances.checked.is_empty() => {
-            vec![Hint::Select, Hint::Check, Hint::Continue]
+        StepId::Instances if !setup.instances.checked.is_empty() => {
+            vec![Hint::Select, Hint::Check, Hint::Register]
         }
-        StepId::Instances => vec![Hint::Select, Hint::Check, Hint::Register],
+        StepId::Instances if setup.instances.offers_first_login() => {
+            vec![Hint::Select, Hint::Check, Hint::LogIn]
+        }
+        StepId::Instances => vec![Hint::Select, Hint::Check, Hint::Continue],
         StepId::Accounts => match &setup.accounts.form {
             Some(AddForm::Label { .. }) => {
                 return [Hint::NextField, Hint::Close]
@@ -666,7 +670,11 @@ fn hints(setup: &Setup, texts: Texts) -> Vec<(&'static str, &'static str)> {
         StepId::Preferences => vec![Hint::Select, Hint::Change, Hint::Continue],
         StepId::Summary => vec![Hint::Dashboard],
     };
-    hints.extend([Hint::Steps, Hint::Quit]);
+    let quit = match setup.back {
+        Show::Dashboard => Hint::ToDashboard,
+        Show::Setup | Show::Quit => Hint::Quit,
+    };
+    hints.extend([Hint::Steps, quit]);
     hints.into_iter().map(|hint| texts.hint(hint)).collect()
 }
 

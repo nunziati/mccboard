@@ -6,12 +6,16 @@ use crossterm::event::KeyCode;
 use mccboard_core::{Candidate, Core, InstanceKind};
 
 use super::{Action, Read, moved, read};
-use crate::tui::setup::state::Notice;
+use crate::tui::setup::state::{Notice, Request};
 use crate::tui::texts::Failure;
 
 /// The instances a scan finds in the home (`~/.claude`, `~/.claude-*`), the primary instance
 /// first. Space checks the ones to register, and the primary instance starts checked when it
 /// isn't registered yet. Enter registers the checked ones, or moves on when none is.
+///
+/// On a machine where Claude Code never ran, `~/.claude` isn't there: Enter then opens Claude
+/// Code's first login in the primary instance. Claude Code makes the folder, and the core
+/// registers it once an account is logged in.
 pub struct InstancesStep {
     pub candidates: Read<Vec<Candidate>>,
     /// The folders checked for registering, all of them unregistered.
@@ -27,16 +31,13 @@ impl InstancesStep {
             selected: 0,
         };
         step.reload(core);
-        step.checked = step
-            .list()
-            .iter()
-            .filter(|c| !c.registered && c.kind == InstanceKind::Primary)
-            .map(|c| c.config_dir.clone())
-            .collect();
         step
     }
 
+    /// Reads the candidates again. A primary instance found unregistered for the first time
+    /// is checked: at load, or once a login made its folder.
     pub fn reload(&mut self, core: &Core) {
+        let had_primary = self.primary().is_some();
         self.candidates = read(core.scan());
         let candidates = self.candidates.as_deref().unwrap_or_default();
         self.checked.retain(|dir| {
@@ -44,7 +45,20 @@ impl InstancesStep {
                 .iter()
                 .any(|c| !c.registered && &c.config_dir == dir)
         });
+        if !had_primary
+            && let Some(primary) = candidates
+                .iter()
+                .find(|c| c.kind == InstanceKind::Primary && !c.registered)
+        {
+            self.checked.push(primary.config_dir.clone());
+        }
         self.selected = self.selected.min(candidates.len().saturating_sub(1));
+    }
+
+    /// Whether Enter opens the first login of the primary instance: the home was read, and
+    /// `~/.claude` isn't in it.
+    pub fn offers_first_login(&self) -> bool {
+        self.candidates.is_ok() && self.primary().is_none()
     }
 
     /// The candidates found, none when the home can't be read.
@@ -76,8 +90,9 @@ impl InstancesStep {
                 self.toggle();
                 Action::None
             }
-            KeyCode::Enter if self.checked.is_empty() => Action::Next,
-            KeyCode::Enter => Action::Notice(self.register(core)),
+            KeyCode::Enter if !self.checked.is_empty() => Action::Notice(self.register(core)),
+            KeyCode::Enter if self.offers_first_login() => Action::Request(Request::LoginPrimary),
+            KeyCode::Enter => Action::Next,
             _ => Action::None,
         }
     }

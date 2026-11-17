@@ -63,7 +63,7 @@ pub enum Show {
 
 /// Shows `first` in `tui`, then each screen the user opens from the one before, until one
 /// quits. Each screen starts in the language mccboard uses at that moment: the setup may
-/// have changed it.
+/// have changed it. `q` in a setup opened from the dashboard goes back to the dashboard.
 pub fn show<B>(
     core: &Core,
     tui: &mut Tui<B>,
@@ -76,12 +76,16 @@ where
     B::Error: Send + Sync + 'static,
 {
     let mut next = first;
+    // The screen shown before: `Quit` for the first one.
+    let mut before = Show::Quit;
     loop {
-        next = match next {
+        let shown = next;
+        next = match shown {
             Show::Dashboard => dashboard::show(core, tui, events)?,
-            Show::Setup => setup::show(core, tui, events, console)?,
+            Show::Setup => setup::show(core, tui, events, console, before)?,
             Show::Quit => return Ok(()),
         };
+        before = shown;
     }
 }
 

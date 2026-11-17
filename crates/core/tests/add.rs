@@ -1020,6 +1020,120 @@ fn a_login_that_needs_a_terminal_says_so() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The first login on a machine where Claude Code never ran
+
+/// A home where Claude Code is installed but never ran: no `~/.claude`, no `~/.claude.json`.
+fn bare() -> (TempHome, Core, FakeEnvironment) {
+    let home = TempHome::new();
+    let (core, env) = home.core();
+    (home, core, env)
+}
+
+#[test]
+fn the_primary_instance_logs_in_before_its_folder_exists_and_is_registered() {
+    let (home, core, env) = bare();
+    let primary = home.path().join(".claude");
+    // Claude Code makes its folder on its first login.
+    env.login_as(UUID_A, "a@example.com");
+
+    let report = core.login_primary(LoginTerminal::CurrentTerminal).unwrap();
+
+    let logins = env.login_invocations();
+    assert_eq!(logins.len(), 1);
+    assert_eq!(logins[0].kind, InstanceKind::Primary);
+    assert_eq!(logins[0].config_dir, primary);
+    assert_eq!(logins[0].home, home.path());
+    assert_eq!(report.run, LoginRun::Ran { exit_code: Some(0) });
+    assert_eq!(report.config_dir, primary);
+    assert_eq!(report.account.as_ref().unwrap().label, "A");
+    assert!(report.new_account);
+    let registry = core.registry().unwrap();
+    assert_eq!(registry.instances.len(), 1);
+    assert_eq!(registry.instances[0].config_dir, primary);
+    assert_eq!(registry.instances[0].kind, InstanceKind::Primary);
+    assert_eq!(registry.accounts[0].uuid.as_str(), UUID_A);
+}
+
+#[test]
+fn a_first_login_that_logs_nothing_in_registers_nothing_and_mccboard_makes_no_folder() {
+    let (home, core, env) = bare();
+
+    // The fake login is closed without logging in: Claude Code makes nothing.
+    let report = core.login_primary(LoginTerminal::CurrentTerminal).unwrap();
+
+    assert_eq!(env.login_invocations().len(), 1);
+    assert_eq!(report.run, LoginRun::Ran { exit_code: Some(1) });
+    assert_eq!(report.account, None);
+    assert!(!home.path().join(".claude").exists());
+    assert!(core.registry().unwrap().instances.is_empty());
+}
+
+#[test]
+fn a_first_login_that_makes_the_folder_without_an_account_registers_nothing() {
+    let (home, core, env) = bare();
+    env.on_login(|login| {
+        fs::create_dir(&login.config_dir)?;
+        Ok(LoginExit { exit_code: Some(1) })
+    });
+
+    let report = core.login_primary(LoginTerminal::CurrentTerminal).unwrap();
+
+    assert_eq!(report.account, None);
+    assert!(home.path().join(".claude").is_dir());
+    assert!(core.registry().unwrap().instances.is_empty());
+}
+
+#[test]
+fn the_primary_instance_registered_already_logs_in_as_login_does() {
+    let f = fixture();
+    f.env.login_as(UUID_A, "a@example.com");
+
+    let report = f
+        .core
+        .login_primary(LoginTerminal::CurrentTerminal)
+        .unwrap();
+
+    assert_eq!(report.config_dir, f.primary);
+    assert_eq!(report.account.as_ref().unwrap().label, "A");
+    assert!(!report.new_account);
+    assert_eq!(f.core.registry().unwrap().instances.len(), 1);
+}
+
+#[test]
+fn the_primary_instance_whose_folder_is_gone_logs_in_and_reports_no_account_until_it_is_back() {
+    let f = fixture();
+    fs::remove_dir_all(&f.primary).unwrap();
+
+    let report = login(&f, &f.primary).unwrap();
+
+    assert_eq!(f.env.login_invocations().len(), 1);
+    assert_eq!(report.account, None);
+    assert!(!f.primary.exists());
+    // Still registered, with its folder missing.
+    assert!(
+        report
+            .instance
+            .observation
+            .warnings
+            .contains(&mccboard_core::Warning::ConfigDirMissing)
+    );
+    assert!(f.registered(&f.primary).is_some());
+}
+
+#[test]
+fn a_primary_folder_that_is_a_file_is_refused_before_the_login() {
+    let (home, core, env) = bare();
+    fs::write(home.path().join(".claude"), "not a folder").unwrap();
+
+    let error = core
+        .login_primary(LoginTerminal::CurrentTerminal)
+        .unwrap_err();
+
+    assert!(matches!(error, Error::NotADirectory { .. }), "{error}");
+    assert!(env.login_invocations().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
 // Token rules
 
 #[test]

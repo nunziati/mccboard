@@ -109,12 +109,14 @@ pub trait Environment: Send + Sync {
     /// itself, and mccboard never sees them. For a linked instance `CLAUDE_CONFIG_DIR` is set
     /// to its folder; for the primary instance it is unset and the home is the folder's
     /// parent. The variables that would override the instance's own login are removed.
-    /// `claude` is found as [`Environment::run_claude`] finds it, in `login.home`.
+    /// `claude` is found as [`Environment::run_claude`] finds it, in `login.home`. The login
+    /// runs in the instance's folder. The primary instance's folder may be missing, since
+    /// Claude Code makes it on its first login: the login then runs in the home.
     ///
     /// Errors before anything starts: (1) with `NotFound` only when `claude` itself is neither
     /// on the PATH nor in `.local/bin`, (2) with `Unsupported` when there is no such terminal
     /// (no terminal for the current one, no terminal emulator for a new window on Linux), and
-    /// (3) with another kind when the instance's folder is missing or the program can't be
+    /// (3) with another kind when the folder to run in is missing or the program can't be
     /// started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
 

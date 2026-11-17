@@ -74,13 +74,15 @@ pub fn run(core: &Core) -> Result<()> {
     )
 }
 
-/// Shows the setup in `tui`, in the language mccboard uses now, until the user quits it or
-/// opens the dashboard: what shows next.
+/// Shows the setup in `tui`, in the language mccboard uses now, until the user leaves it:
+/// what shows next. `q` leads to `back`, the dashboard when the dashboard opened the setup.
+/// The summary opens the dashboard, and Ctrl+C quits.
 pub fn show<B>(
     core: &Core,
     tui: &mut Tui<B>,
     events: &mut dyn Events,
     console: &mut dyn Console,
+    back: Show,
 ) -> Result<Show>
 where
     B: Backend,
@@ -91,7 +93,7 @@ where
     } else {
         OsKind::Linux
     };
-    let setup = Setup::new(core.clone(), super::language(core), os);
+    let setup = Setup::new(core.clone(), super::language(core), os).returning_to(back);
     let mut runner = Runner::new(setup, console);
     app::run(tui, events, &mut runner)?;
     Ok(runner.next)
@@ -154,9 +156,10 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// Hands the terminal to Claude Code's login of the instance in `config_dir`, and takes it
-    /// back. When no account logged in, the user reads what Claude Code said first.
-    fn login<B>(&mut self, tui: &mut Tui<B>, config_dir: PathBuf) -> Result<()>
+    /// Hands the terminal to Claude Code's login of the registered instance in `config_dir`, or
+    /// with `None` to the first login of the primary instance, and takes it back. When no
+    /// account logged in, the user reads what Claude Code said first.
+    fn login<B>(&mut self, tui: &mut Tui<B>, config_dir: Option<PathBuf>) -> Result<()>
     where
         B: Backend,
         B::Error: Send + Sync + 'static,
@@ -164,11 +167,17 @@ impl<'a> Runner<'a> {
         let texts = self.setup.texts();
         let core = &self.setup.core;
         let console = &mut *self.console;
+        let first = config_dir.is_none();
+        let config_dir = config_dir.unwrap_or_else(|| core.home().join(".claude"));
         let shown = self.setup.shown_path(&config_dir);
         let dir = config_dir.clone();
         let result = tui.release(|| {
             console.say(&texts.login_starts(&shown));
-            let result = core.login(&dir, LoginTerminal::CurrentTerminal);
+            let result = if first {
+                core.login_primary(LoginTerminal::CurrentTerminal)
+            } else {
+                core.login(&dir, LoginTerminal::CurrentTerminal)
+            };
             if result.as_ref().is_ok_and(not_logged_in) {
                 console.wait_for_enter(texts.back_to_setup());
             }
@@ -250,13 +259,17 @@ where
     fn key(&mut self, key: KeyEvent, tui: &mut Tui<B>) -> Result<Flow> {
         match self.setup.key(key) {
             None => {}
-            Some(Request::Quit) => return Ok(Flow::Quit),
+            Some(Request::Quit) => {
+                self.next = self.setup.back;
+                return Ok(Flow::Quit);
+            }
             Some(Request::Dashboard) => {
                 self.next = Show::Dashboard;
                 return Ok(Flow::Quit);
             }
             Some(Request::InstallClaudeCode) => self.install(tui)?,
-            Some(Request::Login(config_dir)) => self.login(tui, config_dir)?,
+            Some(Request::Login(config_dir)) => self.login(tui, Some(config_dir))?,
+            Some(Request::LoginPrimary) => self.login(tui, None)?,
             Some(Request::Add(request)) => self.add(tui, request)?,
             Some(Request::Repair(config_dir)) => self.repair(config_dir)?,
         }

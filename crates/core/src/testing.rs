@@ -394,7 +394,8 @@ impl FakeEnvironment {
         self.state().login_handler = LoginHandler(Arc::new(handler));
     }
 
-    /// Makes every login succeed as the account `uuid`, as Claude Code's does: it adds
+    /// Makes every login succeed as the account `uuid`, as Claude Code's does: it makes the
+    /// instance's folder when it is missing (the primary instance's first login), adds
     /// `oauthAccount` to the instance's `.claude.json`, keeping every other key, and writes
     /// `.credentials.json` with [`FAKE_LOGIN_TOKEN`], valid for 8 hours from the fake clock.
     pub fn login_as(&self, uuid: &str, email: &str) {
@@ -402,6 +403,7 @@ impl FakeEnvironment {
         // Weak, so the fake's state doesn't own itself through the handler.
         let state = Arc::downgrade(&self.state);
         self.on_login(move |login| {
+            std::fs::create_dir_all(&login.config_dir)?;
             let global_config = match login.kind {
                 InstanceKind::Linked => login.config_dir.join(".claude.json"),
                 InstanceKind::Primary => login
