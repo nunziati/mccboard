@@ -1,0 +1,168 @@
+name: Release
+
+# Static Linux binaries of the CLI (musl), published on a GitHub Release for each tag v*.
+# A manual run builds the same archives as artifacts and publishes nothing. A pull request that
+# changes this file does the same, because workflow_dispatch works only once the file is on main.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Read the workspace version and compare it with the tag
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '.packages[] | select(.name == "mccboard-cli") | .version')
+          if [ -z "$version" ]; then
+            echo "::error::cargo metadata gives no version for mccboard-cli."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the workspace version $version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # cc-rs compiles the C code of ring (under rustls) for the target with musl-gcc, the only
+      # compiler that musl-tools installs. Without TARGET_CC, cc-rs would look for
+      # aarch64-linux-musl-gcc on the arm runner.
+      - run: cargo build --release --locked -p mccboard-cli --target "$TARGET"
+        env:
+          TARGET_CC: musl-gcc
+      - name: Pack the archive and its checksum
+        run: |
+          name="mccboard-$VERSION-$TARGET"
+          mkdir staging dist
+          cp "target/$TARGET/release/mccboard" LICENSE README.md staging/
+          tar -czf "dist/$name.tar.gz" --owner=0 --group=0 --numeric-owner -C staging mccboard LICENSE README.md
+          cd dist
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # On a runner without musl-tools, check each archive as install.sh does and run the binary it holds.
+  check:
+    name: Check (${{ matrix.target }})
+    needs: [version, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-${{ matrix.target }}
+      - name: Check the archive and run the binary
+        run: |
+          name="mccboard-$VERSION-$TARGET"
+          sha256sum -c "$name.tar.gz.sha256"
+          content=$(tar -tzf "$name.tar.gz" | LC_ALL=C sort | tr '\n' ' ')
+          if [ "$content" != "LICENSE README.md mccboard " ]; then
+            echo "::error::The archive holds '$content' instead of mccboard, LICENSE and README.md."
+            exit 1
+          fi
+          tar -xzf "$name.tar.gz" mccboard
+          # For a static PIE, the default of Rust on musl, file says "static-pie linked" and ldd
+          # says "statically linked".
+          file mccboard
+          if ! file mccboard | grep -Eq 'statically linked|static-pie linked'; then
+            echo "::error::file does not report the $TARGET binary as static."
+            exit 1
+          fi
+          libs=$(ldd mccboard 2>&1 || true)
+          echo "$libs"
+          case "$libs" in
+            *'not a dynamic executable'* | *'statically linked'*) ;;
+            *)
+              echo "::error::ldd finds dynamic libraries in the $TARGET binary."
+              exit 1
+              ;;
+          esac
+          reported=$(./mccboard --version)
+          echo "$reported"
+          if [ "$reported" != "mccboard $VERSION" ]; then
+            echo "::error::The $TARGET binary says '$reported', the workspace is $VERSION."
+            exit 1
+          fi
+
+  release:
+    name: GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mccboard-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the archives and their checksums
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --title "mccboard $VERSION" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
