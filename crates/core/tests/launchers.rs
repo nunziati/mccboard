@@ -1,8 +1,8 @@
 //! Launchers: one command per linked instance, `claude-b`, made from the account label
 //! (spec stories 5, 25–29; ticket #7).
 //!
-//! Every test runs on a temporary home with the fake port: the shell rc file is the temporary
-//! home's, and the user PATH is the fake's, so the real user environment is never touched.
+//! Every test runs on a temporary home with the fake port: the launchers' folder is the
+//! temporary home's, and the user PATH is the fake's. The real user environment is never touched.
 
 mod common;
 
@@ -17,8 +17,11 @@ use mccboard_core::{
     UserPathChange,
 };
 
+/// The alias block of mccboard 0.1, which a sync removes from the rc files.
 const BEGIN: &str = "# >>> mccboard launchers >>>";
 const END: &str = "# <<< mccboard launchers <<<";
+const MARKER: &str =
+    "# mccboard launcher: overwritten by mccboard. Rename it with `mccboard account set`.";
 
 /// A home with the primary instance (account A) and `.claude-b` (account B), registered.
 fn home_with_b(os: OsKind) -> (TempHome, Core, FakeEnvironment) {
@@ -37,59 +40,66 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-fn bashrc(home: &TempHome) -> PathBuf {
-    home.path().join(".bashrc")
+/// The Linux launchers' folder, `~/.local/bin`.
+fn scripts(home: &TempHome) -> PathBuf {
+    home.path().join(".local").join("bin")
 }
 
 fn bin(home: &TempHome) -> PathBuf {
     home.path().join(".mccboard").join("bin")
 }
 
-/// The lines inside mccboard's block, without the markers and comments.
-fn block_aliases(text: &str) -> Vec<String> {
-    let start = text.find(BEGIN).expect("a launchers block");
-    let end = text.find(END).expect("the end of the launchers block");
-    text[start..end]
-        .lines()
-        .filter(|line| line.starts_with("alias "))
-        .map(str::to_owned)
-        .collect()
+/// The names of the scripts mccboard wrote in the launchers' folder, sorted.
+fn script_names(home: &TempHome) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(scripts(home)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| {
+            fs::read_to_string(e.path()).is_ok_and(|text| text.lines().nth(1) == Some(MARKER))
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
-/// The alias line mccboard writes, quoted by its documented rule: the directory goes in
-/// single quotes unless it is made only of letters, digits and `_@%+=:,./-`, then the whole
-/// value does. Temporary folders can need quoting (`C:\Users\RUNNER~1\…` on Windows CI).
-fn alias(name: &str, dir: &Path) -> String {
+/// The script mccboard writes, quoted by its documented rule: the directory goes in single
+/// quotes unless it is made only of letters, digits and `_@%+=:,./-`. Temporary folders can
+/// need quoting (`C:\Users\RUNNER~1\…` on Windows CI).
+fn script(dir: &Path) -> String {
     let dir = dir.display().to_string();
     let plain = dir
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
     let dir = if plain { dir } else { shell_quote(&dir) };
-    format!(
-        "alias {name}={}",
-        shell_quote(&format!("CLAUDE_CONFIG_DIR={dir} claude"))
-    )
+    format!("#!/bin/sh\n{MARKER}\nexport CLAUDE_CONFIG_DIR={dir}\nexec claude \"$@\"\n")
 }
 
-/// Points the alias of `.claude-b` at `.claude-x` by hand, however its path is quoted.
-fn point_the_alias_elsewhere(home: &TempHome) {
+/// Points the script of `.claude-b` at `.claude-x` by hand, however its path is quoted.
+fn point_the_script_elsewhere(home: &TempHome) {
     let b = home.path().join(".claude-b").display().to_string();
     let x = home.path().join(".claude-x").display().to_string();
-    let text = read(&bashrc(home));
+    let path = scripts(home).join("claude-b");
+    let text = read(&path);
     assert!(text.contains(&b), "{text}");
-    fs::write(bashrc(home), text.replace(&b, &x)).unwrap();
+    fs::write(path, text.replace(&b, &x)).unwrap();
 }
 
 fn uuid(s: &str) -> AccountUuid {
     AccountUuid::new(s)
 }
 
-// --- Linux: an alias in a marked block of the shell rc file ---
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+// --- Linux: a script per launcher in ~/.local/bin ---
 
 #[test]
-fn registering_a_linked_instance_adds_its_alias_in_a_marked_block() {
+fn registering_a_linked_instance_writes_its_script_in_local_bin() {
     let home = TempHome::new();
-    home.write(".bashrc", "# my settings\nexport EDITOR=vim\n");
     home.primary().logged_in_as(UUID_A, "a@example.com");
     let b = home.linked(".claude-b");
     b.logged_in_as(UUID_B, "b@example.com");
@@ -98,13 +108,19 @@ fn registering_a_linked_instance_adds_its_alias_in_a_marked_block() {
     core.register(&home.path().join(".claude")).unwrap();
     core.register(&b.dir).unwrap();
 
-    let text = read(&bashrc(&home));
-    assert!(
-        text.starts_with("# my settings\nexport EDITOR=vim\n"),
-        "{text}"
-    );
-    assert_eq!(block_aliases(&text), vec![alias("claude-b", &b.dir)]);
-    assert!(text.trim_end().ends_with(END), "{text}");
+    let path = scripts(&home).join("claude-b");
+    assert_eq!(read(&path), script(&b.dir));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+    // No shell rc file is created or touched.
+    assert!(!home.path().join(".bashrc").exists());
+    assert!(!home.path().join(".zshrc").exists());
 }
 
 #[test]
@@ -115,33 +131,35 @@ fn the_primary_instance_keeps_plain_claude_and_gets_no_launcher() {
 
     core.register(&home.path().join(".claude")).unwrap();
 
-    assert!(!bashrc(&home).exists());
+    assert!(script_names(&home).is_empty());
     let status = core.launchers().unwrap();
     assert!(status.instances.is_empty());
     assert_eq!(status.drift_count(), 0);
 }
 
 #[test]
-fn a_zsh_user_gets_the_block_in_zshrc() {
-    let home = TempHome::new();
-    home.primary().logged_in_as(UUID_A, "a@example.com");
-    let b = home.linked(".claude-b");
-    b.logged_in_as(UUID_B, "b@example.com");
-    let (core, env) = home.core();
-    env.set_login_shell(Some("/usr/bin/zsh"));
+fn every_login_shell_gets_the_same_scripts() {
+    for shell in ["/usr/bin/zsh", "/usr/bin/fish", "/bin/bash", "/usr/bin/nu"] {
+        let home = TempHome::new();
+        let b = home.linked(".claude-b");
+        b.logged_in_as(UUID_B, "b@example.com");
+        let (core, env) = home.core();
+        env.set_login_shell(Some(shell));
 
-    core.register(&b.dir).unwrap();
+        core.register(&b.dir).unwrap();
 
-    assert!(!bashrc(&home).exists());
-    let zshrc = home.path().join(".zshrc");
-    assert_eq!(
-        block_aliases(&read(&zshrc)),
-        vec![alias("claude-b", &b.dir)]
-    );
-    assert_eq!(
-        core.launchers().unwrap().place,
-        LauncherPlace::RcFile { path: zshrc }
-    );
+        assert_eq!(
+            read(&scripts(&home).join("claude-b")),
+            script(&b.dir),
+            "{shell}"
+        );
+        assert_eq!(
+            core.launchers().unwrap().place,
+            LauncherPlace::ScriptFolder {
+                path: scripts(&home)
+            }
+        );
+    }
 }
 
 #[test]
@@ -157,10 +175,8 @@ fn renaming_the_label_renames_the_launcher_and_the_override_wins() {
         },
     )
     .unwrap();
-    assert_eq!(
-        block_aliases(&read(&bashrc(&home))),
-        vec![alias("claude-work", &b)]
-    );
+    assert_eq!(script_names(&home), vec!["claude-work"]);
+    assert_eq!(read(&scripts(&home).join("claude-work")), script(&b));
 
     core.update_account(
         &uuid(UUID_B),
@@ -170,7 +186,7 @@ fn renaming_the_label_renames_the_launcher_and_the_override_wins() {
         },
     )
     .unwrap();
-    assert_eq!(block_aliases(&read(&bashrc(&home))), vec![alias("cw", &b)]);
+    assert_eq!(script_names(&home), vec!["cw"]);
 
     core.update_account(
         &uuid(UUID_B),
@@ -180,17 +196,14 @@ fn renaming_the_label_renames_the_launcher_and_the_override_wins() {
         },
     )
     .unwrap();
-    assert_eq!(
-        block_aliases(&read(&bashrc(&home))),
-        vec![alias("claude-work", &b)]
-    );
+    assert_eq!(script_names(&home), vec!["claude-work"]);
 }
 
 #[test]
-fn adding_renaming_and_removing_touch_only_the_block() {
+fn adding_renaming_and_removing_leave_the_other_files_of_the_folder_alone() {
     let home = TempHome::new();
-    let before = "# top\nalias ll='ls -l'\n";
-    home.write(".bashrc", before);
+    home.write(".local/bin/claude", "the real claude\n");
+    home.write(".local/bin/my-tool", "#!/bin/sh\necho mine\n");
     home.primary().logged_in_as(UUID_A, "a@example.com");
     let b = home.linked(".claude-b");
     b.logged_in_as(UUID_B, "b@example.com");
@@ -199,11 +212,6 @@ fn adding_renaming_and_removing_touch_only_the_block() {
     let (core, _env) = home.core();
 
     core.register(&b.dir).unwrap();
-    // The user keeps editing the file after the block.
-    let mut text = read(&bashrc(&home));
-    text.push_str("export AFTER=1\n");
-    fs::write(bashrc(&home), &text).unwrap();
-
     core.register(&c.dir).unwrap();
     core.update_account(
         &uuid(UUID_C),
@@ -213,37 +221,47 @@ fn adding_renaming_and_removing_touch_only_the_block() {
         },
     )
     .unwrap();
-    let text = read(&bashrc(&home));
-    assert!(text.starts_with(before), "{text}");
-    assert!(
-        text.ends_with(&format!("{END}\nexport AFTER=1\n")),
-        "{text}"
-    );
-    assert_eq!(
-        block_aliases(&text),
-        vec![alias("claude-b", &b.dir), alias("claude-z", &c.dir)]
-    );
+    assert_eq!(script_names(&home), vec!["claude-b", "claude-z"]);
 
     core.unregister(&b.dir).unwrap();
     core.unregister(&c.dir).unwrap();
-    assert_eq!(read(&bashrc(&home)), format!("{before}export AFTER=1\n"));
+    assert!(script_names(&home).is_empty());
+    assert_eq!(read(&scripts(&home).join("claude")), "the real claude\n");
+    assert_eq!(
+        read(&scripts(&home).join("my-tool")),
+        "#!/bin/sh\necho mine\n"
+    );
 }
 
 #[test]
-fn removing_the_last_launcher_restores_the_rc_file_exactly() {
+fn a_file_of_the_user_with_the_name_of_a_launcher_is_never_overwritten() {
     let home = TempHome::new();
-    let before = "# my settings\nexport EDITOR=vim\n";
-    home.write(".bashrc", before);
+    home.write(".local/bin/claude-b", "#!/bin/sh\necho my own claude-b\n");
     home.linked(".claude-b")
         .logged_in_as(UUID_B, "b@example.com");
     let (core, _env) = home.core();
-    let b = home.path().join(".claude-b");
 
-    core.register(&b).unwrap();
-    assert_ne!(read(&bashrc(&home)), before);
-    core.unregister(&b).unwrap();
+    let error = core
+        .register(&home.path().join(".claude-b"))
+        .expect_err("the launcher's name is taken");
 
-    assert_eq!(read(&bashrc(&home)), before);
+    assert_eq!(error.code(), "launcher_name_taken");
+    assert_eq!(
+        error.path(),
+        Some(scripts(&home).join("claude-b").as_path())
+    );
+    assert_eq!(
+        read(&scripts(&home).join("claude-b")),
+        "#!/bin/sh\necho my own claude-b\n"
+    );
+    let status = core.launchers().unwrap();
+    assert_eq!(
+        status.instances[0].state,
+        LauncherState::Stale { found: None }
+    );
+    assert!(status.orphans.is_empty());
+    // The registration itself was saved; only the launcher is missing.
+    assert_eq!(core.registry().unwrap().instances.len(), 1);
 }
 
 #[test]
@@ -277,6 +295,7 @@ fn two_instances_wanting_the_same_name_get_distinct_launchers() {
     let status = core.launchers().unwrap();
     let names: Vec<_> = status.instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, vec!["claude-b", "claude-b-2"]);
+    assert_eq!(script_names(&home), vec!["claude-b", "claude-b-2"]);
 }
 
 #[test]
@@ -287,20 +306,19 @@ fn a_path_with_spaces_and_quotes_is_quoted_for_the_shell() {
 
     core.register(&odd.dir).unwrap();
 
-    let line = block_aliases(&read(&bashrc(&home))).remove(0);
+    let text = read(&scripts(&home).join("claude-it-s-a-dir"));
     let quoted = format!("'{}'", odd.dir.display().to_string().replace('\'', r"'\''"));
-    let expected = format!(
-        "alias claude-it-s-a-dir={}",
-        shell_quote(&format!("CLAUDE_CONFIG_DIR={quoted} claude"))
+    assert!(
+        text.contains(&format!("\nexport CLAUDE_CONFIG_DIR={quoted}\n")),
+        "{text}"
     );
-    assert_eq!(line, expected);
     assert_eq!(
         core.launchers().unwrap().instances[0].state,
         LauncherState::Ok
     );
 }
 
-/// A quoted path reads back as written, and an alias pointing at another quoted path is
+/// A quoted path reads back as written, and a script pointing at another quoted path is
 /// stale and says where it points: the reader undoes exactly the writer's quoting.
 #[test]
 fn a_quoted_path_round_trips_and_a_different_one_is_stale() {
@@ -310,17 +328,16 @@ fn a_quoted_path_round_trips_and_a_different_one_is_stale() {
     let odd = home.linked(name);
     let (core, _env) = home.core();
     core.register(&odd.dir).unwrap();
-    assert_eq!(
-        core.launchers().unwrap().instances[0].state,
-        LauncherState::Ok
-    );
+    let status = core.launchers().unwrap();
+    assert_eq!(status.instances[0].state, LauncherState::Ok);
 
     let elsewhere = home.path().join("x~2 y");
-    let text = read(&bashrc(&home));
+    let path = scripts(&home).join(&status.instances[0].name);
+    let text = read(&path);
     let written = odd.dir.display().to_string();
-    assert!(text.contains(&format!("'\\''{written}'\\''")), "{text}");
+    assert!(text.contains(&format!("'{written}'")), "{text}");
     fs::write(
-        bashrc(&home),
+        &path,
         text.replace(&written, &elsewhere.display().to_string()),
     )
     .unwrap();
@@ -335,8 +352,66 @@ fn a_quoted_path_round_trips_and_a_different_one_is_stale() {
     assert_eq!(core.launchers().unwrap().drift_count(), 0);
 }
 
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
+// --- Linux: the alias block of mccboard 0.1 ---
+
+#[test]
+fn a_sync_removes_the_alias_block_of_earlier_versions_and_nothing_else() {
+    let (home, core, _env) = home_with_b(OsKind::Linux);
+    let old_block = format!(
+        "{BEGIN}\n# Managed by mccboard.\nalias claude-b='CLAUDE_CONFIG_DIR=/x claude'\n{END}\n"
+    );
+    home.write(
+        ".bashrc",
+        &format!("# top\nexec fish\n\n{old_block}export AFTER=1\n"),
+    );
+    home.write(".zshrc", &format!("# zsh\n\n{old_block}"));
+
+    core.sync_launchers().unwrap();
+
+    assert_eq!(
+        read(&home.path().join(".bashrc")),
+        "# top\nexec fish\nexport AFTER=1\n"
+    );
+    assert_eq!(read(&home.path().join(".zshrc")), "# zsh\n");
+    assert_eq!(script_names(&home), vec!["claude-b"]);
+}
+
+#[test]
+fn an_unfinished_alias_block_stays_as_it_is_and_the_scripts_are_written() {
+    let home = TempHome::new();
+    let broken = format!("# mine\n{BEGIN}\nalias claude-b='x'\n");
+    home.write(".bashrc", &broken);
+    home.linked(".claude-b")
+        .logged_in_as(UUID_B, "b@example.com");
+    let (core, _env) = home.core();
+
+    core.register(&home.path().join(".claude-b")).unwrap();
+
+    assert_eq!(read(&home.path().join(".bashrc")), broken);
+    assert_eq!(script_names(&home), vec!["claude-b"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_rc_file_that_is_a_link_loses_the_old_block_where_it_points() {
+    let home = TempHome::new();
+    home.write(
+        "dotfiles/bashrc",
+        &format!("# managed in dotfiles\n\n{BEGIN}\nalias claude-b='x'\n{END}\n"),
+    );
+    let bashrc = home.path().join(".bashrc");
+    std::os::unix::fs::symlink(home.path().join("dotfiles/bashrc"), &bashrc).unwrap();
+    home.linked(".claude-b")
+        .logged_in_as(UUID_B, "b@example.com");
+    let (core, _env) = home.core();
+
+    core.register(&home.path().join(".claude-b")).unwrap();
+
+    assert!(fs::symlink_metadata(&bashrc).unwrap().is_symlink());
+    assert_eq!(
+        read(&home.path().join("dotfiles/bashrc")),
+        "# managed in dotfiles\n"
+    );
 }
 
 // --- Status (for the doctor) and repair ---
@@ -349,8 +424,8 @@ fn a_registered_linked_instance_reports_its_launcher_ok() {
 
     assert_eq!(
         status.place,
-        LauncherPlace::RcFile {
-            path: bashrc(&home)
+        LauncherPlace::ScriptFolder {
+            path: scripts(&home)
         }
     );
     assert_eq!(status.instances.len(), 1);
@@ -369,9 +444,9 @@ fn a_registered_linked_instance_reports_its_launcher_ok() {
 }
 
 #[test]
-fn a_deleted_block_reads_as_missing_and_sync_restores_it() {
+fn a_deleted_script_reads_as_missing_and_sync_restores_it() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    fs::write(bashrc(&home), "# cleaned up by hand\n").unwrap();
+    fs::remove_file(scripts(&home).join("claude-b")).unwrap();
 
     let status = core.launchers().unwrap();
     assert_eq!(status.instances[0].state, LauncherState::Missing);
@@ -388,13 +463,12 @@ fn a_deleted_block_reads_as_missing_and_sync_restores_it() {
     assert!(sync.updated.is_empty() && sync.removed.is_empty());
     assert_eq!(sync.user_path, None);
     assert_eq!(core.launchers().unwrap().drift_count(), 0);
-    assert!(read(&bashrc(&home)).starts_with("# cleaned up by hand\n"));
 }
 
 #[test]
-fn an_alias_pointing_elsewhere_is_stale_and_says_where_it_points() {
+fn a_script_pointing_elsewhere_is_stale_and_says_where_it_points() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    point_the_alias_elsewhere(&home);
+    point_the_script_elsewhere(&home);
 
     let status = core.launchers().unwrap();
 
@@ -429,13 +503,13 @@ fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
     assert!(launcher_drift(&home, &core).is_empty());
 
-    fs::write(bashrc(&home), "# cleaned up by hand\n").unwrap();
+    fs::remove_file(scripts(&home).join("claude-b")).unwrap();
     let missing = launcher_drift(&home, &core);
     assert_eq!(missing.len(), 1);
     let item = &missing[0];
     assert_eq!(item.id, "launcher:claude-b");
     assert_eq!(item.item, "claude-b");
-    assert_eq!(item.path, bashrc(&home));
+    assert_eq!(item.path, scripts(&home));
     assert_eq!(item.problem, Problem::MissingLauncher);
     assert_eq!(item.repair, Repair::SyncLaunchers);
     assert!(item.explanation.contains("claude-b"));
@@ -446,7 +520,7 @@ fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
     assert!(drift.items.contains(item));
 
     core.sync_launchers().unwrap();
-    point_the_alias_elsewhere(&home);
+    point_the_script_elsewhere(&home);
     let stale = launcher_drift(&home, &core);
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].id, "launcher:claude-b");
@@ -465,7 +539,9 @@ fn the_doctor_reports_a_missing_or_stale_launcher_as_drift_that_sync_repairs() {
 #[test]
 fn launchers_that_cant_be_read_leave_the_doctor_working() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    fs::write(bashrc(&home), format!("{BEGIN}\nalias claude-b='x'\n")).unwrap();
+    // The launchers' folder is a file: it cannot be listed.
+    fs::remove_dir_all(scripts(&home)).unwrap();
+    fs::write(scripts(&home), "not a folder\n").unwrap();
 
     assert!(core.launchers().is_err());
     let doctor = core.doctor().unwrap();
@@ -482,7 +558,7 @@ fn launchers_that_cant_be_read_leave_the_doctor_working() {
 fn repair_fixes_a_launcher_item_by_syncing_the_launchers() {
     let (home, core, env) = home_with_b(OsKind::Linux);
     let b = home.path().join(".claude-b");
-    fs::write(bashrc(&home), "# cleaned up by hand\n").unwrap();
+    fs::remove_file(scripts(&home).join("claude-b")).unwrap();
     assert_eq!(launcher_drift(&home, &core).len(), 1);
     // Launchers live outside the instance's folder: a running session is no obstacle.
     env.add_process(ClaudeProcess {
@@ -499,10 +575,7 @@ fn repair_fixes_a_launcher_item_by_syncing_the_launchers() {
     assert_eq!(item.id, "launcher:claude-b");
     assert_eq!(item.repair, Repair::SyncLaunchers);
     assert_eq!(item.outcome, RepairOutcome::Done { backup: None });
-    assert_eq!(
-        block_aliases(&read(&bashrc(&home))),
-        vec![alias("claude-b", &b)]
-    );
+    assert_eq!(read(&scripts(&home).join("claude-b")), script(&b));
     assert!(launcher_drift(&home, &core).is_empty());
     assert!(
         report
@@ -522,7 +595,7 @@ fn repair_fixes_a_launcher_item_by_syncing_the_launchers() {
 fn repairing_every_item_of_an_instance_fixes_its_stale_launcher_too() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
     let b = home.path().join(".claude-b");
-    point_the_alias_elsewhere(&home);
+    point_the_script_elsewhere(&home);
 
     let report = core.repair(&b, None).unwrap();
 
@@ -532,10 +605,7 @@ fn repairing_every_item_of_an_instance_fixes_its_stale_launcher_too() {
         .find(|i| i.id == "launcher:claude-b")
         .expect("the launcher item among the repaired ones");
     assert_eq!(launcher.outcome, RepairOutcome::Done { backup: None });
-    assert_eq!(
-        block_aliases(&read(&bashrc(&home))),
-        vec![alias("claude-b", &b)]
-    );
+    assert_eq!(read(&scripts(&home).join("claude-b")), script(&b));
     assert!(launcher_drift(&home, &core).is_empty());
     assert_eq!(core.repair(&b, None).unwrap().items, vec![]);
 }
@@ -543,11 +613,11 @@ fn repairing_every_item_of_an_instance_fixes_its_stale_launcher_too() {
 #[test]
 fn a_launcher_no_instance_wants_is_an_orphan_and_sync_removes_it() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    let text = read(&bashrc(&home)).replace(
-        END,
-        &format!("alias claude-old='CLAUDE_CONFIG_DIR=/gone claude'\n{END}"),
-    );
-    fs::write(bashrc(&home), text).unwrap();
+    fs::write(
+        scripts(&home).join("claude-old"),
+        script(Path::new("/gone")),
+    )
+    .unwrap();
 
     let status = core.launchers().unwrap();
     assert_eq!(
@@ -561,78 +631,28 @@ fn a_launcher_no_instance_wants_is_an_orphan_and_sync_removes_it() {
 
     let sync = core.sync_launchers().unwrap();
     assert_eq!(sync.removed.len(), 1);
-    assert_eq!(
-        block_aliases(&read(&bashrc(&home))),
-        vec![alias("claude-b", &home.path().join(".claude-b"))]
-    );
+    assert_eq!(script_names(&home), vec!["claude-b"]);
 }
 
 #[test]
 fn syncing_twice_changes_nothing_the_second_time() {
     let (home, core, _env) = home_with_b(OsKind::Linux);
-    let before = read(&bashrc(&home));
+    let before = read(&scripts(&home).join("claude-b"));
 
     let sync = core.sync_launchers().unwrap();
 
     assert!(sync.created.is_empty() && sync.updated.is_empty() && sync.removed.is_empty());
-    assert_eq!(read(&bashrc(&home)), before);
+    assert_eq!(read(&scripts(&home).join("claude-b")), before);
 }
 
-#[test]
-fn an_unfinished_block_is_reported_and_never_rewritten() {
-    let home = TempHome::new();
-    let broken = format!("# mine\n{BEGIN}\nalias claude-b='x'\n");
-    home.write(".bashrc", &broken);
-    home.linked(".claude-b")
-        .logged_in_as(UUID_B, "b@example.com");
-    let (core, _env) = home.core();
-
-    let error = core
-        .register(&home.path().join(".claude-b"))
-        .expect_err("the launchers can't be written");
-
-    assert_eq!(error.code(), "launcher_block_corrupt");
-    assert_eq!(error.path(), Some(bashrc(&home).as_path()));
-    assert_eq!(read(&bashrc(&home)), broken);
-    assert_eq!(
-        core.launchers().unwrap_err().code(),
-        "launcher_block_corrupt"
-    );
-    // The registration itself was saved; only the launcher is missing.
-    assert_eq!(core.registry().unwrap().instances.len(), 1);
-}
-
+/// Arguments pass through unchanged: the script, run by `sh` against a stand-in `claude` that
+/// prints what it got, from bash, from zsh and from fish when they are installed.
 #[cfg(unix)]
 #[test]
-fn an_rc_file_that_is_a_link_is_edited_where_it_points() {
-    let home = TempHome::new();
-    home.write("dotfiles/bashrc", "# managed in dotfiles\n");
-    std::os::unix::fs::symlink(home.path().join("dotfiles/bashrc"), bashrc(&home)).unwrap();
-    home.linked(".claude-b")
-        .logged_in_as(UUID_B, "b@example.com");
-    let (core, _env) = home.core();
-
-    core.register(&home.path().join(".claude-b")).unwrap();
-
-    assert!(fs::symlink_metadata(bashrc(&home)).unwrap().is_symlink());
-    assert_eq!(
-        block_aliases(&read(&home.path().join("dotfiles/bashrc"))).len(),
-        1
-    );
-}
-
-/// Arguments pass through unchanged: the alias, run by a real bash against a stand-in
-/// `claude` that prints what it got.
-#[cfg(unix)]
-#[test]
-fn the_alias_passes_every_argument_through_in_bash() {
+fn the_script_passes_every_argument_through_from_any_shell() {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
-    if Command::new("bash").arg("-c").arg("true").status().is_err() {
-        eprintln!("bash not found; skipping");
-        return;
-    }
     let home = TempHome::new();
     let b = home.linked("it's b");
     let (core, _env) = home.core();
@@ -642,7 +662,7 @@ fn the_alias_passes_every_argument_through_in_bash() {
     let claude = fake_bin.join("claude");
     // Written under another name and copied by a child `cp`: a descriptor this process held
     // open on `claude` itself could leak into a child forked by a test on another thread, and
-    // bash would then fail to run `claude` with ETXTBSY ("Text file busy").
+    // `sh` would then fail to run `claude` with ETXTBSY ("Text file busy").
     let source = home.path().join("claude.sh");
     fs::write(
         &source,
@@ -656,36 +676,51 @@ fn the_alias_passes_every_argument_through_in_bash() {
         .unwrap();
     assert!(copied.success());
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
-    let name = &core.launchers().unwrap().instances[0].name;
-
-    let script = format!(
-        "shopt -s expand_aliases\nsource \"$1\"\n{name} --bg --name 'x y'\n{name} agents\n"
+    let name = core.launchers().unwrap().instances[0].name.clone();
+    let path = format!(
+        "{}:{}:/usr/bin:/bin",
+        scripts(&home).display(),
+        fake_bin.display()
     );
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(script)
-        .arg("bash")
-        .arg(bashrc(&home))
-        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .output()
-        .unwrap();
-
-    let stdout = String::from_utf8(out.stdout).unwrap();
     let dir = format!("dir={}", b.dir.display());
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        vec![
-            dir.as_str(),
-            "arg=--bg",
-            "arg=--name",
-            "arg=x y",
-            dir.as_str(),
-            "arg=agents"
-        ],
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let expected = vec![
+        dir.as_str(),
+        "arg=--bg",
+        "arg=--name",
+        "arg=x y",
+        dir.as_str(),
+        "arg=agents",
+    ];
+
+    // Each shell runs the launcher by name from the PATH, as a user types it. Their own
+    // configuration stays out, because it could put the real `claude` first on the PATH.
+    let line = format!("{name} --bg --name 'x y'; {name} agents");
+    for (shell, no_config) in [
+        ("sh", None),
+        ("bash", None),
+        ("zsh", Some("-f")),
+        ("fish", Some("--no-config")),
+    ] {
+        if Command::new(shell).arg("-c").arg("true").status().is_err() {
+            eprintln!("{shell} not found; skipping it");
+            continue;
+        }
+        let out = Command::new(shell)
+            .args(no_config)
+            .arg("-c")
+            .arg(&line)
+            .env("PATH", &path)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(
+            stdout.lines().collect::<Vec<_>>(),
+            expected,
+            "{shell}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 // --- Windows: a copy of the shim and its sidecar in mccboard's bin folder, on the user PATH ---
@@ -747,7 +782,7 @@ fn on_windows_a_linked_instance_gets_a_copy_of_the_shim_and_its_sidecar() {
         sidecar.lines().any(|line| line == sidecar_line(&b)),
         "{sidecar}"
     );
-    assert!(!bashrc(&home).exists());
+    assert!(!scripts(&home).exists());
     assert_eq!(env.user_path(), vec![bin(&home)]);
 
     let status = core.launchers().unwrap();
@@ -1110,12 +1145,12 @@ fn no_token_reaches_a_launcher() {
         home.primary()
             .credentials_expiring(common::now() + jiff::SignedDuration::from_hours(5));
         core.sync_launchers().unwrap();
-        let rc = fs::read_to_string(bashrc(&home)).unwrap_or_default();
-        assert!(!rc.contains("FIXTURE"));
-        if let Ok(entries) = fs::read_dir(bin(&home)) {
-            for entry in entries {
-                let bytes = fs::read(entry.unwrap().path()).unwrap();
-                assert!(!String::from_utf8_lossy(&bytes).contains("FIXTURE"));
+        for folder in [scripts(&home), bin(&home)] {
+            if let Ok(entries) = fs::read_dir(folder) {
+                for entry in entries {
+                    let bytes = fs::read(entry.unwrap().path()).unwrap();
+                    assert!(!String::from_utf8_lossy(&bytes).contains("FIXTURE"));
+                }
             }
         }
         let json = serde_json::to_string(&core.launchers().unwrap()).unwrap();

@@ -4,7 +4,9 @@
 //! What launchers should exist is derived from `config.toml`, never stored: one per registered
 //! linked instance, named by its account ([`crate::Account::launcher_name`]) or, without a
 //! known account, after its folder. Where they live depends on the OS:
-//! - Linux: alias lines in a marked block of the user's shell rc file ([`rc_file`]);
+//! - Linux: a small `sh` script per launcher in `~/.local/bin`, which every shell finds on the
+//!   PATH ([`script_folder`]). A sync also removes the alias block of earlier versions from
+//!   `~/.bashrc` and `~/.zshrc` ([`rc_file`]);
 //! - Windows: a copy of mccboard's shim program, `claude-b.exe`, with a sidecar file naming the
 //!   instance, in `~/.mccboard/bin`, a folder on the user PATH ([`bin_folder`]).
 //!
@@ -12,6 +14,7 @@
 
 mod bin_folder;
 mod rc_file;
+mod script_folder;
 mod shell;
 
 use std::collections::HashSet;
@@ -36,8 +39,8 @@ pub struct Launcher {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LauncherPlace {
-    /// Linux: a block marked as mccboard's in the user's shell rc file.
-    RcFile { path: PathBuf },
+    /// Linux: scripts in `~/.local/bin`, which must be on the PATH.
+    ScriptFolder { path: PathBuf },
     /// Windows: mccboard's bin folder, which must be on the user PATH.
     BinFolder { path: PathBuf, on_user_path: bool },
 }
@@ -86,7 +89,7 @@ impl LauncherStatus {
             LauncherPlace::BinFolder { on_user_path, .. } => {
                 !on_user_path && !self.instances.is_empty()
             }
-            LauncherPlace::RcFile { .. } => false,
+            LauncherPlace::ScriptFolder { .. } => false,
         };
         self.instances
             .iter()
@@ -165,13 +168,13 @@ struct Found {
     name: String,
     config_dir: Option<PathBuf>,
     content: String,
-    /// Whether mccboard made it (always, inside the rc block). Only those can be orphans.
+    /// Whether mccboard made it. Only those can be orphans.
     managed: bool,
 }
 
 /// Where launchers live on this machine.
 enum Store {
-    RcFile(rc_file::RcFile),
+    ScriptFolder(script_folder::ScriptFolder),
     BinFolder(bin_folder::BinFolder),
 }
 
@@ -182,21 +185,21 @@ impl Store {
                 paths.bin_dir(),
                 env.launcher_shim(),
             )),
-            OsKind::Linux => Store::RcFile(rc_file::RcFile::of(home, env.login_shell())),
+            OsKind::Linux => Store::ScriptFolder(script_folder::ScriptFolder::of(home)),
         }
     }
 
     fn read(&self) -> Result<Vec<Found>, Error> {
         match self {
-            Store::RcFile(rc) => rc.read(),
+            Store::ScriptFolder(scripts) => scripts.read(),
             Store::BinFolder(bin) => bin.read(),
         }
     }
 
     /// The text a launcher has when mccboard wrote it, as [`Found::content`] holds it.
-    fn render(&self, name: &str, config_dir: &Path) -> String {
+    fn render(&self, config_dir: &Path) -> String {
         match self {
-            Store::RcFile(_) => rc_file::alias_line(name, config_dir),
+            Store::ScriptFolder(_) => script_folder::content(config_dir),
             Store::BinFolder(_) => bin_folder::content(config_dir),
         }
     }
@@ -231,7 +234,19 @@ pub(crate) fn sync(
     let comparison = compare(&store, &wanted, store.read()?);
 
     match &store {
-        Store::RcFile(rc) => rc.write(&wanted)?,
+        Store::ScriptFolder(scripts) => {
+            for rc in rc_file::candidates(home) {
+                rc_file::remove_block(&rc);
+            }
+            for (want, status) in wanted.iter().zip(&comparison.instances) {
+                if status.state != LauncherState::Ok {
+                    scripts.write(&want.name, &want.config_dir)?;
+                }
+            }
+            for orphan in &comparison.orphans {
+                scripts.remove(&orphan.name)?;
+            }
+        }
         Store::BinFolder(bin) => {
             for (want, status) in wanted.iter().zip(&comparison.instances) {
                 if status.state != LauncherState::Ok {
@@ -261,7 +276,7 @@ pub(crate) fn sync(
     };
     let cli = match &store {
         Store::BinFolder(bin) => Some(bin.install_cli(env.shipped_cli())),
-        Store::RcFile(_) => None,
+        Store::ScriptFolder(_) => None,
     };
     Ok(LauncherSync {
         created: changed(|s| *s == LauncherState::Missing),
@@ -288,8 +303,8 @@ pub(crate) fn install_cli(paths: &Paths, env: &dyn Environment) -> Option<CliIns
 
 fn place(store: &Store, env: &dyn Environment) -> LauncherPlace {
     match store {
-        Store::RcFile(rc) => LauncherPlace::RcFile {
-            path: rc.path().to_path_buf(),
+        Store::ScriptFolder(scripts) => LauncherPlace::ScriptFolder {
+            path: scripts.path().to_path_buf(),
         },
         Store::BinFolder(bin) => LauncherPlace::BinFolder {
             path: bin.path().to_path_buf(),
@@ -333,9 +348,7 @@ fn compare(store: &Store, wanted: &[Wanted], found: Vec<Found>) -> Comparison {
         .map(|want| {
             let state = match found.iter().find(|f| key(&f.name) == key(&want.name)) {
                 None => LauncherState::Missing,
-                Some(f) if f.content == store.render(&want.name, &want.config_dir) => {
-                    LauncherState::Ok
-                }
+                Some(f) if f.content == store.render(&want.config_dir) => LauncherState::Ok,
                 Some(f) => LauncherState::Stale {
                     found: f
                         .config_dir

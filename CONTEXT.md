@@ -40,7 +40,7 @@ Any other instance on the same machine. It points at the primary instance's shar
 _Avoid_: secondary, child, clone
 
 **Launcher**:
-The command that starts Claude Code in a linked instance (`claude-b`). The primary instance keeps plain `claude`. On Linux it is a shell alias; on Windows a copy of mccboard's shim program (`claude-b.exe`, ADR 0007).
+The command that starts Claude Code in a linked instance (`claude-b`). The primary instance keeps plain `claude`. On Linux it is a small `sh` script in `~/.local/bin` (ADR 0011); on Windows a copy of mccboard's shim program (`claude-b.exe`, ADR 0007).
 _Avoid_: alias, shim, wrapper
 
 **Desktop profile**:

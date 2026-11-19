@@ -137,7 +137,7 @@
   "launcher.state.stale": "Out of date",
   "launcher.state.stale_found": "Starts {path} instead",
   "launchers.title": "Launchers",
-  "launchers.place.rc_file": "Aliases in mccboard's block of {path}.",
+  "launchers.place.script_folder": "Scripts in {path}, which work in any shell.",
   "launchers.place.bin_folder": "Programs in {path}.",
   "launchers.not_on_path": "This folder isn't on your user PATH, so terminals won't find the launchers.",
   "launchers.orphan": "{name} isn't needed by any registered instance any more.",

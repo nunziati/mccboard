@@ -82,7 +82,7 @@ export interface Launcher {
 
 /** Where launchers live: a block of the shell rc file (Linux) or mccboard's bin folder (Windows). */
 export type LauncherPlace =
-  | { kind: 'rc_file'; path: string }
+  | { kind: 'script_folder'; path: string }
   | { kind: 'bin_folder'; path: string; on_user_path: boolean }
 
 export type LauncherState =

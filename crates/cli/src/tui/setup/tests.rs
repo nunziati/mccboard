@@ -130,8 +130,22 @@ impl Home {
     }
 
     /// The shell rc file holding the launchers, empty while there is none.
-    fn rc(&self) -> String {
-        fs::read_to_string(self.path().join(".bashrc")).unwrap_or_default()
+    /// The launcher scripts in `~/.local/bin`, by name.
+    fn launchers(&self) -> Vec<(String, String)> {
+        let Ok(entries) = fs::read_dir(self.path().join(".local/bin")) else {
+            return Vec::new();
+        };
+        let mut scripts: Vec<_> = entries
+            .flatten()
+            .map(|e| {
+                (
+                    e.file_name().to_string_lossy().into_owned(),
+                    fs::read_to_string(e.path()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        scripts.sort();
+        scripts
     }
 
     /// The setup of this home, with Claude Code as the runner's lookup would hand it over.
@@ -448,10 +462,13 @@ fn a_fresh_home_is_set_up_step_by_step_and_a_second_run_changes_nothing() {
         &text,
         &[
             &format!(
-                "Launchers are aliases in mccboard's block of {}.",
-                os("~/.bashrc")
+                "Launchers are scripts in {}, which work in any shell.",
+                os("~/.local/bin")
             ),
-            &format!("source {}", os("~/.bashrc")),
+            &format!(
+                "export PATH=\"{}:$PATH\"",
+                home.path().join(".local").join("bin").display()
+            ),
         ],
     );
     let row = line_with(&text, "claude-b ");
@@ -459,7 +476,7 @@ fn a_fresh_home_is_set_up_step_by_step_and_a_second_run_changes_nothing() {
         row.contains(&os("~/.claude-b")) && row.contains("ok"),
         "{text}"
     );
-    assert!(home.rc().contains("alias claude-b="), "{}", home.rc());
+    assert!(home.path().join(".local/bin/claude-b").is_file());
 
     // 7. Space switches to Italian, then turns the renewal off, both saved at once.
     press(&mut setup, KeyCode::Enter);
@@ -515,12 +532,12 @@ fn a_fresh_home_is_set_up_step_by_step_and_a_second_run_changes_nothing() {
     }
 
     // A second run finds everything done, and Enter through every step changes nothing.
-    let (config, rc) = (home.config(), home.rc());
+    let (config, launchers) = (home.config(), home.launchers());
     let logins = home.env.login_invocations().len();
     let mut again = home.setup(Language::Italian);
     walk_through(&mut again);
     assert_eq!(home.config(), config);
-    assert_eq!(home.rc(), rc);
+    assert_eq!(home.launchers(), launchers);
     assert_eq!(home.env.login_invocations().len(), logins);
     assert_eq!(home.env.installer_invocations().len(), 1);
 }
@@ -543,7 +560,7 @@ fn walk_through(setup: &mut Setup) {
 #[test]
 fn a_home_already_set_up_shows_every_step_done_and_running_it_again_changes_nothing() {
     let home = Home::set_up();
-    let (config, rc) = (home.config(), home.rc());
+    let (config, launchers) = (home.config(), home.launchers());
     let (logins, runs) = (
         home.env.login_invocations().len(),
         home.env.claude_invocations().len(),
@@ -571,7 +588,7 @@ fn a_home_already_set_up_shows_every_step_done_and_running_it_again_changes_noth
     // And so on every later run.
     walk_through(&mut home.setup(Language::English));
     assert_eq!(home.config(), config);
-    assert_eq!(home.rc(), rc);
+    assert_eq!(home.launchers(), launchers);
     assert_eq!(home.env.login_invocations().len(), logins);
     assert_eq!(home.env.claude_invocations().len(), runs);
     assert!(home.env.installer_invocations().is_empty());
@@ -599,8 +616,8 @@ fn each_step_shows_what_is_done_in_italian() {
             "nessuna differenza",
         ],
         &[
-            "I comandi di avvio sono alias nel blocco di mccboard",
-            "Per usarli in questo terminale, esegui la riga qui sotto.",
+            "I comandi di avvio sono script in",
+            "Servono con la loro cartella nel PATH.",
         ],
         &[
             "Lingua: Italiano",

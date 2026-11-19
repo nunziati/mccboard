@@ -509,9 +509,12 @@ fn launchers_lines(setup: &Setup, texts: Texts) -> Vec<Line<'static>> {
     if !status.instances.is_empty() {
         lines.push(Line::default());
         match &status.place {
-            LauncherPlace::RcFile { path: rc } => {
-                lines.push(Line::from(texts.use_here_rc()));
-                lines.push(command(&format!("source {}", path(rc))));
+            LauncherPlace::ScriptFolder { path: scripts } => {
+                lines.push(Line::from(texts.use_here_scripts()));
+                lines.push(command(&format!(
+                    "export PATH=\"{}:$PATH\"",
+                    scripts.display()
+                )));
             }
             LauncherPlace::BinFolder { path: bin, .. } => {
                 lines.push(Line::from(texts.use_here_windows()));

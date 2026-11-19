@@ -18,8 +18,8 @@
   <p class="muted small">
     {#if status.instances.length === 0 && status.orphans.length === 0}
       {t('launchers.none')}
-    {:else if status.place.kind === 'rc_file'}
-      {t('launchers.place.rc_file', { path: status.place.path })}
+    {:else if status.place.kind === 'script_folder'}
+      {t('launchers.place.script_folder', { path: status.place.path })}
     {:else}
       {t('launchers.place.bin_folder', { path: status.place.path })}
     {/if}

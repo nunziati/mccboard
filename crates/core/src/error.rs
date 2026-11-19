@@ -89,6 +89,14 @@ pub enum Error {
     )]
     LauncherBlockCorrupt { path: PathBuf },
 
+    /// A file mccboard did not write holds the name of a launcher, in the launchers' folder.
+    #[error(
+        "{} is not a mccboard launcher, and mccboard won't overwrite it: rename or remove it, \
+         or give the launcher another name with `mccboard account set <account> --launcher <name>`",
+        path.display()
+    )]
+    LauncherNameTaken { path: PathBuf },
+
     /// The launcher shim (`mccboard-shim.exe`) isn't next to mccboard's programs, so no
     /// Windows launcher can be written.
     #[error(
@@ -385,6 +393,7 @@ impl Error {
             Error::LauncherUnreadable { .. } => "launcher_unreadable",
             Error::LauncherUnwritable { .. } => "launcher_unwritable",
             Error::LauncherBlockCorrupt { .. } => "launcher_block_corrupt",
+            Error::LauncherNameTaken { .. } => "launcher_name_taken",
             Error::LauncherShimMissing { .. } => "launcher_shim_missing",
             Error::InstanceInUse { .. } => "instance_in_use",
             Error::DeveloperModeOff => "developer_mode_off",
@@ -441,6 +450,7 @@ impl Error {
             | Error::LauncherUnreadable { path, .. }
             | Error::LauncherUnwritable { path, .. }
             | Error::LauncherBlockCorrupt { path }
+            | Error::LauncherNameTaken { path }
             | Error::InstanceInUse { path, .. }
             | Error::DesktopAppFolder { path }
             | Error::DriftItemNotFound { path, .. }

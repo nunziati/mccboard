@@ -88,8 +88,25 @@ impl Fixture {
         self.home.path().join(relative)
     }
 
-    fn rc_file(&self) -> String {
-        fs::read_to_string(self.path(".bashrc")).unwrap_or_default()
+    /// Every launcher script in `~/.local/bin`, each after a `== <name>` line, sorted by name.
+    fn launchers(&self) -> String {
+        let Ok(entries) = fs::read_dir(self.path(".local/bin")) else {
+            return String::new();
+        };
+        let mut scripts: Vec<(String, String)> = entries
+            .flatten()
+            .map(|e| {
+                (
+                    e.file_name().to_string_lossy().into_owned(),
+                    fs::read_to_string(e.path()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        scripts.sort();
+        scripts
+            .into_iter()
+            .map(|(name, text)| format!("== {name}\n{text}"))
+            .collect()
     }
 
     /// The registered instance in `dir`, if any.
@@ -204,7 +221,7 @@ fn adding_makes_the_folder_links_aligns_creates_the_launcher_logs_in_and_registe
     assert_eq!(global["oauthAccount"]["accountUuid"], json!(UUID_B));
     assert!(global.get("projects").is_none());
     // The launcher.
-    assert!(f.rc_file().contains("alias claude-b="), "{}", f.rc_file());
+    assert!(f.launchers().contains("== claude-b\n"), "{}", f.launchers());
     // The login ran once, in this instance, in the terminal the front end chose.
     let logins = f.env.login_invocations();
     assert_eq!(logins.len(), 1);
@@ -301,9 +318,9 @@ fn the_folder_and_label_can_be_chosen() {
     assert!(is_link(&dir.join("settings.json")));
     assert_eq!(f.label_of(UUID_B).as_deref(), Some("Work"));
     assert!(
-        f.rc_file().contains("alias claude-work="),
+        f.launchers().contains("== claude-work\n"),
         "{}",
-        f.rc_file()
+        f.launchers()
     );
     assert!(f.registered(&dir).is_some());
 }
@@ -409,7 +426,7 @@ fn adding_again_changes_nothing_and_doesnt_log_in_again() {
     let f = fixture();
     f.env.login_as(UUID_B, "b@example.com");
     f.core.add(&add("B")).unwrap();
-    let rc = f.rc_file();
+    let rc = f.launchers();
     let config = f.home.config_text();
 
     let again = f.core.add(&add("B")).unwrap();
@@ -419,7 +436,7 @@ fn adding_again_changes_nothing_and_doesnt_log_in_again() {
     assert_eq!(again.login.run, LoginRun::AlreadyLoggedIn);
     assert_eq!(f.env.login_invocations().len(), 1);
     assert!(again.login.warnings.is_empty());
-    assert_eq!(f.rc_file(), rc);
+    assert_eq!(f.launchers(), rc);
     assert_eq!(f.home.config_text(), config);
     assert_eq!(f.core.registry().unwrap().instances.len(), 2);
 }
@@ -483,7 +500,7 @@ fn a_login_that_cant_start_leaves_the_instance_ready_and_a_rerun_finishes() {
     let dir = f.path(".claude-b");
     // Everything before the login is done, and the instance is registered, not logged in.
     assert!(is_link(&dir.join("settings.json")));
-    assert!(f.rc_file().contains("alias claude-b="));
+    assert!(f.launchers().contains("== claude-b\n"));
     let instance = f.registered(&dir).expect("registered before the login");
     assert!(instance.registered_account.is_none());
 
@@ -582,25 +599,20 @@ fn a_running_session_in_an_existing_folder_stops_the_add_before_anything_changes
 #[test]
 fn a_launcher_that_cant_be_written_stops_the_add_and_a_rerun_completes() {
     let f = fixture();
-    write(
-        f.path(".bashrc"),
-        "export X=1\n# >>> mccboard launchers >>>\nalias claude-old='claude'\n",
-    );
+    // A file of the user's holds the launcher's name: mccboard won't overwrite it.
+    write(f.path(".local/bin/claude-b"), "#!/bin/sh\necho mine\n");
     f.env.login_as(UUID_B, "b@example.com");
 
     let error = f.core.add(&add("B")).unwrap_err();
 
-    assert!(
-        matches!(error, Error::LauncherBlockCorrupt { .. }),
-        "{error}"
-    );
+    assert!(matches!(error, Error::LauncherNameTaken { .. }), "{error}");
     assert!(f.env.login_invocations().is_empty());
 
-    write(f.path(".bashrc"), "export X=1\n");
+    fs::remove_file(f.path(".local/bin/claude-b")).unwrap();
     let report = f.core.add(&add("B")).unwrap();
 
     let dir = f.path(".claude-b");
-    assert!(f.rc_file().contains("alias claude-b="));
+    assert!(f.launchers().contains("== claude-b\n"));
     assert!(is_link(&dir.join("settings.json")));
     assert_eq!(report.login.account.unwrap().uuid.as_str(), UUID_B);
 }
@@ -659,7 +671,7 @@ fn adding_without_login_stops_after_the_launcher() {
     assert!(f.env.login_invocations().is_empty());
     let dir = f.path(".claude-b");
     assert!(is_link(&dir.join("settings.json")));
-    assert!(f.rc_file().contains("alias claude-b="));
+    assert!(f.launchers().contains("== claude-b\n"));
     assert!(f.registered(&dir).is_some());
 }
 
@@ -882,7 +894,11 @@ fn a_link_to_the_primary_folder_is_the_primary_instance_and_never_relinked() {
     // The primary's own items stay real: nothing was linked to itself.
     assert!(!is_link(&f.primary.join("settings.json")));
     assert!(!is_link(&f.primary.join("agents")));
-    assert!(!f.rc_file().contains(".claude-alias"), "{}", f.rc_file());
+    assert!(
+        !f.launchers().contains(".claude-alias"),
+        "{}",
+        f.launchers()
+    );
     // Its login is the primary's own: Claude Code's default folder.
     login(&f, &alias).unwrap();
     let logins = f.env.login_invocations();
@@ -919,7 +935,7 @@ fn logging_in_a_registered_instance_records_its_account() {
         UUID_B
     );
     // The launcher follows the account.
-    assert!(f.rc_file().contains("alias claude-b="));
+    assert!(f.launchers().contains("== claude-b\n"));
 }
 
 #[test]
