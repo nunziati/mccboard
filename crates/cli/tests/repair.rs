@@ -197,9 +197,12 @@ fn repair_refuses_while_claude_code_runs_in_the_instance() {
     let b = home.path().join(".claude-b");
     let bin = home.path().join("bin").join("claude");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    copy_executable(Path::new("/bin/sleep"), &bin);
+    // The shell copied as `claude`, waiting on its input: see `system_environment.rs` in the
+    // core's tests for why not a copy of `sleep`.
+    copy_executable(Path::new("/bin/sh"), &bin);
     let mut claude = Command::new(&bin)
-        .arg("30")
+        .args(["-c", "read _"])
+        .stdin(Stdio::piped())
         .env("CLAUDE_CONFIG_DIR", &b)
         .spawn()
         .unwrap();

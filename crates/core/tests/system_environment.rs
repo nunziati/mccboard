@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 
 use mccboard_core::{Core, Environment, ProcessConfigDir, SystemEnvironment};
 
@@ -18,14 +18,18 @@ fn copy_executable(from: &Path, to: &Path) {
     assert!(status.success(), "cp {} {}", from.display(), to.display());
 }
 
-/// A stand-in Claude Code process: `sleep` copied to a file named `claude`.
+/// A stand-in Claude Code process: the shell copied to a file named `claude`, waiting on its
+/// input with the builtin `read`, which starts no other process. A copy of `sleep` doesn't
+/// work everywhere: in a multi-call coreutils (Ubuntu 26.04) the program chosen is the name of
+/// the file, and a copy named `claude` exits at once.
 struct FakeClaude(Child);
 
 impl FakeClaude {
     fn start(bin: &Path, home: &Path, config_dir: Option<&Path>) -> Self {
         let mut command = Command::new(bin);
         command
-            .arg("30")
+            .args(["-c", "read _"])
+            .stdin(Stdio::piped())
             .env_remove("CLAUDE_CONFIG_DIR")
             .env("HOME", home);
         if let Some(dir) = config_dir {
@@ -56,7 +60,7 @@ fn claude_code_processes_are_listed_with_their_config_directory() {
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join("bin").join("claude");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    copy_executable(Path::new("/bin/sleep"), &bin);
+    copy_executable(Path::new("/bin/sh"), &bin);
     let b = home.path().join(".claude-b");
     fs::create_dir_all(&b).unwrap();
     fs::create_dir_all(home.path().join(".claude")).unwrap();

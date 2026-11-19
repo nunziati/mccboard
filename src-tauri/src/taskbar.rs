@@ -44,7 +44,6 @@ pub(crate) fn setup(app: &tauri::App, core: &Core) {
 
 /// A second copy of mccboard's app was started with `argv` (a shortcut, a pin, a plain
 /// start): it has handed them over and exited.
-#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn on_second_copy(app: &AppHandle, argv: &[String]) {
     on_args(app, AppArgs::parse(argv));
 }

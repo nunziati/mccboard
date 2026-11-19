@@ -230,6 +230,7 @@
   "error.desktop_app_not_opened": "The Claude desktop app couldn't be opened.",
   "desktop.title": "Desktop profiles",
   "desktop.hint": "The Claude desktop app side by side, one copy per account, each with its own data folder and sign-in. A profile's Code tab uses its account's local instance.",
+  "desktop.unsupported": "Desktop profiles open on Windows only, where mccboard starts a copy of the Claude desktop app for each account.",
   "desktop.column.profile": "Profile",
   "desktop.column.folder": "Data folder",
   "desktop.column.state": "State",

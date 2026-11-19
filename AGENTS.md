@@ -43,7 +43,7 @@ Credentials are **read-only** to mccboard. Claude Code owns them.
 ## Stack
 - **Tauri v2.** Core in Rust. OS-specific code (taskbar docking, Windows taskbar IDs, icons, launchers) lives in per-OS modules.
 - **UI:** Svelte + TypeScript.
-- **Platforms:** Windows is the target. Core, CLI and app also build and pass tests on Linux. macOS is out of scope for now.
+- **Platforms:** Windows is the main target. Core, CLI and app also build, pass tests and run on Linux, where the app has the tray and the Instances window but no taskbar widget and no desktop profiles. macOS is out of scope for now.
 
 ## Conventions
 - **Repo language:** English for code, comments, README and docs.

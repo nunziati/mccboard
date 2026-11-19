@@ -2,7 +2,8 @@
   // The "Desktop profiles" section: the core's desktop profiles, the default one first, with
   // Add, Open, Remove and "open when mccboard starts", and the first sign-in guide. It reloads
   // when config.toml changes and, while the window is visible, every few seconds, so the
-  // running state and a new sign-in show up.
+  // running state and a new sign-in show up. Off Windows, where no profile opens, it only says
+  // so, and still reports the default profile's account, whose color the core keeps orange.
   import { onMount } from 'svelte'
   import AddDesktopProfile from './AddDesktopProfile.svelte'
   import RemoveDesktopProfile from './RemoveDesktopProfile.svelte'
@@ -11,6 +12,7 @@
     addDesktopProfile,
     desktopProfileCandidates,
     desktopProfiles,
+    desktopProfilesSupported,
     isCoreError,
     onConfigChanged,
     openDesktopProfile,
@@ -43,6 +45,8 @@
   const FAST_MS = 3000
   const SLOW_MS = 10000
 
+  /** Whether profiles open on this platform (Windows); null until the core has answered. */
+  let supported = $state<boolean | null>(null)
   let profiles = $state<DesktopProfile[] | null>(null)
   let candidates = $state<Account[]>([])
   let loadError = $state<CoreError | null>(null)
@@ -166,8 +170,10 @@
     })
   }
 
-  // Reloads while the window is visible: quickly while a sign-in is awaited.
+  // Reloads while the window is visible: quickly while a sign-in is awaited. Off Windows no
+  // profile runs, so nothing changes between config.toml edits.
   $effect(() => {
+    if (supported === false) return
     const every = awaitingSignIn ? FAST_MS : SLOW_MS
     const timer = setInterval(() => {
       if (!document.hidden) load()
@@ -176,6 +182,10 @@
   })
 
   onMount(() => {
+    desktopProfilesSupported()
+      .then((answer) => (supported = answer))
+      // Shown as everywhere: an opening that can't happen says why.
+      .catch(() => (supported = true))
     load()
     const unlisten = onConfigChanged(load)
     return () => {
@@ -186,106 +196,110 @@
 
 <section>
   <h2>{t('desktop.title')}</h2>
-  <p class="muted small">{t('desktop.hint')}</p>
+  {#if supported === false}
+    <p class="muted small">{t('desktop.unsupported')}</p>
+  {:else}
+    <p class="muted small">{t('desktop.hint')}</p>
 
-  {#if loadError}
-    <p class="error" role="alert">{errorMessage(loadError.code)}</p>
-  {/if}
+    {#if loadError}
+      <p class="error" role="alert">{errorMessage(loadError.code)}</p>
+    {/if}
 
-  {#if guide}
-    <SignInGuide
-      name={nameOf(guide)}
-      ondismiss={() => {
-        if (guide?.account) dismissed[guide.account] = true
-      }}
-    />
-  {/if}
+    {#if guide}
+      <SignInGuide
+        name={nameOf(guide)}
+        ondismiss={() => {
+          if (guide?.account) dismissed[guide.account] = true
+        }}
+      />
+    {/if}
 
-  {#if profiles}
-    <table>
-      <thead>
-        <tr>
-          <th>{t('desktop.column.profile')}</th>
-          <th>{t('desktop.column.folder')}</th>
-          <th>{t('desktop.column.state')}</th>
-          <th>{t('desktop.column.signed_in')}</th>
-          <th>{t('desktop.column.open_at_start')}</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each profiles as profile (profile.default ? 'default' : profile.account)}
+    {#if profiles}
+      <table>
+        <thead>
           <tr>
-            <td>
-              <div class="profile">
-                <span class="swatch" style:background={profile.color}></span>
-                <strong>{nameOf(profile)}</strong>
-                {#if profile.default && profile.label}
-                  <span class="muted small">{t('desktop.default')}</span>
-                {/if}
-              </div>
-              {#if profile.default}
-                <div class="muted small">{t('desktop.default_hint')}</div>
-              {/if}
-            </td>
-            <td><code>{profile.data_folder}</code></td>
-            <td>
-              {#if profile.running}
-                <span class="ok">{t('desktop.running')}</span>
-              {:else}
-                <span class="muted">{t('desktop.not_running')}</span>
-              {/if}
-            </td>
-            <td>
-              {#if profile.observed.account}
-                <div>{accountName(profile.observed.account)}</div>
-              {:else}
-                <span class="muted">{t('desktop.not_signed_in')}</span>
-              {/if}
-              {#if profile.observed.others.length > 0}
-                <div class="muted small">
-                  {t('desktop.signed_in_before', {
-                    names: profile.observed.others.map((uuid) => accountName(uuid)).join(', '),
-                  })}
-                </div>
-              {/if}
-              {#each profile.warnings as warning (warning.kind)}
-                <div class="warning small">{warningText(profile, warning)}</div>
-              {/each}
-            </td>
-            <td>
-              {#if profile.default}
-                <span class="muted">—</span>
-              {:else}
-                <input
-                  type="checkbox"
-                  title={t('desktop.open_at_start_hint')}
-                  aria-label={t('desktop.open_at_start_hint')}
-                  checked={profile.open_at_start}
-                  disabled={busy}
-                  onchange={(e) => setOpenAtStart(profile, (e.currentTarget as HTMLInputElement).checked)}
-                />
-              {/if}
-            </td>
-            <td class="row-actions">
-              <button disabled={busy} title={t('desktop.open_hint')} onclick={() => open(profile)}>
-                {t('action.open')}
-              </button>
-              {#if !profile.default}
-                <RemoveDesktopProfile
-                  name={nameOf(profile)}
-                  folder={profile.data_folder}
-                  {busy}
-                  onremove={(deleteFolder) => remove(profile, deleteFolder)}
-                />
-              {/if}
-            </td>
+            <th>{t('desktop.column.profile')}</th>
+            <th>{t('desktop.column.folder')}</th>
+            <th>{t('desktop.column.state')}</th>
+            <th>{t('desktop.column.signed_in')}</th>
+            <th>{t('desktop.column.open_at_start')}</th>
+            <th></th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each profiles as profile (profile.default ? 'default' : profile.account)}
+            <tr>
+              <td>
+                <div class="profile">
+                  <span class="swatch" style:background={profile.color}></span>
+                  <strong>{nameOf(profile)}</strong>
+                  {#if profile.default && profile.label}
+                    <span class="muted small">{t('desktop.default')}</span>
+                  {/if}
+                </div>
+                {#if profile.default}
+                  <div class="muted small">{t('desktop.default_hint')}</div>
+                {/if}
+              </td>
+              <td><code>{profile.data_folder}</code></td>
+              <td>
+                {#if profile.running}
+                  <span class="ok">{t('desktop.running')}</span>
+                {:else}
+                  <span class="muted">{t('desktop.not_running')}</span>
+                {/if}
+              </td>
+              <td>
+                {#if profile.observed.account}
+                  <div>{accountName(profile.observed.account)}</div>
+                {:else}
+                  <span class="muted">{t('desktop.not_signed_in')}</span>
+                {/if}
+                {#if profile.observed.others.length > 0}
+                  <div class="muted small">
+                    {t('desktop.signed_in_before', {
+                      names: profile.observed.others.map((uuid) => accountName(uuid)).join(', '),
+                    })}
+                  </div>
+                {/if}
+                {#each profile.warnings as warning (warning.kind)}
+                  <div class="warning small">{warningText(profile, warning)}</div>
+                {/each}
+              </td>
+              <td>
+                {#if profile.default}
+                  <span class="muted">—</span>
+                {:else}
+                  <input
+                    type="checkbox"
+                    title={t('desktop.open_at_start_hint')}
+                    aria-label={t('desktop.open_at_start_hint')}
+                    checked={profile.open_at_start}
+                    disabled={busy}
+                    onchange={(e) => setOpenAtStart(profile, (e.currentTarget as HTMLInputElement).checked)}
+                  />
+                {/if}
+              </td>
+              <td class="row-actions">
+                <button disabled={busy} title={t('desktop.open_hint')} onclick={() => open(profile)}>
+                  {t('action.open')}
+                </button>
+                {#if !profile.default}
+                  <RemoveDesktopProfile
+                    name={nameOf(profile)}
+                    folder={profile.data_folder}
+                    {busy}
+                    onremove={(deleteFolder) => remove(profile, deleteFolder)}
+                  />
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
 
-    <AddDesktopProfile {candidates} {busy} onadd={add} />
+      <AddDesktopProfile {candidates} {busy} onadd={add} />
+    {/if}
   {/if}
 </section>
 

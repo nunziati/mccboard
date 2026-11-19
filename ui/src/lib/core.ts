@@ -414,6 +414,11 @@ export function desktopProfiles(): Promise<DesktopProfile[]> {
   return invoke<DesktopProfile[]>('desktop_profiles')
 }
 
+/** Whether desktop profiles can open on this platform: on Windows only. */
+export function desktopProfilesSupported(): Promise<boolean> {
+  return invoke<boolean>('desktop_profiles_supported')
+}
+
 /** The accounts that can get a desktop profile: with a local instance and no profile yet. */
 export function desktopProfileCandidates(): Promise<Account[]> {
   return invoke<Account[]>('desktop_profile_candidates')
