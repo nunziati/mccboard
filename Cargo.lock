@@ -2443,7 +2443,7 @@ dependencies = [
 
 [[package]]
 name = "mccboard-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jiff",
  "mccboard-core",
@@ -2457,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "mccboard-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "mccboard-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jiff",
  "junction",
@@ -2494,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "mccboard-shim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
