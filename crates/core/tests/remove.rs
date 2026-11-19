@@ -155,9 +155,12 @@ fn launcher_files(home: &TempHome) -> String {
     for rc in [".bashrc", ".zshrc", ".profile"] {
         text.push_str(&fs::read_to_string(home.path().join(rc)).unwrap_or_default());
     }
-    if let Ok(entries) = fs::read_dir(home.path().join(".mccboard/bin")) {
-        for entry in entries.flatten() {
-            text.push_str(&entry.file_name().to_string_lossy());
+    for folder in [".mccboard/bin", ".local/bin"] {
+        if let Ok(entries) = fs::read_dir(home.path().join(folder)) {
+            for entry in entries.flatten() {
+                text.push_str(&entry.file_name().to_string_lossy());
+                text.push('\n');
+            }
         }
     }
     text

@@ -202,7 +202,7 @@ jobs:
           if-no-files-found: error
 
   # The Linux packages of the app on x86_64. They hold the app alone: on Linux the launchers are
-  # shell aliases, and the CLI comes from its own archive. Built on Ubuntu 22.04, they need no
+  # scripts that mccboard writes, and the CLI comes from its own archive. Built on Ubuntu 22.04, they need no
   # glibc newer than its own. RPM takes no dash in a version, and for a pre-release the .deb and
   # the AppImage are the only ones.
   app-linux:

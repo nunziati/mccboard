@@ -667,11 +667,14 @@ impl Texts {
 
     pub fn launchers_place(self, place: &LauncherPlace, path: &dyn Fn(&Path) -> String) -> String {
         match place {
-            LauncherPlace::RcFile { path: rc } => self.en_it(
-                format!("Launchers are aliases in mccboard's block of {}.", path(rc)),
+            LauncherPlace::ScriptFolder { path: scripts } => self.en_it(
                 format!(
-                    "I comandi di avvio sono alias nel blocco di mccboard in {}.",
-                    path(rc)
+                    "Launchers are scripts in {}, which work in any shell.",
+                    path(scripts)
+                ),
+                format!(
+                    "I comandi di avvio sono script in {}, che funzionano in qualunque shell.",
+                    path(scripts)
                 ),
             ),
             LauncherPlace::BinFolder {
@@ -725,11 +728,12 @@ impl Texts {
         )
     }
 
-    pub fn use_here_rc(self) -> &'static str {
+    pub fn use_here_scripts(self) -> &'static str {
         self.pick(
-            "To use them in this terminal, run the line below. New terminals have them already.",
-            "Per usarli in questo terminale, esegui la riga qui sotto. I nuovi terminali li hanno \
-             già.",
+            "They need their folder on the PATH. If a launcher is not found, add the line below \
+             to the file of your shell and open a new terminal.",
+            "Servono con la loro cartella nel PATH. Se un comando di avvio non si trova, aggiungi \
+             la riga qui sotto al file della tua shell e apri un nuovo terminale.",
         )
     }
 

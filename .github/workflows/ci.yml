@@ -175,8 +175,8 @@ jobs:
           key: bundle
       - run: npm ci
         working-directory: ui
-      # No extra config here: on Linux the launchers are shell aliases and the CLI is installed
-      # on its own, so the packages hold the app alone.
+      # No extra config here: on Linux the launchers are scripts that mccboard writes and the CLI
+      # is installed on its own. The packages hold the app alone.
       - run: npm run tauri build
         working-directory: ui
         env:

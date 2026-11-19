@@ -330,9 +330,9 @@ fn run(cli: Cli) -> Result<()> {
 
 fn print_launchers(status: &LauncherStatus) {
     match &status.place {
-        LauncherPlace::RcFile { path } => {
+        LauncherPlace::ScriptFolder { path } => {
             println!(
-                "Launchers: aliases in mccboard's block of {}.",
+                "Launchers: scripts in {}, which every shell finds when the folder is on the PATH.",
                 path.display()
             );
         }
@@ -418,9 +418,10 @@ fn print_sync(place: &LauncherPlace, sync: &LauncherSync) {
     }
     if !changed {
         println!("Launchers already up to date.");
-    } else if let LauncherPlace::RcFile { path } = place {
+    } else if let LauncherPlace::ScriptFolder { path } = place {
         println!(
-            "Open a new terminal, or run `source {}`, to use them.",
+            "They work in any shell with {} on the PATH. If one is not found, add that folder to \
+             your PATH and open a new terminal.",
             path.display()
         );
     }

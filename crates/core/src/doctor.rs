@@ -243,7 +243,7 @@ fn launcher_drift(status: &LauncherStatus, config_dir: &Path) -> Option<DriftIte
         },
     };
     let place = match &status.place {
-        LauncherPlace::RcFile { path } | LauncherPlace::BinFolder { path, .. } => path,
+        LauncherPlace::ScriptFolder { path } | LauncherPlace::BinFolder { path, .. } => path,
     };
     Some(DriftItem::new(
         format!("launcher:{}", launcher.name),

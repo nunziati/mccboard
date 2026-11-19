@@ -137,7 +137,7 @@
   "launcher.state.stale": "Non aggiornato",
   "launcher.state.stale_found": "Avvia invece {path}",
   "launchers.title": "Comandi di avvio",
-  "launchers.place.rc_file": "Alias nel blocco di mccboard in {path}.",
+  "launchers.place.script_folder": "Script in {path}, che funzionano in qualunque shell.",
   "launchers.place.bin_folder": "Programmi in {path}.",
   "launchers.not_on_path": "Questa cartella non è nel PATH dell'utente, quindi i terminali non trovano i comandi di avvio.",
   "launchers.orphan": "{name} non serve più a nessuna istanza registrata.",

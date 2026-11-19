@@ -145,7 +145,7 @@ TAURI_APP_PATH=../src-tauri npm run tauri dev     # PowerShell: $env:TAURI_APP_P
 # expects the default target/.
 TAURI_APP_PATH=../src-tauri npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json
 # Linux packages (.deb, .rpm, AppImage) under target/release/bundle/, without the extra config:
-# on Linux the launchers are shell aliases and the CLI is installed on its own.
+# on Linux the launchers are scripts in ~/.local/bin and the CLI is installed on its own.
 TAURI_APP_PATH=../src-tauri npm run tauri build
 ```
 
