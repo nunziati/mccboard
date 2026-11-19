@@ -53,6 +53,48 @@ jobs:
       - run: npm run check
       - run: npm run build
 
+  install-script:
+    name: install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version
+          shellcheck install.sh scripts/test-install.sh
+      # The test makes releases with a stand-in mccboard and serves them from a folder, with no
+      # network and no build. The test script itself runs under sh, which is dash on Ubuntu.
+      - name: Test install.sh under dash and bash
+        run: sh scripts/test-install.sh dash bash
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked -p mccboard-cli
+      # The archive holds the debug build of this runner under the name of the x86_64 release.
+      # This step checks the script with the real CLI, and release.yml checks the static binaries.
+      - name: Install the CLI built here, packed as the release packs it
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '.packages[] | select(.name == "mccboard-cli") | .version')
+          name="mccboard-$version-x86_64-unknown-linux-musl"
+          serve="$RUNNER_TEMP/releases/v$version"
+          mkdir -p "$serve" "$RUNNER_TEMP/staging"
+          cp target/debug/mccboard LICENSE README.md "$RUNNER_TEMP/staging/"
+          tar -czf "$serve/$name.tar.gz" --owner=0 --group=0 --numeric-owner \
+            -C "$RUNNER_TEMP/staging" mccboard LICENSE README.md
+          (cd "$serve" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          MCCBOARD_VERSION="$version" MCCBOARD_DOWNLOAD_URL="file://$serve" \
+            MCCBOARD_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh --no-setup
+          cmp target/debug/mccboard "$RUNNER_TEMP/bin/mccboard"
+          reported=$("$RUNNER_TEMP/bin/mccboard" --version)
+          if [ "$reported" != "mccboard $version" ]; then
+            echo "::error::The installed CLI says '$reported', the workspace is $version."
+            exit 1
+          fi
+
   windows-bundle:
     name: Windows app build
     needs: [rust, ui]

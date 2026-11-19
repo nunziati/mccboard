@@ -1,11 +1,13 @@
 //! `mccboard`: the command-line front end over mccboard's core.
 
 mod add;
+mod claude_code;
 mod desktop;
 mod doctor;
 mod remove;
 mod repair;
 mod settings;
+mod tui;
 mod usage;
 
 use std::path::{Path, PathBuf};
@@ -34,6 +36,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Claude Code itself: whether it is installed, and its official installer.
+    ClaudeCode {
+        #[command(subcommand)]
+        command: claude_code::ClaudeCodeCommand,
+    },
     /// List instance candidates in the home: ~/.claude and ~/.claude-*. Registers nothing.
     Scan {
         /// Print machine-readable JSON.
@@ -63,7 +70,9 @@ enum Command {
     /// missing.
     Add(add::AddArgs),
     /// Open Claude Code's login in a registered instance, in this terminal, then record the
-    /// account it logged in with. mccboard never sees the credentials.
+    /// account it logged in with. mccboard never sees the credentials. The primary instance
+    /// (~/.claude) needs no registration: on a machine where Claude Code never ran, its first
+    /// login makes the folder, and mccboard registers it once an account is logged in.
     Login(add::LoginArgs),
     /// Forget registered instances. Their folders stay as they are.
     Unregister {
@@ -115,6 +124,15 @@ enum Command {
         #[command(subcommand)]
         command: desktop::DesktopCommand,
     },
+    /// Show each account's usage windows and each instance's state on one screen, refreshed
+    /// every minute within the rate limits. Needs a terminal: without one, use `mccboard
+    /// usage` and `mccboard list`.
+    Dashboard,
+    /// Set mccboard up one step at a time: Claude Code, instances, accounts with their login,
+    /// sharing, drift, launchers and preferences, then a summary that opens the dashboard.
+    /// Each step shows what is done already, and the setup can stop at any step and run again.
+    /// Needs a terminal: without one, it lists the commands that do the same steps.
+    Setup,
 }
 
 #[derive(Subcommand)]
@@ -185,11 +203,14 @@ fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Add(args) => add::add(&core, args)?,
         Command::Login(args) => add::login(&core, args)?,
+        Command::ClaudeCode { command } => claude_code::run(&core, command)?,
         Command::Doctor(args) => doctor::doctor(&core, args)?,
         Command::Share(args) => doctor::share(&core, args)?,
         Command::Repair(args) => repair::repair(&core, args)?,
         Command::Remove(args) => remove::remove(&core, args)?,
         Command::Desktop { command } => desktop::run(&core, command)?,
+        Command::Dashboard => tui::dashboard(&core)?,
+        Command::Setup => tui::setup(&core)?,
         Command::Scan { json } => {
             let candidates = core.scan()?;
             if json {

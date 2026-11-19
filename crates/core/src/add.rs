@@ -201,20 +201,58 @@ impl Core {
     /// account has other instances here. mccboard never sees the credentials: Claude Code
     /// writes them.
     ///
-    /// Errors before opening anything when the instance's folder is gone
-    /// ([`Error::InstanceFolderMissing`]), when `claude` isn't on the PATH
+    /// The primary instance needs no registration: unregistered, it gets the first login of
+    /// [`Core::login_primary`], and its folder may even be missing.
+    ///
+    /// Errors before opening anything when a linked instance isn't registered
+    /// ([`Error::NotRegistered`]) or its folder is gone ([`Error::InstanceFolderMissing`]),
+    /// when `claude` is neither on the PATH nor in `.local/bin` of the home
     /// ([`Error::ClaudeNotInstalled`]), and when there is no such terminal
     /// ([`Error::LoginNeedsTerminal`]: no terminal for the current one, no terminal emulator
-    /// on Linux for a new window).
+    /// on Linux for a new window). The primary instance's folder may be gone: Claude Code
+    /// makes it again on its login, and until it does the report has no account.
     pub fn login(&self, config_dir: &Path, terminal: LoginTerminal) -> Result<LoginReport, Error> {
         let config_dir = paths::resolve(&self.home, config_dir)?;
-        let config_dir = ConfigFile::load(&self.paths().config_file())?
+        let registered = ConfigFile::load(&self.paths().config_file())?
             .config
             .instance(&config_dir)
-            .map(|entry| entry.config_dir.clone())
-            .ok_or(Error::NotRegistered { path: config_dir })?;
+            .map(|entry| entry.config_dir.clone());
+        let config_dir = match registered {
+            Some(registered) => registered,
+            None if self.kind_of(&config_dir) == InstanceKind::Primary => {
+                return self.login_primary(terminal);
+            }
+            None => return Err(Error::NotRegistered { path: config_dir }),
+        };
         let run = self.open_login(&config_dir, terminal)?;
         self.after_login(&config_dir, run)
+    }
+
+    /// Opens Claude Code's official login in the primary instance (`~/.claude`), registered or
+    /// not, in `terminal`, and waits for it to end: the first login on a machine where Claude
+    /// Code never ran. Its folder may be missing. mccboard never makes it (it belongs to
+    /// Claude Code), and the login then runs in the home, where Claude Code makes it.
+    ///
+    /// Afterwards the primary instance is registered as [`Core::register`] does, when its
+    /// folder exists and an account is logged in there. A registered one is registered again,
+    /// as [`Core::login`] does. Otherwise nothing is registered, and the report has no account.
+    ///
+    /// Errors as [`Core::login`] does, and with [`Error::NotADirectory`] when `~/.claude` is a
+    /// file.
+    pub fn login_primary(&self, terminal: LoginTerminal) -> Result<LoginReport, Error> {
+        let primary = doctor::primary_dir(&self.home);
+        if primary.exists() && !primary.is_dir() {
+            return Err(Error::NotADirectory { path: primary });
+        }
+        let registered = ConfigFile::load(&self.paths().config_file())?
+            .config
+            .instance(&primary)
+            .is_some();
+        let run = self.open_login(&primary, terminal)?;
+        if registered || (primary.is_dir() && self.observe(&primary).account.is_some()) {
+            return self.after_login(&primary, run);
+        }
+        self.unregistered_login(&primary, run)
     }
 
     /// Refuses a folder that belongs to an account with another label than `label`: the
@@ -315,12 +353,16 @@ impl Core {
     /// Opens the login through the port, in `terminal`. A primary instance, spelled however
     /// (a link to it too), logs in in Claude Code's default folder.
     fn open_login(&self, config_dir: &Path, terminal: LoginTerminal) -> Result<LoginRun, Error> {
-        if !config_dir.is_dir() {
+        let kind = self.kind_of(config_dir);
+        // The primary instance's folder may be missing: Claude Code makes it on its first
+        // login, and the login then runs in the home.
+        let first_login =
+            kind == InstanceKind::Primary && !config_dir.exists() && self.home.is_dir();
+        if !config_dir.is_dir() && !first_login {
             return Err(Error::InstanceFolderMissing {
                 path: config_dir.to_path_buf(),
             });
         }
-        let kind = self.kind_of(config_dir);
         let invocation = LoginInvocation {
             config_dir: match kind {
                 InstanceKind::Primary => doctor::primary_dir(&self.home),
@@ -328,6 +370,7 @@ impl Core {
             },
             kind,
             terminal,
+            home: self.home.clone(),
         };
         match self.env.open_login(&invocation) {
             Ok(exit) => Ok(LoginRun::Ran {
@@ -350,6 +393,11 @@ impl Core {
     /// Observes the account and registers the instance under it; an account new to mccboard
     /// gets the label the add asked for, if one is waiting (see [`Core::register`]).
     fn after_login(&self, config_dir: &Path, run: LoginRun) -> Result<LoginReport, Error> {
+        // The primary instance's login made no folder: there is nothing to register. A linked
+        // instance's folder that went away during its login fails to register below.
+        if !config_dir.is_dir() && self.kind_of(config_dir) == InstanceKind::Primary {
+            return self.unregistered_login(config_dir, run);
+        }
         let registration = self.register(config_dir)?;
         let uuid = registration
             .instance
@@ -392,6 +440,27 @@ impl Core {
             account,
             new_account,
             warnings,
+        })
+    }
+
+    /// A login after which nothing is registered: no account logged in, or no folder to
+    /// register. The instance is reported as registered, or else as it is now.
+    fn unregistered_login(&self, config_dir: &Path, run: LoginRun) -> Result<LoginReport, Error> {
+        let registered = self
+            .registry()?
+            .instances
+            .into_iter()
+            .find(|instance| paths::same(&instance.config_dir, config_dir));
+        let instance = registered.unwrap_or_else(|| {
+            crate::registry::unregistered(&self.home, config_dir, self.env.as_ref())
+        });
+        Ok(LoginReport {
+            config_dir: config_dir.to_path_buf(),
+            run,
+            instance,
+            account: None,
+            new_account: false,
+            warnings: Vec::new(),
         })
     }
 }

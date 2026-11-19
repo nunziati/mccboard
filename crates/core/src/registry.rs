@@ -262,6 +262,21 @@ fn status(home: &Path, entry: &InstanceEntry, env: &dyn Environment) -> Instance
     status_with(home, entry, instance::observe(home, &entry.config_dir, env))
 }
 
+/// The instance in `config_dir` as it is now, as if registered without an account: for a
+/// login that registered nothing.
+pub(crate) fn unregistered(
+    home: &Path,
+    config_dir: &Path,
+    env: &dyn Environment,
+) -> InstanceStatus {
+    let entry = InstanceEntry {
+        config_dir: config_dir.to_path_buf(),
+        account: None,
+        label: None,
+    };
+    status(home, &entry, env)
+}
+
 fn status_with(home: &Path, entry: &InstanceEntry, observation: Observation) -> InstanceStatus {
     let account_status = match (&entry.account, &observation.account) {
         (Some(registered), Some(observed)) if *registered == observed.uuid => {

@@ -97,8 +97,10 @@ pub trait Environment: Send + Sync {
     /// with `CLAUDE_CONFIG_DIR` set to it, without the variables that would override its own
     /// login (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`), with no
     /// input, and waits for it to exit. Never for the primary instance, whose global config
-    /// lives outside its folder. Errors when `claude` can't be started (`NotFound` when it
-    /// isn't installed) or doesn't finish in time.
+    /// lives outside its folder. `claude` is the one on the PATH, else the one in `.local/bin`
+    /// of `invocation.home`, where Claude Code's official installer puts it. Errors when
+    /// `claude` can't be started (`NotFound` when it is in neither place) or doesn't finish in
+    /// time.
     fn run_claude(&self, invocation: &ClaudeInvocation) -> io::Result<ClaudeRun>;
 
     /// Opens Claude Code's official login (`claude auth login`) in the instance
@@ -107,11 +109,15 @@ pub trait Environment: Send + Sync {
     /// itself, and mccboard never sees them. For a linked instance `CLAUDE_CONFIG_DIR` is set
     /// to its folder; for the primary instance it is unset and the home is the folder's
     /// parent. The variables that would override the instance's own login are removed.
+    /// `claude` is found as [`Environment::run_claude`] finds it, in `login.home`. The login
+    /// runs in the instance's folder. The primary instance's folder may be missing, since
+    /// Claude Code makes it on its first login: the login then runs in the home.
     ///
-    /// Errors, before anything starts, with `NotFound` only when `claude` itself isn't found
-    /// on the PATH; with `Unsupported` when there is no such terminal (no terminal for the
-    /// current one, no terminal emulator for a new window on Linux); with another kind when
-    /// the instance's folder is missing or the program can't be started.
+    /// Errors before anything starts: (1) with `NotFound` only when `claude` itself is neither
+    /// on the PATH nor in `.local/bin`, (2) with `Unsupported` when there is no such terminal
+    /// (no terminal for the current one, no terminal emulator for a new window on Linux), and
+    /// (3) with another kind when the folder to run in is missing or the program can't be
+    /// started.
     fn open_login(&self, login: &LoginInvocation) -> io::Result<LoginExit>;
 
     /// Runs `claude mcp get` with a missing name in the instance `renewal.config_dir`, so that
@@ -123,12 +129,58 @@ pub trait Environment: Send + Sync {
     /// none, with the home set to its folder's parent; the variables that would override the
     /// instance's own login are removed. Unlike it, the command runs in the background: hidden
     /// (no console window), with no input, in `renewal.working_dir`, and its output is
-    /// discarded unread, since it names the account. Waits for it to exit.
+    /// discarded unread, since it names the account. Waits for it to exit. `claude` is found
+    /// as [`Environment::run_claude`] finds it, in `renewal.home`.
     ///
-    /// Errors with `NotFound` only when `claude` isn't found on the PATH, with `TimedOut` when
-    /// it doesn't finish within a minute (it is then stopped), with another kind when it can't
-    /// be started.
+    /// Errors with `NotFound` only when `claude` is neither on the PATH nor in `.local/bin`,
+    /// with `TimedOut` when it doesn't finish within a minute (it is then stopped), with
+    /// another kind when it can't be started.
     fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit>;
+
+    /// The program `name` on the PATH, as the login, the background runs and the token renewal
+    /// look for `claude` there first: the first one on the PATH (on Windows the first of
+    /// `name.exe`, `name.cmd`, … in PATHEXT order). `None` when it isn't on the PATH. Unlike
+    /// those runs, it never looks in `.local/bin`.
+    fn find_program(&self, name: &str) -> Option<PathBuf>;
+
+    /// Runs `<program> --version`, where `program` is Claude Code's `claude`, as background
+    /// runs are: hidden (no console window), with no input and its output kept in memory.
+    /// Waits for it to exit. Errors when it can't be started, and with `TimedOut` when it
+    /// doesn't finish within a few seconds (it is then stopped).
+    fn claude_version(&self, program: &Path) -> io::Result<ClaudeRun>;
+
+    /// Runs Claude Code's official installer, `curl -fsSL https://claude.ai/install.sh | bash`,
+    /// with the `curl` and `bash` of `install` and `HOME` set to `install.home`, and waits for
+    /// both to exit. It runs attached to the current terminal: `bash` reads the script from
+    /// `curl`, as in the official command, and its output goes to mccboard's standard error.
+    /// mccboard's standard output carries only its own report (`--json`). Only a front end
+    /// calls it, through [`crate::Core::install_claude_code`], once the user has confirmed.
+    ///
+    /// Errors with `Unsupported` on Windows, where the official installer is a PowerShell
+    /// command, and with another kind when `curl` or `bash` can't be started.
+    fn install_claude_code(&self, install: &InstallerInvocation) -> io::Result<InstallerExit>;
+}
+
+/// Claude Code's official installer, to run in the current terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InstallerInvocation {
+    /// `curl`, found on the PATH: it downloads the installer script.
+    pub curl: PathBuf,
+    /// `bash`, found on the PATH: it runs the script `curl` downloads.
+    pub bash: PathBuf,
+    /// The home the installer works in (`HOME`): the core's own, where Claude Code then lands
+    /// in `.local/bin`.
+    pub home: PathBuf,
+}
+
+/// How the official installer ended. The core trusts only what it finds afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct InstallerExit {
+    /// `curl`'s exit code, not 0 when the script couldn't be downloaded. `None` when it was
+    /// ended by a signal.
+    pub download_exit_code: Option<i32>,
+    /// `bash`'s exit code, the installer's own. `None` when it was ended by a signal.
+    pub exit_code: Option<i32>,
 }
 
 /// Claude Code's own renewal, to run in an instance whose token has expired.
@@ -141,6 +193,9 @@ pub struct RenewalInvocation {
     /// A folder of mccboard's own to run in (`~/.mccboard/state/renewal/`), so no project's
     /// settings, hooks or `CLAUDE.md` apply.
     pub working_dir: PathBuf,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// How the renewal command ended. The core doesn't trust it: it reads the token again.
@@ -158,6 +213,9 @@ pub struct LoginInvocation {
     /// Primary (Claude Code's default folder, no `CLAUDE_CONFIG_DIR`) or linked.
     pub kind: InstanceKind,
     pub terminal: LoginTerminal,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// Where the login runs. The front end chooses: the app, which has no terminal, a new
@@ -188,6 +246,9 @@ pub struct ClaudeInvocation {
     pub config_dir: PathBuf,
     /// The arguments after `claude` (`plugin install review@tools --json`).
     pub args: Vec<String>,
+    /// The home the core works in. Without `claude` on the PATH, Claude Code is looked for in
+    /// its `.local/bin`.
+    pub home: PathBuf,
 }
 
 /// How a `claude` command ended.
@@ -409,5 +470,26 @@ impl Environment for SystemEnvironment {
 
     fn renew_token(&self, renewal: &RenewalInvocation) -> io::Result<RenewalExit> {
         crate::claude_cli::renew(renewal)
+    }
+
+    fn find_program(&self, name: &str) -> Option<PathBuf> {
+        crate::claude_cli::find_program(name)
+    }
+
+    fn claude_version(&self, program: &Path) -> io::Result<ClaudeRun> {
+        crate::claude_cli::version(program)
+    }
+
+    #[cfg(not(windows))]
+    fn install_claude_code(&self, install: &InstallerInvocation) -> io::Result<InstallerExit> {
+        crate::claude_cli::install(install)
+    }
+
+    #[cfg(windows)]
+    fn install_claude_code(&self, _install: &InstallerInvocation) -> io::Result<InstallerExit> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "on Windows Claude Code's official installer is a PowerShell command",
+        ))
     }
 }

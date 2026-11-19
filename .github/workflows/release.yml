@@ -1,0 +1,289 @@
+name: Release
+
+# For each tag v*, a GitHub Release with the CLI as static Linux binaries (musl), the Windows
+# installers of the app and its Linux packages. A manual run builds the same files as artifacts
+# and publishes nothing. A pull request that changes this file does the same, because
+# workflow_dispatch works only once the file is on main.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Read the workspace version and compare it with the tag
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '.packages[] | select(.name == "mccboard-cli") | .version')
+          if [ -z "$version" ]; then
+            echo "::error::cargo metadata gives no version for mccboard-cli."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the workspace version $version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # cc-rs compiles the C code of ring (under rustls) for the target with musl-gcc, the only
+      # compiler that musl-tools installs. Without TARGET_CC, cc-rs would look for
+      # aarch64-linux-musl-gcc on the arm runner.
+      - run: cargo build --release --locked -p mccboard-cli --target "$TARGET"
+        env:
+          TARGET_CC: musl-gcc
+      - name: Pack the archive and its checksum
+        run: |
+          name="mccboard-$VERSION-$TARGET"
+          mkdir staging dist
+          cp "target/$TARGET/release/mccboard" LICENSE README.md staging/
+          tar -czf "dist/$name.tar.gz" --owner=0 --group=0 --numeric-owner -C staging mccboard LICENSE README.md
+          cd dist
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # On a runner without musl-tools, check each archive as install.sh does and run the binary it holds.
+  check:
+    name: Check (${{ matrix.target }})
+    needs: [version, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-${{ matrix.target }}
+      - name: Check the archive and run the binary
+        run: |
+          name="mccboard-$VERSION-$TARGET"
+          sha256sum -c "$name.tar.gz.sha256"
+          content=$(tar -tzf "$name.tar.gz" | LC_ALL=C sort | tr '\n' ' ')
+          if [ "$content" != "LICENSE README.md mccboard " ]; then
+            echo "::error::The archive holds '$content' instead of mccboard, LICENSE and README.md."
+            exit 1
+          fi
+          tar -xzf "$name.tar.gz" mccboard
+          # For a static PIE, the default of Rust on musl, file says "static-pie linked" and ldd
+          # says "statically linked".
+          file mccboard
+          if ! file mccboard | grep -Eq 'statically linked|static-pie linked'; then
+            echo "::error::file does not report the $TARGET binary as static."
+            exit 1
+          fi
+          libs=$(ldd mccboard 2>&1 || true)
+          echo "$libs"
+          case "$libs" in
+            *'not a dynamic executable'* | *'statically linked'*) ;;
+            *)
+              echo "::error::ldd finds dynamic libraries in the $TARGET binary."
+              exit 1
+              ;;
+          esac
+          reported=$(./mccboard --version)
+          echo "$reported"
+          if [ "$reported" != "mccboard $VERSION" ]; then
+            echo "::error::The $TARGET binary says '$reported', the workspace is $VERSION."
+            exit 1
+          fi
+
+  # The Windows installers of the app, built as CI builds them, with the launcher shim and the CLI
+  # next to the app (ADR 0007). WiX takes no pre-release part in a version other than a number, and
+  # for a pre-release the NSIS installer is the only one.
+  app-windows:
+    name: App (Windows)
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: ui
+      - name: Build the installers
+        working-directory: ui
+        env:
+          TAURI_APP_PATH: ${{ github.workspace }}/src-tauri
+        run: |
+          case "$VERSION" in
+            *-*) bundles=nsis ;;
+            *) bundles=nsis,msi ;;
+          esac
+          npm run tauri build -- --config ../src-tauri/tauri.bundle.conf.json --bundles "$bundles"
+      - name: Collect the installers and their checksums
+        run: |
+          mkdir dist
+          cp target/release/bundle/nsis/*.exe dist/
+          case "$VERSION" in
+            *-*) ;;
+            *) cp target/release/bundle/msi/*.msi dist/ ;;
+          esac
+          cd dist
+          for file in *; do
+            case "$file" in
+              *"_${VERSION}_"*) ;;
+              *)
+                echo "::error::The name $file does not carry the version $VERSION."
+                exit 1
+                ;;
+            esac
+            sha256sum "$file" > "$file.sha256"
+          done
+          ls -l
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-windows
+          path: dist/*
+          if-no-files-found: error
+
+  # The Linux packages of the app on x86_64. They hold the app alone: on Linux the launchers are
+  # shell aliases, and the CLI comes from its own archive. Built on Ubuntu 22.04, they need no
+  # glibc newer than its own. RPM takes no dash in a version, and for a pre-release the .deb and
+  # the AppImage are the only ones.
+  app-linux:
+    name: App (Linux)
+    needs: version
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Tauri system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: ui
+      - name: Build the packages
+        working-directory: ui
+        env:
+          TAURI_APP_PATH: ${{ github.workspace }}/src-tauri
+        run: |
+          case "$VERSION" in
+            *-*) bundles=deb,appimage ;;
+            *) bundles=deb,rpm,appimage ;;
+          esac
+          npm run tauri build -- --bundles "$bundles"
+      - name: Collect the packages and their checksums
+        run: |
+          mkdir dist
+          cp target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage dist/
+          case "$VERSION" in
+            *-*) ;;
+            *) cp target/release/bundle/rpm/*.rpm dist/ ;;
+          esac
+          cd dist
+          for file in *; do
+            case "$file" in
+              *"$VERSION"*) ;;
+              *)
+                echo "::error::The name $file does not carry the version $VERSION."
+                exit 1
+                ;;
+            esac
+            sha256sum "$file" > "$file.sha256"
+          done
+          ls -l
+          dpkg-deb --info ./*.deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mccboard-${{ needs.version.outputs.version }}-linux
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, check, app-windows, app-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mccboard-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the files and their checksums
+        run: |
+          ls -l dist
+          # A version with a pre-release part (0.2.0-rc.1) is published as a pre-release, which
+          # releases/latest, and with it install.sh, never picks.
+          set -- "$GITHUB_REF_NAME" dist/* --title "mccboard $VERSION" --verify-tag --generate-notes
+          case "$VERSION" in *-*) set -- "$@" --prerelease ;; esac
+          gh release create "$@"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}

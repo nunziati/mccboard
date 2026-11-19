@@ -11,6 +11,14 @@
 //!
 //! The token renewal (`claude mcp get` with a missing name) runs hidden like a background run,
 //! but in a folder of mccboard's own and with its output discarded.
+//!
+//! Outside any instance, `claude --version` runs hidden too, and Claude Code's official
+//! installer (`curl … | bash`) runs in the current terminal, as the login does.
+//!
+//! The login, the background runs and the renewal find `claude` on the PATH, else in
+//! `.local/bin` of the core's home, as [`crate::Core::claude_code`] does. The official
+//! installer puts it there before the PATH has that folder, and the setup logs in right after
+//! installing it.
 
 use std::env;
 use std::ffi::OsString;
@@ -22,8 +30,8 @@ use std::time::{Duration, Instant};
 
 use crate::instance::InstanceKind;
 use crate::{
-    ClaudeInvocation, ClaudeRun, LoginExit, LoginInvocation, LoginTerminal, RenewalExit,
-    RenewalInvocation,
+    ClaudeInvocation, ClaudeRun, InstallerExit, InstallerInvocation, LoginExit, LoginInvocation,
+    LoginTerminal, OsKind, RenewalExit, RenewalInvocation,
 };
 
 /// Variables that make Claude Code use another login than the instance's.
@@ -44,7 +52,7 @@ pub(crate) fn run(invocation: &ClaudeInvocation) -> io::Result<ClaudeRun> {
 /// Windows an npm install's `claude.cmd` too, which std runs through `cmd.exe /d /c` in the
 /// same hidden console.
 fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<ClaudeRun> {
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&invocation.home).ok_or_else(not_found)?;
     let mut command = crate::background::command(claude);
     command
         .args(&invocation.args)
@@ -56,6 +64,16 @@ fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<Claude
     for name in LOGIN_OVERRIDES {
         command.env_remove(name);
     }
+    output(
+        &mut command,
+        TIMEOUT,
+        "Claude Code didn't finish within 10 minutes",
+    )
+}
+
+/// Starts `command`, whose output is piped, and waits for it to exit, keeping what it printed.
+/// When it runs longer than `timeout` it is stopped, and the error says `too_slow`.
+fn output(command: &mut Command, timeout: Duration, too_slow: &str) -> io::Result<ClaudeRun> {
     let mut child = command.spawn()?;
 
     let stdout = child.stdout.take().map(drain);
@@ -65,13 +83,10 @@ fn run_with(invocation: &ClaudeInvocation, lookup: &Lookup) -> io::Result<Claude
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started.elapsed() > TIMEOUT {
+        if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Claude Code didn't finish within 10 minutes",
-            ));
+            return Err(io::Error::new(io::ErrorKind::TimedOut, too_slow));
         }
         thread::sleep(Duration::from_millis(50));
     };
@@ -96,6 +111,73 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
     })
 }
 
+/// The program `name` on the PATH, found as the login and background runs look for `claude`
+/// there before trying `.local/bin`.
+pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
+    Lookup::from_env().find(name)
+}
+
+/// `claude --version` answers at once. A few seconds cover a slow disk.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runs `<program> --version` in the background and keeps what it printed.
+pub(crate) fn version(program: &Path) -> io::Result<ClaudeRun> {
+    version_with(program, VERSION_TIMEOUT)
+}
+
+fn version_with(program: &Path, timeout: Duration) -> io::Result<ClaudeRun> {
+    let mut command = crate::background::command(program);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    output(
+        &mut command,
+        timeout,
+        "Claude Code didn't print its version in time",
+    )
+}
+
+/// What `curl` gets in the official installer's command: fail on an HTTP error, print only
+/// errors, follow redirects, and the address of the installer script. The command shown to
+/// users ([`crate::CLAUDE_CODE_INSTALL_COMMAND`]) is the same.
+const INSTALLER_DOWNLOAD_ARGS: &[&str] = &["-fsSL", "https://claude.ai/install.sh"];
+
+/// Runs `curl … | bash` as two children joined by a pipe, and keeps each exit code: `curl`
+/// failing leaves `bash` an empty script, which it runs with success. Both share mccboard's
+/// terminal. `bash`'s output goes to mccboard's standard error, as the login's does.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn install(invocation: &InstallerInvocation) -> io::Result<InstallerExit> {
+    let mut curl = Command::new(&invocation.curl)
+        .args(INSTALLER_DOWNLOAD_ARGS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let script = curl
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("curl's output wasn't piped"))?;
+    let mut command = Command::new(&invocation.bash);
+    command
+        .stdin(script)
+        .stdout(io::stderr())
+        .env(HOME_VAR, &invocation.home);
+    let bash = command.spawn();
+    // The command held the pipe's other end. Once it is dropped the pipe is bash's alone, and a
+    // bash that stops early can't leave curl writing into a pipe nobody reads.
+    drop(command);
+    let installed = bash.and_then(|mut bash| bash.wait());
+    if installed.is_err() {
+        let _ = curl.kill();
+    }
+    let downloaded = curl.wait()?;
+    Ok(InstallerExit {
+        download_exit_code: downloaded.code(),
+        exit_code: installed?.code(),
+    })
+}
+
 /// Claude Code's official login, for claude.ai subscriptions.
 const LOGIN_ARGS: &[&str] = &["auth", "login", "--claudeai"];
 
@@ -105,8 +187,21 @@ pub(crate) fn login(login: &LoginInvocation) -> io::Result<LoginExit> {
     login_with(login, &Lookup::from_env())
 }
 
-fn not_on_path() -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, "claude is not on the PATH")
+fn not_found() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        "claude is neither on the PATH nor in ~/.local/bin",
+    )
+}
+
+/// Where Claude Code's official installer puts it in `home`: `.local/bin/claude`, or
+/// `.local/bin/claude.exe` on Windows.
+pub(crate) fn installed_claude(home: &Path, os: OsKind) -> PathBuf {
+    let name = match os {
+        OsKind::Windows => "claude.exe",
+        OsKind::Linux => "claude",
+    };
+    home.join(".local").join("bin").join(name)
 }
 
 /// Where Claude Code and, for a new login window on Linux, the terminal are looked for: the
@@ -141,6 +236,20 @@ impl Lookup {
                 .map(|dir| dir.join(name))
                 .find(|candidate| is_program(candidate))
         }
+    }
+
+    /// Claude Code for a core working in `home`: `claude` on the PATH, else the one its
+    /// official installer put in `.local/bin` of `home` before the PATH had that folder.
+    fn claude(&self, home: &Path) -> Option<PathBuf> {
+        self.find("claude").or_else(|| {
+            let os = if cfg!(windows) {
+                OsKind::Windows
+            } else {
+                OsKind::Linux
+            };
+            let installed = installed_claude(home, os);
+            is_program(&installed).then_some(installed)
+        })
     }
 
     /// The terminal emulator for a new window on Linux: `$TERMINAL` (a name on the PATH or a
@@ -213,14 +322,16 @@ impl Terminal {
     }
 }
 
+/// Whether `path` is a file that can be run: on Unix, one with an execute bit.
 #[cfg(unix)]
-fn is_program(path: &Path) -> bool {
+pub(crate) fn is_program(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
+/// Whether `path` is a file that can be run: on Windows, any file.
 #[cfg(not(unix))]
-fn is_program(path: &Path) -> bool {
+pub(crate) fn is_program(path: &Path) -> bool {
     path.is_file()
 }
 
@@ -248,7 +359,7 @@ fn renew_with(
     lookup: &Lookup,
     timeout: Duration,
 ) -> io::Result<RenewalExit> {
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&renewal.home).ok_or_else(not_found)?;
     let mut command = crate::background::command(claude);
     command
         .args(RENEW_ARGS)
@@ -304,12 +415,12 @@ fn in_instance(command: &mut Command, config_dir: &Path, kind: InstanceKind) {
 
 fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit> {
     // Checked first, so `NotFound` below always means Claude Code itself.
-    if !login.config_dir.is_dir() {
-        return Err(io::Error::new(
+    let working_dir = login_dir(login).ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::NotADirectory,
             format!("{} is not a folder", login.config_dir.display()),
-        ));
-    }
+        )
+    })?;
     // The terminal next: without one, nothing else matters.
     let window = match login.terminal {
         LoginTerminal::CurrentTerminal if !io::stdin().is_terminal() => {
@@ -321,7 +432,7 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         LoginTerminal::CurrentTerminal => None,
         LoginTerminal::NewWindow => Some(window(lookup)?),
     };
-    let claude = lookup.find("claude").ok_or_else(not_on_path)?;
+    let claude = lookup.claude(&login.home).ok_or_else(not_found)?;
     let mut command = match window {
         None => {
             let mut command = Command::new(&claude);
@@ -333,10 +444,25 @@ fn login_with(login: &LoginInvocation, lookup: &Lookup) -> io::Result<LoginExit>
         Some(window) => new_window(&claude, window),
     };
     in_instance(&mut command, &login.config_dir, login.kind);
-    let status = command.current_dir(&login.config_dir).status()?;
+    let status = command.current_dir(working_dir).status()?;
     Ok(LoginExit {
         exit_code: status.code(),
     })
+}
+
+/// Where the login runs: the instance's folder, or the home for the primary instance whose
+/// folder isn't there yet, since Claude Code makes it on its first login. `None` when neither
+/// exists: a linked instance's folder is never missing at a login.
+fn login_dir(login: &LoginInvocation) -> Option<&Path> {
+    if login.config_dir.is_dir() {
+        return Some(&login.config_dir);
+    }
+    match login.kind {
+        InstanceKind::Primary if !login.config_dir.exists() => {
+            login.config_dir.parent().filter(|home| home.is_dir())
+        }
+        _ => None,
+    }
 }
 
 /// The variable holding the home directory Claude Code uses (Node's `os.homedir()`).
@@ -428,11 +554,152 @@ mod tests {
         }
     }
 
+    /// The home of a core whose `.local/bin` has no Claude Code.
+    const NO_LOCAL_CLAUDE: &str = "/nowhere";
+
+    /// Where the official installer puts Claude Code in `home`, with its folder created.
+    fn local_claude(home: &Path) -> PathBuf {
+        let os = if cfg!(windows) {
+            crate::OsKind::Windows
+        } else {
+            crate::OsKind::Linux
+        };
+        let program = installed_claude(home, os);
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        program
+    }
+
+    #[test]
+    fn claude_only_in_local_bin_of_the_home_is_found_there() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let local = local_claude(home.path());
+        #[cfg(unix)]
+        write_program(&local, "#!/bin/sh\nexit 0\n");
+        #[cfg(not(unix))]
+        fs::write(&local, "fake claude.exe").unwrap();
+
+        assert_eq!(lookup(&bin, None).claude(home.path()), Some(local));
+        // Other programs are looked for on the PATH only.
+        assert_eq!(lookup(&bin, None).find("claude"), None);
+        // Another home's `.local/bin` is not this one.
+        assert_eq!(lookup(&bin, None).claude(Path::new(NO_LOCAL_CLAUDE)), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_on_the_path_comes_before_the_one_in_local_bin() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        write_program(&bin.join("claude"), "#!/bin/sh\nexit 0\n");
+        write_program(&local_claude(home.path()), "#!/bin/sh\nexit 0\n");
+
+        assert_eq!(
+            lookup(&bin, None).claude(home.path()),
+            Some(bin.join("claude"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_local_bin_that_cannot_run_is_not_claude() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(local_claude(home.path()), "not a program").unwrap();
+
+        assert_eq!(lookup(&bin, None).claude(home.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_background_run_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        write_program(
+            &local_claude(home.path()),
+            "#!/bin/sh\nprintf '%s\\n' \"local|$*\"\nexit 3\n",
+        );
+
+        let invocation = ClaudeInvocation {
+            home: home.path().to_path_buf(),
+            ..claude_invocation(&dir)
+        };
+        let run = run_with(&invocation, &lookup(&bin, None)).unwrap();
+
+        assert_eq!(run.exit_code, Some(3));
+        assert_eq!(run.stdout.trim(), "local|plugin list");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_login_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let dir = home.path().join(".claude-b");
+        let out = home.path().join("out");
+        for folder in [&bin, &dir, &out] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        // A terminal emulator that runs the program after `-e`.
+        write_program(&bin.join("my-term"), "#!/bin/sh\nshift\nexec \"$@\"\n");
+        let local = local_claude(home.path());
+        write_program(
+            &local,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$0|$*\" > '{}/claude'\nexit 0\n",
+                out.display()
+            ),
+        );
+
+        let login = LoginInvocation {
+            home: home.path().to_path_buf(),
+            ..invocation(&dir, LoginTerminal::NewWindow)
+        };
+        let exit = login_with(&login, &lookup(&bin, Some("my-term"))).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(
+            seen.trim(),
+            format!("{}|auth login --claudeai", local.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renewal_uses_claude_from_local_bin_when_the_path_lacks_it() {
+        let (home, bin, dir, neutral, out) = renewal_home();
+        write_program(
+            &local_claude(home.path()),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/claude'\nexit 1\n",
+                out.display()
+            ),
+        );
+
+        let invocation = RenewalInvocation {
+            home: home.path().to_path_buf(),
+            ..renewal(&dir, InstanceKind::Linked, &neutral)
+        };
+        let exit = renew_with(&invocation, &lookup(&bin, None), RENEW_TIMEOUT).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(seen.trim(), RENEW_ARGS.join(" "));
+    }
+
     fn invocation(config_dir: &Path, terminal: LoginTerminal) -> LoginInvocation {
         LoginInvocation {
             config_dir: config_dir.to_path_buf(),
             kind: InstanceKind::Linked,
             terminal,
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 
@@ -465,12 +732,61 @@ mod tests {
         .unwrap_err();
 
         assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn a_primary_instance_without_a_home_is_refused_too() {
+        let home = tempfile::tempdir().unwrap();
+        let primary = home.path().join("gone").join(".claude");
+        let login = LoginInvocation {
+            kind: InstanceKind::Primary,
+            ..invocation(&primary, LoginTerminal::NewWindow)
+        };
+
+        let error = login_with(&login, &lookup(home.path(), None)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_first_login_of_the_primary_instance_runs_in_the_home_where_claude_code_makes_its_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        let out = home.path().join("out");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let primary = home.path().join(".claude");
+        write_program(&bin.join("my-term"), "#!/bin/sh\nshift\nexec \"$@\"\n");
+        // Claude Code makes its folder on its first login.
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$PWD\" \"$HOME\" \
+                 \"${{CLAUDE_CONFIG_DIR-unset}}\" > '{}/claude'\nmkdir \"$HOME/.claude\"\n",
+                out.display()
+            ),
+        );
+        let login = LoginInvocation {
+            kind: InstanceKind::Primary,
+            ..invocation(&primary, LoginTerminal::NewWindow)
+        };
+
+        let exit = login_with(&login, &lookup(&bin, Some("my-term"))).unwrap();
+
+        assert_eq!(exit.exit_code, Some(0));
+        let seen = fs::read_to_string(out.join("claude")).unwrap();
+        let home = home.path().display();
+        assert_eq!(seen.trim(), format!("{home}|{home}|unset"));
+        assert!(primary.is_dir());
     }
 
     fn claude_invocation(config_dir: &Path) -> ClaudeInvocation {
         ClaudeInvocation {
             config_dir: config_dir.to_path_buf(),
             args: vec!["plugin".into(), "list".into()],
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 
@@ -547,6 +863,7 @@ mod tests {
             config_dir: config_dir.to_path_buf(),
             kind,
             working_dir: working_dir.to_path_buf(),
+            home: PathBuf::from(NO_LOCAL_CLAUDE),
         }
     }
 
@@ -858,6 +1175,231 @@ mod tests {
             &lookup(&bin, Some("no-such-terminal")),
         )
         .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    /// A home with a `bin` folder, the temporary PATH, and an `out` folder where fake
+    /// programs write what they saw.
+    fn bin_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let [bin, out] = ["bin", "out"].map(|name| {
+            let path = home.path().join(name);
+            fs::create_dir_all(&path).unwrap();
+            path
+        });
+        (home, bin, out)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_version_run_starts_claude_found_on_the_path_with_version_and_keeps_its_output() {
+        let (_home, bin, out) = bin_home();
+        write_program(
+            &bin.join("claude"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/claude'\n\
+                 echo '2.1.301 (Claude Code)'\necho 'a warning' >&2\n",
+                out.display()
+            ),
+        );
+        let claude = lookup(&bin, None).find("claude").unwrap();
+
+        let run = version_with(&claude, VERSION_TIMEOUT).unwrap();
+
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.stdout, "2.1.301 (Claude Code)\n");
+        assert_eq!(run.stderr, "a warning\n");
+        let args = fs::read_to_string(out.join("claude")).unwrap();
+        assert_eq!(args, "--version\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_version_run_that_hangs_is_stopped_and_times_out() {
+        let (_home, bin, _out) = bin_home();
+        write_program(&bin.join("claude"), "#!/bin/sh\nexec sleep 30\n");
+
+        let started = Instant::now();
+        let error = version_with(&bin.join("claude"), Duration::from_millis(300)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_version_run_starts_an_npm_claude_cmd() {
+        let (_home, bin, _out) = bin_home();
+        fs::write(
+            bin.join("claude.cmd"),
+            "@echo off\r\necho 2.1.301 (Claude Code) %*\r\n",
+        )
+        .unwrap();
+        let claude = lookup(&bin, None).find("claude").unwrap();
+
+        let run = version_with(&claude, VERSION_TIMEOUT).unwrap();
+
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.stdout.trim(), "2.1.301 (Claude Code) --version");
+    }
+
+    #[test]
+    fn the_installer_runs_the_command_users_are_shown() {
+        assert_eq!(
+            format!("curl {} | bash", INSTALLER_DOWNLOAD_ARGS.join(" ")),
+            crate::CLAUDE_CODE_INSTALL_COMMAND
+        );
+    }
+
+    /// Fake `curl` and `bash` on the temporary PATH: `curl` records its arguments and runs
+    /// `curl_body`, and `bash` records its `HOME`, then runs `bash_body`.
+    #[cfg(unix)]
+    fn installer(
+        bin: &Path,
+        out: &Path,
+        home: &Path,
+        curl_body: &str,
+        bash_body: &str,
+    ) -> InstallerInvocation {
+        write_program(
+            &bin.join("curl"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/curl'\n{curl_body}\n",
+                out.display()
+            ),
+        );
+        write_program(
+            &bin.join("bash"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$HOME\" > '{out}/home'\n{bash_body}\n",
+                out = out.display()
+            ),
+        );
+        let lookup = lookup(bin, None);
+        InstallerInvocation {
+            curl: lookup.find("curl").unwrap(),
+            bash: lookup.find("bash").unwrap(),
+            home: home.to_path_buf(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_installer_pipes_the_official_script_from_curl_into_bash_in_the_home() {
+        let (home, bin, out) = bin_home();
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "printf 'echo installing\\n'",
+            &format!("cat > '{}/script'", out.display()),
+        );
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(
+            exit,
+            InstallerExit {
+                download_exit_code: Some(0),
+                exit_code: Some(0),
+            }
+        );
+        let curl = fs::read_to_string(out.join("curl")).unwrap();
+        assert_eq!(curl, "-fsSL https://claude.ai/install.sh\n");
+        let script = fs::read_to_string(out.join("script")).unwrap();
+        assert_eq!(script, "echo installing\n");
+        let seen_home = fs::read_to_string(out.join("home")).unwrap();
+        assert_eq!(seen_home.trim(), home.path().display().to_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_installer_reports_bashs_exit_code() {
+        let (home, bin, out) = bin_home();
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "printf 'exit 3\\n'",
+            "cat > /dev/null\nexit 3",
+        );
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(exit.exit_code, Some(3));
+        assert_eq!(exit.download_exit_code, Some(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_download_reports_curls_exit_code_while_bash_ends_well() {
+        let (home, bin, out) = bin_home();
+        // `curl -f` on an HTTP error: nothing on its output, exit code 22.
+        let invocation = installer(&bin, &out, home.path(), "exit 22", "cat > /dev/null");
+
+        let exit = install(&invocation).unwrap();
+
+        assert_eq!(
+            exit,
+            InstallerExit {
+                download_exit_code: Some(22),
+                exit_code: Some(0),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bash_that_stops_early_does_not_leave_curl_writing_forever() {
+        let (home, bin, out) = bin_home();
+        // Far more than a pipe holds, to a bash that reads none of it.
+        let invocation = installer(
+            &bin,
+            &out,
+            home.path(),
+            "i=0\nwhile [ $i -lt 20000 ]; do printf 'echo %0100d\\n' $i || exit 23; i=$((i+1)); done",
+            "exit 4",
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || sender.send(install(&invocation).unwrap()));
+        let exit = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the installer still waits for curl");
+
+        assert_eq!(exit.exit_code, Some(4));
+        assert_ne!(exit.download_exit_code, Some(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installer_whose_bash_cannot_start_fails_and_stops_curl() {
+        let (home, bin, out) = bin_home();
+        let mut invocation = installer(&bin, &out, home.path(), "exec sleep 30", "exit 0");
+        invocation.bash = bin.join("no-such-bash");
+
+        let started = Instant::now();
+        let error = install(&invocation).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_system_installer_is_unsupported() {
+        use crate::Environment;
+        let home = tempfile::tempdir().unwrap();
+        let invocation = InstallerInvocation {
+            curl: home.path().join("curl.exe"),
+            bash: home.path().join("bash.exe"),
+            home: home.path().to_path_buf(),
+        };
+
+        let error = crate::SystemEnvironment
+            .install_claude_code(&invocation)
+            .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }

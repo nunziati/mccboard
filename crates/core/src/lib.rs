@@ -15,6 +15,7 @@ mod atomic_file;
 mod background;
 mod backup;
 mod claude_cli;
+mod claude_code;
 mod claude_files;
 mod config;
 mod desktop_app;
@@ -67,6 +68,9 @@ pub use account::{
 };
 pub use add::{AddReport, AddRequest, LoginReport, LoginRun, LoginWarning};
 pub use alignment::GLOBAL_CONFIG_KEYS;
+pub use claude_code::{
+    CLAUDE_CODE_INSTALL_COMMAND, CLAUDE_CODE_WINDOWS_INSTALL_COMMAND, ClaudeCode,
+};
 pub use desktop_identity::{
     AppArgs, OPEN_PROFILE_ARG, RunningProfile, Saved, Shortcut, ShortcutSync, ShortcutWarning,
     ShortcutsNotSynced, WindowIdentity, app_user_model_id, command_line, open_profile_args,
@@ -86,8 +90,9 @@ pub use desktop_tray::{
 pub use desktop_watch::{DesktopNotice, DesktopNoticeKind, DesktopNotices};
 pub use doctor::{Doctor, DriftItem, InstanceDrift, Problem, Repair};
 pub use environment::{
-    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, LoginExit, LoginInvocation,
-    LoginTerminal, OsKind, RenewalExit, RenewalInvocation, SystemEnvironment,
+    ClaudeInvocation, ClaudeRun, EndpointReply, Environment, InstallerExit, InstallerInvocation,
+    LoginExit, LoginInvocation, LoginTerminal, OsKind, RenewalExit, RenewalInvocation,
+    SystemEnvironment,
 };
 pub use error::Error;
 pub use icon::{
@@ -108,7 +113,7 @@ pub use session_guard::{ClaudeProcess, ProcessConfigDir};
 pub use sharing::{SharingAnswer, SharingQuestion};
 pub use taskbar_widget::{
     AccountInk, ColumnState, FADED_OPACITY, ResetPart, SEGMENTS, TaskbarTheme, TaskbarWidget,
-    TimeToReset, WidgetColumn, WidgetPalette, WidgetRow,
+    TimeToReset, WidgetColumn, WidgetModelRow, WidgetPalette, WidgetRow,
 };
 pub use tray::profiles::{TrayProfile, TrayProfiles};
 pub use tray::{
@@ -154,6 +159,12 @@ impl Core {
     /// Where mccboard keeps its own files in this home.
     pub fn paths(&self) -> Paths {
         Paths::new(&self.home)
+    }
+
+    /// The operating system this core works on, as its environment reports it. Front ends ask
+    /// it rather than deciding on their own: a fake environment can play Windows on Linux.
+    pub fn os(&self) -> OsKind {
+        self.env.os()
     }
 
     /// Finds instance candidates in the home: `~/.claude` (the primary instance) and every

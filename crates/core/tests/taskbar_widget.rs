@@ -401,6 +401,75 @@ fn the_widget_redraws_every_minute_and_every_second_in_the_last_minute() {
     assert_eq!(view.redraw_in, std::time::Duration::from_secs(60));
 }
 
+// --- Model windows ---------------------------------------------------------------------------
+
+#[test]
+fn model_windows_have_rows_of_their_own_after_the_two_the_taskbar_draws() {
+    let (_home, core, env) = home_with_a();
+    let weekly_reset = now() + days(4);
+    env.push_usage_reply(reply(
+        5.0,
+        Some(now() + hours(3)),
+        30.0,
+        weekly_reset,
+        &[("Fable", 58.0), ("Opus", 0.0)],
+    ));
+    let report = core.refresh_usage().unwrap();
+
+    let view = widget(&core, &report);
+
+    let models = &view.columns[0].models;
+    let names: Vec<&str> = models.iter().map(|m| m.model.as_str()).collect();
+    assert_eq!(names, ["Fable", "Opus"]);
+    let fable = &models[0].row;
+    assert_eq!((fable.percent, fable.segments), (58, 6));
+    assert_eq!(fable.reset.text(), "4d 0h 0m");
+    // A model window is a 7-day window: 3 of its 7 days have passed.
+    assert!((fable.pace.unwrap() - 3.0 / 7.0).abs() < 1e-9);
+    assert_eq!((models[1].row.percent, models[1].row.segments), (0, 0));
+
+    // Past their reset they read as zero and idle, like the other rows.
+    env.set_now(weekly_reset + secs(1));
+    let later = widget(&core, &report);
+    let fable = &later.columns[0].models[0].row;
+    assert_eq!((fable.percent, fable.segments, fable.pace), (0, 0, None));
+    assert_eq!(fable.reset.text(), "—");
+}
+
+#[test]
+fn a_model_window_resetting_first_sets_when_the_widget_redraws() {
+    let (_home, core, env) = home_with_a();
+    let limits = json!({ "limits": [
+        {"kind": "session", "percent": 0.0, "resets_at": null},
+        {"kind": "weekly_all", "percent": 30.0,
+         "resets_at": (now() + days(4) + secs(45)).to_string()},
+        {"kind": "weekly_scoped", "percent": 12.0,
+         "resets_at": (now() + days(3) + secs(20)).to_string(),
+         "scope": {"model": {"display_name": "Fable"}}},
+    ]});
+    env.push_usage_reply(EndpointReply::Http {
+        status: 200,
+        retry_after: None,
+        body: limits.to_string(),
+    });
+
+    let view = widget(&core, &core.refresh_usage().unwrap());
+
+    assert_eq!(view.columns[0].models[0].row.reset.text(), "3d 0h 0m");
+    assert_eq!(view.redraw_in, std::time::Duration::from_millis(20_001));
+}
+
+#[test]
+fn a_column_without_a_reading_has_no_model_rows() {
+    let (_home, core, env) = home_with_a();
+    env.push_usage_reply(rate_limited());
+
+    let view = widget(&core, &core.refresh_usage().unwrap());
+
+    assert_eq!(view.columns[0].state, ColumnState::NoReading);
+    assert!(view.columns[0].models.is_empty());
+}
+
 // --- States --------------------------------------------------------------------------------
 
 #[test]
